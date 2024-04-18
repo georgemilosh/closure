@@ -1,0 +1,6 @@
+*.csv
+**/data/** 
+**/models/** 
+**/__pycache__/**
+**/*.pyc
+**/dev/** 
