@@ -9,6 +9,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import logging
+import optuna
+import time
+from torch.utils.data import DataLoader
+import copy
+import pickle
+import os
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -19,10 +25,62 @@ class PyNet(torch.nn.Module):
     """
     base class for neural nets
     """
-    def __init__(self, model_seed=None):
+    def __init__(self, model_seed=None, optimizer_kwargs=None, scheduler_kwargs=None, logger_kwargs=None):
         super().__init__() 
+        logger.info(f"Initializing {self.__class__.__name__} model.")
+        logger.info(f"{model_seed=}, {optimizer_kwargs=}, {scheduler_kwargs=}, {logger_kwargs=}")
+        if optimizer_kwargs is None:
+            self.optimizer_kwargs = {}
+        else:
+            self.optimizer_kwargs = optimizer_kwargs
+        if scheduler_kwargs is None:
+            self.scheduler_kwargs = {}
+        else:
+            self.scheduler_kwargs = scheduler_kwargs
+        self.early_stopping = self.scheduler_kwargs.pop('early_stopping', None)
+        self.epochs = self.scheduler_kwargs.pop('epochs')
+        self.logger_kwargs = logger_kwargs
         if model_seed is not None:
             torch.manual_seed(model_seed)
+
+    def define_optimizer_sheduler(self):
+        
+        # === Deal with the criterion #
+        criterion = self.optimizer_kwargs.pop('criterion')
+        try:
+            criterion = getattr(torch.nn, criterion)()
+            self.criterion = criterion
+        except Exception as e:
+            logger.error(f"Criterion {criterion} not recognized. Please use a valid criterion from torch.nn.")
+            raise e
+        logger.info(f"Optimization criterion {self.criterion}")
+
+        # === Deal with the optimizer === #
+        metrics = self.optimizer_kwargs.pop('metrics', None)
+        self.metrics = metrics
+        if metrics is not None:
+            self.metrics = [getattr(torch.nn, metric)() for metric in metrics]
+            logger.info(f"Tracking metrics {self.metrics}")
+        
+         # === Deal with the optimizer === #
+        optimizer_name = self.optimizer_kwargs.pop('optimizer')
+        if isinstance(optimizer_name, str):
+            self.optimizer = getattr(torch.optim, optimizer_name)(self.parameters(), **self.optimizer_kwargs)
+        else:
+            self.optimizer = optimizer_name # assuming that optimizer is already passed, e.g. optimizer = torch.optim.Adam(model.parameters())
+        
+
+        # === Deal with the scheduler === #
+        # === Deal with the scheduler === #
+        scheduler_name = self.scheduler_kwargs.pop('scheduler')
+        if scheduler_name == 'steplr': # step_size=7, gamma=0.9
+            self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, **self.scheduler_kwargs)
+        elif scheduler_name == 'plateau':
+            self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, **self.scheduler_kwargs)
+        elif scheduler_name == 'no':
+            self.scheduler = None
+        else:
+            raise NotImplementedError(f"Scheduler {scheduler_name} not recognized.")
 
     @property
     def device(self):
@@ -37,7 +95,152 @@ class PyNet(torch.nn.Module):
         """
         return sum(p.numel() for p in self.parameters())
     
+    def predict(self, features):
+        """
+        Predict the output using the given data loader.
+
+        Returns:
+            torch.Tensor: The predicted output tensor.
+        """
+        self.eval()
+        predictions = []
+        loader = DataLoader(features, batch_size=32)
+        for features in loader:
+            with torch.no_grad():
+                out = self(features.to(self.device))
+            predictions.append(out)
+        return torch.cat(predictions)
+
+    def _compute_loss(self, real, target, criterion):
+        """
+        Compute the loss between the real and target tensors.
+        """
+        if not isinstance(target, torch.Tensor):
+            logger.warning(f'Object target is not a tensor. Casting to tensor of {self.train_dataset.target_dtype}.')
+            target = torch.tensor(target, dtype=self.train_dataset.target_dtype)
+        if not isinstance(real, torch.Tensor):
+            logger.warning(f'Object real is not a tensor. Casting to tensor of {self.train_dataset.target_dtype}.')
+            real = torch.tensor(real, dtype=self.train_dataset.target_dtype)
+        loss = criterion(real, target)
+
+        # apply regularization if any
+        # loss += penalty.item() 
+        return loss
     
+    def _forward_pass(self, loader, phase='test'):
+        """
+        Perform a forward pass (single epoch) through the model using the given data loader.
+
+        Args:
+            loader (torch.utils.data.DataLoader): The data loader containing the input features and targets.
+            phase (str, optional): The phase of the forward pass. Defaults to 'test'. 
+            If 'train', the model will be set to training mode. If not, the model will be set to evaluation mode 
+            and no gradients will be computed.
+
+        Returns:
+            float: The average loss over all batches in the data loader.
+        """
+        if phase == 'train':
+            self.train()
+        else:
+            self.eval()
+        num_batches = len(loader)
+
+        if self.metrics is not None:
+            running_metrics = {metric._get_name(): 0.0 for metric in self.metrics}
+        else:
+            running_metrics = {}
+        running_metrics['criterion'] = 0.0
+        for features, targets in loader:
+            features, targets = self._to_device(features, targets, self.device)
+            self.optimizer.zero_grad() # zero the parameter gradients
+            with torch.set_grad_enabled(phase == 'train'): # track gradients only if in train
+                out = self(features)
+                loss = self._compute_loss(out, targets, self.criterion)
+                if phase == 'train':
+                    loss.backward()
+                    self.optimizer.step()
+            running_metrics['criterion'] += loss.item()
+            if self.metrics is not None:
+                for metric in self.metrics:
+                    running_metrics[metric._get_name()] += self._compute_loss(out, targets, metric).item()
+
+        for key in running_metrics:
+            running_metrics[key] /= num_batches
+        return running_metrics
+    
+    def fit(self, train_loader, val_loader, trial=None):
+        self.train_loss_ = {} # training history
+        self.val_loss_ = {} # validation history
+
+        total_start_time = time.time() # track total training time
+        best_loss = torch.inf  # track best loss
+        epoch_best = 0
+        # ---- train process ----
+        for epoch in range(self.epochs):
+            epoch_start_time = time.time() # track epoch time
+            tr_loss = self._forward_pass(train_loader, phase='train')
+            if self.scheduler is not None:
+                self.scheduler.step()
+            val_loss = self._forward_pass(val_loader, phase='val')
+                
+            for key in tr_loss:
+                if key not in self.train_loss_:
+                    self.train_loss_[key] = []
+                    self.val_loss_[key] = []
+                self.train_loss_[key].append(tr_loss[key])
+                self.val_loss_[key].append(val_loss[key])
+            
+            epoch_time = time.time() - epoch_start_time
+            
+            if val_loss["criterion"] < best_loss:
+                best_loss= val_loss["criterion"]
+                #torch.save(self.model.state_dict(), self.work_dir) # this saves every epoch if improvement
+                best_weights = copy.deepcopy(self.state_dict())
+                epoch_best = epoch
+            self._logging(tr_loss, val_loss, epoch+1,self.epochs, epoch_time, **self.logger_kwargs)
+            
+            # ---- early stopping ----
+            if self.early_stopping is not None:
+                if epoch - epoch_best > self.early_stopping:
+                    logger.warning(f"Early stopping engaged at epoch {epoch}")
+                    break
+            
+            # ---- handle optuna ----
+            if trial is not None:
+                trial.report(val_loss['criterion'], epoch)
+                # Handle pruning based on the intermediate value.
+                if trial.should_prune():
+                    raise optuna.exceptions.TrialPruned()
+                
+        # restore model and return best accuracy
+        logger.info(f"Best loss: {best_loss} at epoch {epoch_best}, restoring the corresponding weights...")
+        self.load_state_dict(best_weights)
+        
+
+        total_time = time.time() - total_start_time
+
+        # final message
+        logger.info(f"""End of training. Total time: {round(total_time, 5)} seconds""")
+
+        
+    def _to_device(self, features, targets, device):
+        return features.to(device), targets.to(device)
+    
+    def _logging(self, tr_loss, val_loss, epoch, epochs, epoch_time, show=True, update_step=20):
+        """
+        Log the training progress. 
+        """
+        if show:
+            if epoch % update_step == 0 or epoch == 1:
+                # to satisfy pep8 common limit of characters
+                msg = f"Epoch {epoch}/{epochs} | Train loss: {tr_loss}" 
+                msg = f"{msg} | Validation loss: {val_loss}"
+                msg = f"{msg} | Time/epoch: {round(epoch_time, 5)} seconds"
+                if self.scheduler is not None:
+                    msg = f"{msg} | Learning rate: {self.scheduler.get_last_lr()}"
+
+                logger.info(msg)
 
 
 class CNet(PyNet):
@@ -96,6 +299,7 @@ class MLP(PyNet):
     """
     def __init__(self, feature_dims, activations=None, dropouts=None, **kwargs):
         super().__init__(**kwargs)
+
         self.flatten = torch.nn.Flatten()
         seq_list = []
         if activations is None:
@@ -113,8 +317,9 @@ class MLP(PyNet):
                     dropout_layer = torch.nn.Dropout(dropouts[i])
                     seq_list.append(dropout_layer)
             
-           
         self.linear_relu_stack = torch.nn.Sequential(*seq_list[:-1])
+
+        super().define_optimizer_sheduler() # To define optimizer we have to have the layers already defined
     
 
     def forward(self, x):

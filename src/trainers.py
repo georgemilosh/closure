@@ -65,9 +65,6 @@ class Trainer:
         self.dataset_kwargs = dataset_kwargs
         self.load_data_kwargs = load_data_kwargs
         self.model_kwargs = model_kwargs
-        self.optimizer_kwargs = optimizer_kwargs
-        self.scheduler_kwargs = scheduler_kwargs
-        self.logger_kwargs = logger_kwargs
         self.device = device
         
         # === Deal with the configuration file === #
@@ -85,9 +82,6 @@ class Trainer:
                 dataset_kwargs = config['dataset_kwargs']
                 load_data_kwargs = config['load_data_kwargs']
                 model_kwargs = config['model_kwargs']
-                optimizer_kwargs = config['optimizer_kwargs']
-                scheduler_kwargs = config['scheduler_kwargs']
-                logger_kwargs = config['logger_kwargs']
                 device = config['device']
                 work_dir = config['work_dir']
             else:
@@ -144,8 +138,6 @@ class Trainer:
         load_data_kwargs = config['load_data_kwargs']
         model_kwargs = config['model_kwargs']
         device = config['device']
-        optimizer_kwargs = config['optimizer_kwargs']
-        scheduler_kwargs = config['scheduler_kwargs']
         if 'run' in config:  # this is to handle optuna trials or other runs
             self.run = config['run']
         else:
@@ -163,40 +155,10 @@ class Trainer:
             self.model = model_kwargs
         self.device = self._get_device(device)
         self.model.to(self.device)
-        logger.info(f"{self.model.device = }, {device = }, {self.device = }")
-        #print(self.model)
-
-        # === Deal with the criterion #
-        criterion = optimizer_kwargs.pop('criterion')
-        self.criterion = getattr(torch.nn, criterion)()
-        logger.info(f"Optimization criterion {self.criterion}")
-
-        # === Deal with the optimizer === #
-        metrics = optimizer_kwargs.pop('metrics', None)
-        self.metrics = metrics
-        if metrics is not None:
-            self.metrics = [getattr(torch.nn, metric)() for metric in metrics]
-            logger.info(f"Tracking metrics {self.metrics}")
-        optimizer_name = optimizer_kwargs.pop('optimizer')
-        if isinstance(optimizer_name, str):
-            self.optimizer = getattr(torch.optim, optimizer_name)(self.model.parameters(), **optimizer_kwargs)
-        else:
-            self.optimizer = optimizer_name # assuming that optimizer is already passed, e.g. optimizer = torch.optim.Adam(model.parameters())
-
-        # === Deal with the scheduler === #
-        scheduler_name = scheduler_kwargs.pop('scheduler')
-        self.epochs = scheduler_kwargs.pop('epochs')
-        self.early_stopping = scheduler_kwargs.pop('early_stopping', None)
-        if scheduler_name == 'steplr': # step_size=7, gamma=0.9
-            self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, **scheduler_kwargs)
-        elif scheduler_name == 'plateau':
-            self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, **scheduler_kwargs)
-        elif scheduler_name == 'no':
-            self.scheduler = None
-        else:
-            raise NotImplementedError(f"Scheduler {scheduler_name} not recognized.")
+        logger.info(f"{self.model.device = }")
         
-        #logger.info(f"calling load_data with {load_data_kwargs =}")
+       
+
         self.load_data(load_data_kwargs)
     
     def load_data(self, load_data_kwargs):
@@ -213,7 +175,6 @@ class Trainer:
         """
         self.train_loader = DataLoader(self.train_dataset, **load_data_kwargs['train_loader_kwargs'])
         self.val_loader = DataLoader(self.val_dataset, **load_data_kwargs['val_loader_kwargs'])
-        #self.test_loader = DataLoader(self.test_dataset, **load_data_kwargs['test_loader_kwargs'])
 
     def load_run(self, run):
         """
@@ -271,145 +232,24 @@ class Trainer:
                         f.write(json.dumps(self.config, indent=4))
                 except Exception as e:
                     logger.error(f"Error saving configuration file: {e}")
+                    
+        #if isinstance(self.model,list):
+        #    best_loss = []
+        #    for model in self.model:
+        #        best_loss.append(model.fit(trial))
+        #else:
+        best_loss = self.model.fit(self.train_loader, self.val_loader, trial=trial)
 
-        self.train_loss_ = {} # training history
-        self.val_loss_ = {} # validation history
-
-        total_start_time = time.time() # track total training time
-        best_loss = torch.inf  # track best loss
-        epoch_best = 0
-        # ---- train process ----
-        for epoch in range(self.epochs):
-            epoch_start_time = time.time() # track epoch time
-            tr_loss = self._forward_pass(self.train_loader, phase='train')
-            if self.scheduler is not None:
-                self.scheduler.step()
-            val_loss = self._forward_pass(self.val_loader, phase='val')
-                
-            for key in tr_loss:
-                if key not in self.train_loss_:
-                    self.train_loss_[key] = []
-                    self.val_loss_[key] = []
-                self.train_loss_[key].append(tr_loss[key])
-                self.val_loss_[key].append(val_loss[key])
-            
-            epoch_time = time.time() - epoch_start_time
-            
-            if val_loss["criterion"] < best_loss:
-                best_loss= val_loss["criterion"]
-                #torch.save(self.model.state_dict(), self.work_dir) # this saves every epoch if improvement
-                best_weights = copy.deepcopy(self.model.state_dict())
-                epoch_best = epoch
-            self._logging(tr_loss, val_loss, epoch+1,self.epochs, epoch_time, **self.logger_kwargs)
-            
-            # ---- early stopping ----
-            if self.early_stopping is not None:
-                if epoch - epoch_best > self.early_stopping:
-                    logger.warning(f"Early stopping engaged at epoch {epoch}")
-                    break
-            
-            # ---- handle optuna ----
-            if trial is not None:
-                trial.report(val_loss['criterion'], epoch)
-                # Handle pruning based on the intermediate value.
-                if trial.should_prune():
-                    raise optuna.exceptions.TrialPruned()
-                
-        # restore model and return best accuracy
-        logger.info(f"Best loss: {best_loss} at epoch {epoch_best}, restoring the corresponding weights...")
-        self.model.load_state_dict(best_weights)
         if self.work_dir is not None:
             logger.info(f"Saving the model weights and loss history to {self.work_dir}/{self.run}/")
             os.makedirs(os.path.dirname(f"{self.work_dir}/{self.run}/"), exist_ok=True)
             model_path = f"{self.work_dir}/{self.run}/model.pth"
-            torch.save(best_weights, model_path)
+            torch.save(self.model.state_dict(), model_path)
             loss_path = f"{self.work_dir}/{self.run}/loss_dict.pkl"
             with open(loss_path, 'wb') as f:
-                pickle.dump( {'train_loss': self.train_loss_,'val_loss': self.val_loss_}, f)
-
-        total_time = time.time() - total_start_time
-
-        # final message
-        logger.info(f"""End of training. Total time: {round(total_time, 5)} seconds""")
+                pickle.dump( {'train_loss': self.model.train_loss_,'val_loss': self.model.val_loss_}, f)
+       
         return best_loss
-    
-
-    
-    def _logging(self, tr_loss, val_loss, epoch, epochs, epoch_time, show=True, update_step=20):
-        """
-        Log the training progress. 
-        """
-        if show:
-            if epoch % update_step == 0 or epoch == 1:
-                # to satisfy pep8 common limit of characters
-                msg = f"Epoch {epoch}/{epochs} | Train loss: {tr_loss}" 
-                msg = f"{msg} | Validation loss: {val_loss}"
-                msg = f"{msg} | Time/epoch: {round(epoch_time, 5)} seconds"
-                if self.scheduler is not None:
-                    msg = f"{msg} | Learning rate: {self.scheduler.get_last_lr()}"
-
-                logger.info(msg)
-    
-    def _forward_pass(self, loader, phase='test'):
-        """
-        Perform a forward pass (single epoch) through the model using the given data loader.
-
-        Args:
-            loader (torch.utils.data.DataLoader): The data loader containing the input features and targets.
-            phase (str, optional): The phase of the forward pass. Defaults to 'test'. 
-            If 'train', the model will be set to training mode. If not, the model will be set to evaluation mode 
-            and no gradients will be computed.
-
-        Returns:
-            float: The average loss over all batches in the data loader.
-        """
-        if phase == 'train':
-            self.model.train()
-        else:
-            self.model.eval()
-        num_batches = len(loader)
-
-        if self.metrics is not None:
-            running_metrics = {metric._get_name(): 0.0 for metric in self.metrics}
-        else:
-            running_metrics = {}
-        running_metrics['criterion'] = 0.0
-        for features, targets in loader:
-            features, targets = self._to_device(features, targets, self.device)
-            self.optimizer.zero_grad() # zero the parameter gradients
-            with torch.set_grad_enabled(phase == 'train'): # track gradients only if in train
-                out = self.model(features)
-                loss = self._compute_loss(out, targets, self.criterion)
-                if phase == 'train':
-                    loss.backward()
-                    self.optimizer.step()
-            running_metrics['criterion'] += loss.item()
-            if self.metrics is not None:
-                for metric in self.metrics:
-                    running_metrics[metric._get_name()] += self._compute_loss(out, targets, metric).item()
-
-        for key in running_metrics:
-            running_metrics[key] /= num_batches
-        return running_metrics
-    
-    def _to_device(self, features, targets, device):
-        return features.to(device), targets.to(device)
-    
-    def _compute_loss(self, real, target, criterion):
-        """
-        Compute the loss between the real and target tensors.
-        """
-        if not isinstance(target, torch.Tensor):
-            warnings.warn(f'Object target is not a tensor. Casting to tensor of {self.train_dataset.target_dtype}.')
-            target = torch.tensor(target, dtype=self.train_dataset.target_dtype)
-        if not isinstance(real, torch.Tensor):
-            warnings.warn(f'Object real is not a tensor. Casting to tensor of {self.train_dataset.target_dtype}.')
-            real = torch.tensor(real, dtype=self.train_dataset.target_dtype)
-        loss = criterion(real, target)
-
-        # apply regularization if any
-        # loss += penalty.item() 
-        return loss
 
     def _get_device(self, device):
         """
