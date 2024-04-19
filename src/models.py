@@ -13,8 +13,6 @@ import optuna
 import time
 from torch.utils.data import DataLoader
 import copy
-import pickle
-import os
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -24,6 +22,15 @@ import logging
 class PyNet(torch.nn.Module):
     """
     base class for neural nets
+    Args:
+    model_seed : int, optional
+        Seed for the model weights, by default None
+    optimizer_kwargs : dict, optional
+        Keyword arguments for initializing the optimizer, by default None
+    scheduler_kwargs : dict, optional
+        Keyword arguments for initializing the scheduler, by default None
+    logger_kwargs : dict, optional
+        Keyword arguments for initializing the logger, by default None
     """
     def __init__(self, model_seed=None, optimizer_kwargs=None, scheduler_kwargs=None, logger_kwargs=None):
         super().__init__() 
@@ -44,7 +51,20 @@ class PyNet(torch.nn.Module):
             torch.manual_seed(model_seed) # set the seed for the weights
 
     def define_optimizer_sheduler(self):
-        
+        """
+        Defines the optimization criterion, optimizer, and scheduler for the model. This function should be called
+        by any subclass of PyNet in the __init__ method after the layers have been defined.
+
+        This method handles the following steps:
+        1. Sets the optimization criterion based on the provided criterion name.
+        2. Sets the metrics to track during optimization.
+        3. Sets the optimizer based on the provided optimizer name and parameters.
+        4. Sets the scheduler based on the provided scheduler name and parameters.
+
+        Raises:
+            NotImplementedError: If the provided scheduler name is not recognized.
+
+        """
         # === Deal with the criterion #
         criterion = self.optimizer_kwargs.pop('criterion')
         try:
@@ -69,8 +89,6 @@ class PyNet(torch.nn.Module):
         else:
             self.optimizer = optimizer_name # assuming that optimizer is already passed, e.g. optimizer = torch.optim.Adam(model.parameters())
         
-
-        # === Deal with the scheduler === #
         # === Deal with the scheduler === #
         scheduler_name = self.scheduler_kwargs.pop('scheduler')
         if scheduler_name == 'steplr': # step_size=7, gamma=0.9
@@ -97,7 +115,7 @@ class PyNet(torch.nn.Module):
     
     def predict(self, features):
         """
-        Predict the output using the given data loader.
+        Predict the output using the given some input feature array (can be numpy).
 
         Returns:
             torch.Tensor: The predicted output tensor.
@@ -113,7 +131,7 @@ class PyNet(torch.nn.Module):
 
     def _compute_loss(self, real, target, criterion):
         """
-        Compute the loss between the real and target tensors.
+        Compute the loss between the real and target values using the provided criterion.        
         """
         if not isinstance(target, torch.Tensor):
             logger.warning(f'Object target is not a tensor. Casting to tensor of {self.train_dataset.target_dtype}.')
@@ -129,16 +147,16 @@ class PyNet(torch.nn.Module):
     
     def _forward_pass(self, loader, phase='test'):
         """
-        Perform a forward pass (single epoch) through the model using the given data loader.
+        Perform a forward pass (single epoch) through the model using the given data loader. 
 
         Args:
             loader (torch.utils.data.DataLoader): The data loader containing the input features and targets.
             phase (str, optional): The phase of the forward pass. Defaults to 'test'. 
-            If 'train', the model will be set to training mode. If not, the model will be set to evaluation mode 
-            and no gradients will be computed.
+            If 'train', the model will be set to training mode and the weights will be updated. 
+            If not, the model will be set to evaluation mode and no gradients will be computed.
 
         Returns:
-            float: The average loss over all batches in the data loader.
+            float: The average loss over all batches in the data loader at the best epoch.
         """
         if phase == 'train':
             self.train()
@@ -170,6 +188,21 @@ class PyNet(torch.nn.Module):
         return running_metrics
     
     def fit(self, train_loader, val_loader, trial=None):
+        """
+        Trains the model using the provided training and validation data loaders.
+
+        Args:
+            train_loader (DataLoader): The data loader for the training set.
+            val_loader (DataLoader): The data loader for the validation set.
+            trial (optuna.Trial, optional): An optuna Trial object for hyperparameter optimization. Defaults to None.
+
+        Returns:
+            None
+
+        Raises:
+            optuna.exceptions.TrialPruned: If the optuna trial is pruned.
+
+        """
         self.train_loss_ = {} # training history
         self.val_loss_ = {} # validation history
 
@@ -224,6 +257,9 @@ class PyNet(torch.nn.Module):
 
         
     def _to_device(self, features, targets, device):
+        """
+        Move the features and targets to the specified device.
+        """
         return features.to(device), targets.to(device)
     
     def _logging(self, tr_loss, val_loss, epoch, epochs, epoch_time, show=True, update_step=20):

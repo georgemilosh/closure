@@ -30,34 +30,53 @@ logger = logging.getLogger(__name__)
 
 class Trainer:
     """
-    A class that represents a trainer for a machine learning model. It is used to train a model using the given data loaders. 
+    A class that represents a trainer object for training machine learning models.
 
-    Parameters
-    ----------
-    load_data_kwargs : dict, optional
-        Keyword arguments for loading the data, by default None
-    model_kwargs : dict, optional
-        Keyword arguments for initializing the model, by default None
-    optimizer_kwargs : dict, optional
-        Keyword arguments for initializing the optimizer, by default None
-    scheduler_kwargs : dict, optional
-        Keyword arguments for initializing the scheduler, by default None
-    logger_kwargs : dict, optional
-        Keyword arguments for initializing the logger, by default None
-    device : str, optional
-        The device to use for training, by default None
-    work_dir : str, optional
-        The directory to save the training results, by default None (no saving)
-    
+    Args:
+        dataset_kwargs (dict, optional): Keyword arguments for creating dataset object.
+        load_data_kwargs (dict, optional): Keyword arguments for data loaders.
+        model_kwargs (dict, optional): Keyword arguments for creating the model.
+        device (str, optional): Device to use for training. Defaults to None.
+        work_dir (str, optional): Directory to save training outputs. Defaults to None.
+
+    Attributes:
+        work_dir (str): Directory to save training outputs.
+        dataset_kwargs (dict): Keyword arguments for creating dataset object.
+        load_data_kwargs (dict): Keyword arguments for data loaders.
+        model_kwargs (dict): Keyword arguments for creating the model.
+        device (str): Device to use for training.
+        config (dict): A copy of the attributes of the Trainer object.
+        train_dataset (DataFrameDataset): Training dataset.
+        val_dataset (DataFrameDataset): Validation dataset.
+        test_dataset (DataFrameDataset): Test dataset.
+        train_loader (DataLoader): Data loader for training dataset.
+        val_loader (DataLoader): Data loader for validation dataset.
+        model (nn.Module): Machine learning model.
+
+    Methods:
+        __init__(self, dataset_kwargs=None, load_data_kwargs=None, model_kwargs=None, device=None, work_dir=None):
+            Initializes a Trainer object.
+        comprehend_config(self):
+            Comprehends the configuration settings for the model and its configs.
+        load_data(self, load_data_kwargs):
+            Creates the data loaders for training/validation and testing.
+        load_run(self, run):
+            Load the configuration file of a specific run, comprehend config the associated file associated with the model and load model weights.
+        fit(self, config=None):
+            Fits the model to the training data and returns the best loss.
+
     """
-    def __init__(self, dataset_kwargs=None, load_data_kwargs=None, model_kwargs=None, optimizer_kwargs=None, scheduler_kwargs=None, logger_kwargs=None, 
+    def __init__(self, dataset_kwargs=None, load_data_kwargs=None, model_kwargs=None, 
                  device=None,work_dir=None):
         """
-        Constructor for the Trainer class.
+        Initialize a Trainer object.
 
-        If work_dir is provided and there is no configuration file, it will save the configuration file based on the attributes
-        of the class. If work_dir is provided and there is a configuration file, it will load the configuration from the file and
-        ignore the inputs to the constructor. 
+        Args:
+            dataset_kwargs (dict, optional): Keyword arguments for creating dataset object.
+            load_data_kwargs (dict, optional): Keyword arguments for data loaders.
+            model_kwargs (dict, optional): Keyword arguments for creating the model
+            device (str, optional): Device to use for training. Defaults to None.
+            work_dir (str, optional): Directory to save training outputs. Defaults to None.
         """
         self.work_dir = work_dir
         self.dataset_kwargs = dataset_kwargs
@@ -98,6 +117,7 @@ class Trainer:
             f_handler.setFormatter(f_format)
             logger.addHandler(f_handler)
             logger.info(f"Logging to {self.work_dir}/training.log")
+
         self.config = copy.deepcopy(self.__dict__) # save the attributes to the config of the trainer class
         self.dataset_kwargs.pop('samples_file',None)  # guardrails against accidentally passing samples_file to DataFrameDataset     
         train_sample = self.dataset_kwargs.pop('train_sample')
@@ -119,9 +139,9 @@ class Trainer:
     
     def comprehend_config(self):
         """
-        Comprehends the configuration settings for the model, criterion, optimizer, and scheduler. The method deep copies
+        Comprehends the configuration settings for the model and its configs. The method deep copies
         the configuration settings and extracts the necessary parameters for the model. At the end it calls the method
-        trainer::load_data to create/update the data loaders to its value.
+        trainer::load_data to create/update the data loaders accordingly.
 
         Returns:
             None
@@ -197,12 +217,23 @@ class Trainer:
         
     def fit(self, config=None):
         """
-        Performs the training process for the model. 
-        It iterates over the specified number of epochs and performs the training and validation steps. 
-        The best model weights are saved corresponding to the epoch with the best validation loss.
+        Fits the model to the training data and returns the best loss.
+
+        Args:
+            config (dict): A dictionary containing the configuration parameters for the training process. 
+            If provided, the original configuration will be updated with the new configuration.
 
         Returns:
-            None
+            float: The best loss achieved during the training process.
+
+        Raises:
+            FileExistsError: If the config file already exists and overwriting is not allowed.
+            Exception: If there is an error saving the configuration file.
+
+        Notes:
+            - If `config` is provided, the original configuration will be updated with the new configuration before training.
+            - If `self.run` is not empty, the new configuration will be saved to a subdirectory.
+            - The model weights and loss history will be saved to `self.work_dir` if it is not None.
         """
         trial = None
         if config is not None:
@@ -226,12 +257,7 @@ class Trainer:
                         f.write(json.dumps(self.config, indent=4))
                 except Exception as e:
                     logger.error(f"Error saving configuration file: {e}")
-                    
-        #if isinstance(self.model,list):
-        #    best_loss = []
-        #    for model in self.model:
-        #        best_loss.append(model.fit(trial))
-        #else:
+
         best_loss = self.model.fit(self.train_loader, self.val_loader, trial=trial)
 
         if self.work_dir is not None:

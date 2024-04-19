@@ -8,7 +8,7 @@ date: 2024
 import numpy
 import torch
 import os
-from typing import Any, Optional, Callable, Tuple
+from typing import Any, Tuple
 import pandas as pd
 import numpy as np
 import joblib
@@ -22,10 +22,51 @@ logger = logging.getLogger(__name__)
 
 
 class DataFrameDataset(torch.utils.data.Dataset):
-    """ This class is useful for reading dataset of images for image classification/regression problem.
-    inspired by application of https://pypi.org/project/deepml/ library
-    
-    A dataset class for reading datasets of images for image classification/regression problems.
+    """
+    A custom PyTorch dataset class for loading data from a DataFrame.
+
+    Args:
+        data_folder (str): The folder where the images are stored.
+        norm_folder (str): The folder to save the normalization parameters.
+        feature_dtype (str, optional): The data type of the features when __getitem__ is called. Defaults to 'float32'.
+        target_dtype (str, optional): The data type of the targets when __getitem__ is called. Defaults to 'float32'.
+        feature_dtype_numpy (str, optional): The data type of the features. Defaults to 'float32'.
+        target_dtype_numpy (str, optional): The data type of the targets. Defaults to 'float32'.
+        samples_file (str, optional): The file containing the sample filenames. Defaults to None.
+        prescaler_features (str, optional): The pre-scaler function to apply to the features. Defaults to None.
+        prescaler_targets (str, optional): The pre-scaler function to apply to the targets. Defaults to None.
+        scaler_features (tuple or None, optional): The scaler for features. If a tuple is provided, it should contain the mean and standard deviation of the features. Defaults to None.
+        scaler_targets (tuple or None, optional): The scaler for targets. If a tuple is provided, it should contain the mean and standard deviation of the targets. Defaults to None.
+        image_file_name_column (str, optional): The column name in the DataFrame that contains the image filenames. Defaults to 'filenames'.
+        read_features_targets_kwargs (dict, optional): Additional keyword arguments to pass to the `read_features_targets` function. Defaults to None.
+
+    Attributes:
+        target_dtype (torch.dtype): The data type of the targets.
+        target_dtype_numpy (numpy.dtype): The data type of the targets in numpy format.
+        feature_dtype (torch.dtype): The data type of the features.
+        feature_dtype_numpy (numpy.dtype): The data type of the features in numpy format.
+        scaler_features (tuple or None): The scaler for features.
+        scaler_targets (tuple or None): The scaler for targets.
+        prescaler_features (list or None): The pre-scaler functions to apply to the features.
+        prescaler_targets (list or None): The pre-scaler functions to apply to the targets.
+        samples_file (str or None): The file containing the sample filenames.
+        image_file_name_column (str): The column name in the DataFrame that contains the image filenames.
+        data_folder (str): The folder where the images are stored.
+        norm_folder (str): The folder to save the normalization parameters.
+        read_features_targets_kwargs (dict): Additional keyword arguments to pass to the `read_features_targets` function.
+        logger: The logger object for logging messages.
+        dataframe (pd.DataFrame): The DataFrame containing the sample filenames.
+        features (np.ndarray): The features of the dataset.
+        targets (np.ndarray): The targets of the dataset.
+        features_shape (tuple): The shape of the features.
+        targets_shape (tuple): The shape of the targets.
+        samples (int): The number of samples in the dataset.
+
+    Methods:
+        load_original(): Loads the DataFrame from a CSV file and prepares the features and targets for further processing.
+        scale_data(): Scales the features and targets of the dataset using pre-defined scalers or calculates and saves new scalers if necessary.
+        __len__(): Returns the number of samples in the dataset.
+        __getitem__(idx): Returns the features and targets for a given index.
 
     """
     def __init__(self, data_folder: str,  # where the images are stored
@@ -42,6 +83,7 @@ class DataFrameDataset(torch.utils.data.Dataset):
                  image_file_name_column='filenames',
                  read_features_targets_kwargs = None
                  ):
+        
         self.target_dtype = getattr(torch, target_dtype) # parsing: convert string to torch.dtype object
         self.target_dtype_numpy = getattr(numpy, target_dtype_numpy)
         self.feature_dtype = getattr(torch, feature_dtype)
@@ -51,14 +93,12 @@ class DataFrameDataset(torch.utils.data.Dataset):
 
         self.prescaler_targets = prescaler_targets
         if prescaler_features is not None:
-            self.prescaler_features = [getattr(numpy, prescaler_features) for prescaler_features in prescaler_features]
-             #assuming some single variable function like numpy.log
+            self.prescaler_features = [getattr(numpy, prescaler_features) for prescaler_features in prescaler_features] #assuming some single variable function like numpy.log
         else:
             self.prescaler_features = prescaler_features
         
         if prescaler_targets is not None:
-            self.prescaler_targets = [getattr(numpy, prescaler_targets) for prescaler_targets in prescaler_targets]
-            #assuming some single variable function like numpy.log
+            self.prescaler_targets = [getattr(numpy, prescaler_targets) for prescaler_targets in prescaler_targets] #assuming some single variable function like numpy.log
         else:
             self.prescaler_targets = prescaler_targets
 
@@ -77,6 +117,11 @@ class DataFrameDataset(torch.utils.data.Dataset):
         self.scale_data()
     
     def load_original(self):
+        """
+        Loads the atarame from a  file containing filenames which will be used to create this dataset. 
+        Prepares the features and targets for further processing based on this dataframe.
+
+        """
         self.dataframe = pd.read_csv(self.samples_file)
         self.dataframe = self.dataframe.reset_index(drop=True, inplace=False)
         
@@ -91,7 +136,22 @@ class DataFrameDataset(torch.utils.data.Dataset):
         self.targets = self.targets.reshape(-1, self.targets.shape[3])
         self.samples = self.targets.shape[0]
 
-    def scale_data(self):    
+    def scale_data(self): 
+        """
+        Scales the features and targets of the dataset using pre-defined scalers or 
+        calculates and saves new scalers if necessary.
+
+        This method performs the following steps:
+        1. If pre-scalers for features are provided, applies the pre-scalers to each channel of the features.
+        2. If scalers for features are provided as a tuple, this comes in the form of passing the mean and standard deviation 
+        of the features which will be used for the processing. This is a handy feature if these quantities have been precomputed
+        on a train set and now have to be applied to validation set. If this tuple is not provided but scalers are not set to None
+            then the script checks if if the file already exists, loads the mean and standard deviation from the file. If it
+            does not exist then it calculates the mean and standard deviation of the features and saves them to a file.
+        3. Normalizes the features by subtracting the mean and dividing by the standard deviation for each channel.
+        
+        Repeat 1-3 for the targets.
+        """
         # === dealing with features ======
         if self.prescaler_features is not None:
             for channel in range(self.features.shape[1]):
@@ -145,6 +205,9 @@ class DataFrameDataset(torch.utils.data.Dataset):
         return self.samples
 
     def __getitem__(self, idx: int) -> Tuple[Any, Any]:
+        """
+        Tells data loaders how to load the data from the dataset.
+        """        
         features, targets = self.features[idx], self.targets[idx]
         features = torch.tensor(features, dtype=self.feature_dtype)
         targets = torch.tensor(targets, dtype=self.target_dtype)
