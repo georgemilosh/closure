@@ -41,7 +41,7 @@ class PyNet(torch.nn.Module):
         self.epochs = self.scheduler_kwargs.pop('epochs')
         self.logger_kwargs = logger_kwargs
         if model_seed is not None:
-            torch.manual_seed(model_seed)
+            torch.manual_seed(model_seed) # set the seed for the weights
 
     def define_optimizer_sheduler(self):
         
@@ -214,9 +214,8 @@ class PyNet(torch.nn.Module):
                     raise optuna.exceptions.TrialPruned()
                 
         # restore model and return best accuracy
-        logger.info(f"Best loss: {best_loss} at epoch {epoch_best}, restoring the corresponding weights...")
+        logger.info(f"Best loss: {best_loss} at epoch {epoch_best+1}, restoring the corresponding weights...")
         self.load_state_dict(best_weights)
-        
 
         total_time = time.time() - total_start_time
 
@@ -244,8 +243,8 @@ class PyNet(torch.nn.Module):
 
 
 class CNet(PyNet):
-    def __init__(self):
-        super().__init__() 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs) # To pass optimizer_kwargs, scheduler_kwargs, logger_kwargs to PyNet constructor
         self.pool = nn.MaxPool2d(2, 2) 
         self.conv1 = nn.Conv2d(3, 6, 5) 
         self.conv2 = nn.Conv2d(6, 16, 5) 
@@ -254,6 +253,8 @@ class CNet(PyNet):
         self.fc1 = nn.Linear(32 * 28 * 28, 120)
         self.fc2 = nn.Linear(120, 84)
         self.fc3 = nn.Linear(84, 1)
+    
+        super().define_optimizer_sheduler() # To define optimizer we have to have the layers already defined
 
     def forward(self, x): 
         x = self.pool(F.relu(self.conv1(x))) 

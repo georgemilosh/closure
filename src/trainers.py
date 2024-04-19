@@ -8,9 +8,7 @@ date: 2024
 """
 
 import logging
-import time
 import torch
-import optuna
 import pickle
 import warnings
 
@@ -71,8 +69,6 @@ class Trainer:
         if work_dir is not None:
             
             os.makedirs(os.path.dirname(self.work_dir), exist_ok=True)
-
-
             config_file = os.path.join(self.work_dir, 'config.json')
             if os.path.exists(config_file):
                 with open(config_file, 'r') as f:
@@ -95,8 +91,6 @@ class Trainer:
                 except Exception as e:
                     logger.error(f"Error saving configuration file: {e}")
             
-        #logging.basicConfig(level=logging.INFO)
-        # Create a custom logger
         if work_dir is not None:
             f_handler = logging.FileHandler(f'{self.work_dir}/training.log')
             f_handler.setLevel(logging.DEBUG)
