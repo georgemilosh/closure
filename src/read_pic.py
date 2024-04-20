@@ -3,6 +3,7 @@ import numpy as np
 import os
 import logging
 import re
+import utilities as ut
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -155,8 +156,12 @@ def read_features_targets(files_path, filenames, fields_to_read=None, request_fe
     y=np.linspace(0,Ly,nyc+1)
     
     #extract_fields = request_features + request_targets
-    features = read_files(files_path, filenames, fields_to_read, qom, feature_dtype, extract_fields=request_features, choose_species=choose_species, choose_x=choose_x, choose_y=choose_y, verbose=verbose)
-    targets = read_files(files_path, filenames, fields_to_read, qom, target_dtype, extract_fields=request_targets, choose_species=choose_species, choose_x=choose_x, choose_y=choose_y, verbose=verbose)
+    features = read_files(files_path, filenames, fields_to_read, qom, feature_dtype, 
+                          extract_fields=ut.species_to_list(request_features), choose_species=choose_species, 
+                          choose_x=choose_x, choose_y=choose_y, verbose=verbose)
+    targets = read_files(files_path, filenames, fields_to_read, qom, target_dtype, 
+                         extract_fields=ut.species_to_list(request_targets), choose_species=choose_species, 
+                         choose_x=choose_x, choose_y=choose_y, verbose=verbose)
     
     X, Y = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], indexing='ij')
 
