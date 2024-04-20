@@ -19,7 +19,24 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+from torch.utils.data import DataLoader
 
+class ChannelDataLoader(DataLoader):
+    """
+    A custom PyTorch DataLoader class that allows for loading only specific channels of the features and targets.
+    """
+    def __init__(self, dataset, feature_channels=None, target_channels=None, **kwargs):
+        self.feature_channels = feature_channels
+        self.target_channels = target_channels
+        super().__init__(dataset, **kwargs)
+
+    def __iter__(self):
+        if self.feature_channels is not None or self.target_channels is not None:
+            for features, targets in super().__iter__():
+                yield features[:, self.feature_channels], targets[:, self.target_channels]
+        else:
+            for features, targets in super().__iter__():
+                yield features, targets
 
 class DataFrameDataset(torch.utils.data.Dataset):
     """

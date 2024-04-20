@@ -20,6 +20,7 @@ import json
 from torch.utils.data import DataLoader
 
 from datasets import DataFrameDataset
+from datasets import ChannelDataLoader
 import models
 
 import logging
@@ -161,7 +162,7 @@ class Trainer:
             logger.warning(f"Creating new model with {model_kwargs =}. Note this will replace any previous model")
             model_name = model_kwargs.pop('model')
             model_class = getattr(models, model_name)
-            self.model = model_class(**model_kwargs)
+            self.model = model_class(**model_kwargs) # < ======= TODO: Add multiple models here
             logger.info(f"Successfully parsed the {model_name} class")
             logger.info(f"Creating object: {self.model}")
         else: # if model is already instantiated
@@ -187,8 +188,8 @@ class Trainer:
         Returns:
             None
         """
-        self.train_loader = DataLoader(self.train_dataset, **load_data_kwargs['train_loader_kwargs'])
-        self.val_loader = DataLoader(self.val_dataset, **load_data_kwargs['val_loader_kwargs'])
+        self.train_loader = ChannelDataLoader(self.train_dataset, **load_data_kwargs['train_loader_kwargs'])
+        self.val_loader = ChannelDataLoader(self.val_dataset, **load_data_kwargs['val_loader_kwargs'])
 
     def load_run(self, run):
         """
@@ -204,14 +205,14 @@ class Trainer:
                 raise ValueError("The old and new config file have dataset_kwargs which are not consistent! You must create a new run")
             self.config  = config
             self.comprehend_config()
-            model_file = f"{self.config['work_dir']}/{run}/model.pth"
+            model_file = f"{self.config['work_dir']}/{run}/model.pth"    # < ======= TODO: Add multiple models here
             loss_file = f"{self.config['work_dir']}/{run}/loss_dict.pkl"
             logger.info(f"Loading model weights from {model_file}")
             self.model.load_state_dict(torch.load(model_file))
             with open(loss_file, 'rb') as f:
                 logger.info(f"Loading loss dictionary from {loss_file}")
                 loss_dict = pickle.load(f)
-            self.train_loss_, self.val_loss_ = loss_dict['train_loss'], loss_dict['val_loss']
+            self.model.train_loss_, self.model.val_loss_ = loss_dict['train_loss'], loss_dict['val_loss']
         else:
             raise FileNotFoundError(f"Config file {config_file} not found.")
         
@@ -258,7 +259,7 @@ class Trainer:
                 except Exception as e:
                     logger.error(f"Error saving configuration file: {e}")
 
-        best_loss = self.model.fit(self.train_loader, self.val_loader, trial=trial)
+        best_loss = self.model.fit(self.train_loader, self.val_loader, trial=trial)   # < ======= TODO: Add multiple models here
 
         if self.work_dir is not None:
             logger.info(f"Saving the model weights and loss history to {self.work_dir}/{self.run}/")

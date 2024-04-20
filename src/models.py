@@ -116,6 +116,7 @@ class PyNet(torch.nn.Module):
     def predict(self, features):
         """
         Predict the output using the given some input feature array (can be numpy).
+        Also sets the dtype of the features and targets to be used in the predict method.
 
         Returns:
             torch.Tensor: The predicted output tensor.
@@ -127,19 +128,21 @@ class PyNet(torch.nn.Module):
             with torch.no_grad():
                 out = self(features.to(self.device))
             predictions.append(out)
+        self.features_dtype = features.dtype
+        self.targets_dtype = out.dtype
         return torch.cat(predictions)
 
-    def _compute_loss(self, real, target, criterion):
+    def _compute_loss(self, ground_truth, prediction, criterion):
         """
-        Compute the loss between the real and target values using the provided criterion.        
+        Compute the loss between the ground_truth and prediction values using the provided criterion.        
         """
-        if not isinstance(target, torch.Tensor):
-            logger.warning(f'Object target is not a tensor. Casting to tensor of {self.train_dataset.target_dtype}.')
-            target = torch.tensor(target, dtype=self.train_dataset.target_dtype)
-        if not isinstance(real, torch.Tensor):
-            logger.warning(f'Object real is not a tensor. Casting to tensor of {self.train_dataset.target_dtype}.')
-            real = torch.tensor(real, dtype=self.train_dataset.target_dtype)
-        loss = criterion(real, target)
+        if not isinstance(prediction, torch.Tensor):
+            logger.warning(f'Object target is not a tensor. Casting to tensor of {self.targets_dtype}.')
+            prediction = torch.tensor(prediction, dtype=self.targets_dtype)
+        if not isinstance(ground_truth, torch.Tensor):
+            logger.warning(f'Object ground_truth is not a tensor. Casting to tensor of {self.targets_dtype}.')
+            ground_truth = torch.tensor(ground_truth, dtype=self.targets_dtype)
+        loss = criterion(ground_truth, prediction)
 
         # apply regularization if any
         # loss += penalty.item() 
@@ -254,6 +257,7 @@ class PyNet(torch.nn.Module):
 
         # final message
         logger.info(f"""End of training. Total time: {round(total_time, 5)} seconds""")
+        return best_loss
 
         
     def _to_device(self, features, targets, device):
