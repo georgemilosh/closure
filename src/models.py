@@ -8,16 +8,15 @@ date: 2024
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import logging
 import optuna
 import time
 from torch.utils.data import DataLoader
 import copy
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+#logging.basicConfig(level=logging.INFO)
+#logger = logging.getLogger(__name__)
 import logging
-
+logger = logging.getLogger('trainers')
 
 class PyNet(torch.nn.Module):
     """

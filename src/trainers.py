@@ -22,6 +22,7 @@ from torch.utils.data import DataLoader
 from datasets import DataFrameDataset
 from datasets import ChannelDataLoader
 import models
+import utilities as ut
 
 import logging
 logging.basicConfig(level=logging.INFO)
@@ -117,7 +118,7 @@ class Trainer:
             f_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
             f_handler.setFormatter(f_format)
             logger.addHandler(f_handler)
-            logger.info(f"Logging to {self.work_dir}/training.log")
+            logger.info(f"Logging to {self.work_dir}/training.log") # TODO: pass the logger to the constructor of the classes it creates
 
         self.config = copy.deepcopy(self.__dict__) # save the attributes to the config of the trainer class
         self.dataset_kwargs.pop('samples_file',None)  # guardrails against accidentally passing samples_file to DataFrameDataset     
@@ -159,7 +160,7 @@ class Trainer:
             self.run = ''
 
         if isinstance(model_kwargs, dict): # if model is not instantiated we create it
-            logger.warning(f"Creating new model with {model_kwargs =}. Note this will replace any previous model")
+            logger.warning(f"Creating new model. Note this will replace any previous model")
             model_name = model_kwargs.pop('model')
             model_class = getattr(models, model_name)
             self.model = model_class(**model_kwargs) # < ======= TODO: Add multiple models here
@@ -172,7 +173,7 @@ class Trainer:
         self.model.to(self.device)
         logger.info(f"{self.model.device = }")
         
-       
+        logger.info(f"Code version git hash: {ut.get_git_revision_hash()}") # TODO: add this to the config file and raise error if it doesn't coincide wiht the current version
 
         self.load_data(load_data_kwargs)
     

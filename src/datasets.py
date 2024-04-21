@@ -16,24 +16,43 @@ import joblib
 import read_pic as rp
 
 import logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+#logging.basicConfig(level=logging.INFO)
+#logger = logging.getLogger(__name__)
+logger = logging.getLogger('trainers')
 
 from torch.utils.data import DataLoader
+
 
 class ChannelDataLoader(DataLoader):
     """
     A custom PyTorch DataLoader class that allows for loading only specific channels of the features and targets.
     """
-    def __init__(self, dataset, feature_channels=None, target_channels=None, **kwargs):
-        self.feature_channels = feature_channels
-        self.target_channels = target_channels
+    def __init__(self, dataset, feature_channel_names=None, target_channel_names=None,
+                 feature_dtype='float32', target_dtype='float32', **kwargs):
+        self.feature_dtype = getattr(torch, feature_dtype)
+        self.target_dtype = getattr(torch, target_dtype)
+        self.request_features = dataset.request_features
+        self.request_targets = dataset.request_targets
+        if feature_channel_names is not None:
+            self.feature_channels = [self.request_features.index(channel) for channel in feature_channel_names]
+        else:
+            self.feature_channels = None
+        if target_channel_names is not None:
+            self.target_channels = [self.request_targets.index(channel) for channel in target_channel_names]
+        else:
+            self.target_channels = None
+        logger.info(f"ChannelDataLoader.feature_channels: {self.feature_channels}")
+        logger.info(f"ChannelDataLoader.target_channels: {self.target_channels}")
+        
+
         super().__init__(dataset, **kwargs)
 
     def __iter__(self):
         if self.feature_channels is not None or self.target_channels is not None:
             for features, targets in super().__iter__():
-                yield features[:, self.feature_channels], targets[:, self.target_channels]
+                features = features[:, self.feature_channels]
+                targets = targets[:, self.target_channels]
+                yield features, targets
         else:
             for features, targets in super().__iter__():
                 yield features, targets
@@ -78,6 +97,8 @@ class DataFrameDataset(torch.utils.data.Dataset):
         features_shape (tuple): The shape of the features.
         targets_shape (tuple): The shape of the targets.
         samples (int): The number of samples in the dataset.
+        request_features (list or None): The requested features to load.
+        request_targets (list or None): The requested targets to load.
 
     Methods:
         load_original(): Loads the DataFrame from a CSV file and prepares the features and targets for further processing.
@@ -101,6 +122,7 @@ class DataFrameDataset(torch.utils.data.Dataset):
                  read_features_targets_kwargs = None
                  ):
         
+        
         self.target_dtype = getattr(torch, target_dtype) # parsing: convert string to torch.dtype object
         self.target_dtype_numpy = getattr(numpy, target_dtype_numpy)
         self.feature_dtype = getattr(torch, feature_dtype)
@@ -110,12 +132,16 @@ class DataFrameDataset(torch.utils.data.Dataset):
 
         self.prescaler_targets = prescaler_targets
         if prescaler_features is not None:
-            self.prescaler_features = [getattr(numpy, prescaler_features) for prescaler_features in prescaler_features] #assuming some single variable function like numpy.log
+            self.prescaler_features = [getattr(numpy, prescaler_features) 
+                                       if prescaler_features is not None else None for 
+                                       prescaler_features in prescaler_features] #assuming some single variable function like numpy.log
         else:
             self.prescaler_features = prescaler_features
         
         if prescaler_targets is not None:
-            self.prescaler_targets = [getattr(numpy, prescaler_targets) for prescaler_targets in prescaler_targets] #assuming some single variable function like numpy.log
+            self.prescaler_targets = [getattr(numpy, prescaler_targets) 
+                                      if prescaler_targets is not None else None for 
+                                      prescaler_targets in prescaler_targets] #assuming some single variable function like numpy.log
         else:
             self.prescaler_targets = prescaler_targets
 
@@ -144,6 +170,8 @@ class DataFrameDataset(torch.utils.data.Dataset):
         
         
         filenames = self.dataframe[self.image_file_name_column].tolist()
+        self.request_features = self.read_features_targets_kwargs.get('request_features', None)
+        self.request_targets = self.read_features_targets_kwargs.get('request_targets', None)
         self.features, self.targets = rp.read_features_targets(self.data_folder, filenames, 
                                                   feature_dtype = self.feature_dtype_numpy, 
                                                   target_dtype = self.target_dtype_numpy,**self.read_features_targets_kwargs)
@@ -172,8 +200,9 @@ class DataFrameDataset(torch.utils.data.Dataset):
         # === dealing with features ======
         if self.prescaler_features is not None:
             for channel in range(self.features.shape[1]):
-                self.features[:,channel,...] = self.prescaler_features[channel](self.features[:,channel,...])
-                logger.info(f"Prescaling { self.prescaler_features[channel]} applied to features")
+                if self.prescaler_features[channel] is not None:
+                    self.features[:,channel,...] = self.prescaler_features[channel](self.features[:,channel,...])
+                    logger.info(f"Prescaling { self.prescaler_features[channel]} applied to features")
         if self.scaler_features is not None:
             processing_folder, samples_file_name = self.samples_file.rsplit('/', 1)
             name = f'{self.norm_folder}/X_{samples_file_name}_{str(self.prescaler_features)}.pkl'
@@ -196,8 +225,9 @@ class DataFrameDataset(torch.utils.data.Dataset):
         # === dealing with targets ======
         if self.prescaler_targets is not None:
             for channel in range(self.targets.shape[1]):
-                self.targets[:,channel,...] = self.prescaler_targets[channel](self.targets[:,channel,...])
-                logger.info(f"Prescaling { self.prescaler_targets[channel]} applied to targets")    
+                if self.prescaler_targets[channel] is not None:
+                    self.targets[:,channel,...] = self.prescaler_targets[channel](self.targets[:,channel,...])
+                    logger.info(f"Prescaling { self.prescaler_targets[channel]} applied to targets")    
         if self.scaler_targets is not None:
             processing_folder, samples_file_name = self.samples_file.rsplit('/', 1)
             name = f'{self.norm_folder}/y_{samples_file_name}_{str(self.prescaler_targets)}.pkl'

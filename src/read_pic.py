@@ -1,65 +1,15 @@
 import h5py
 import numpy as np
 import os
-import logging
 import re
 import utilities as ut
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+import logging
+logger = logging.getLogger('trainers')
+#logging.basicConfig(level=logging.INFO)
+#logger = logging.getLogger(__name__)
 
 
 
-def append_index_to_duplicates(lst):
-    """
-    This function takes a list as input and returns a new list where each duplicate string element is appended with its 
-    index within its group of duplicates. Non-string elements are left unchanged.
-
-    Parameters:
-    lst (list): The input list. It can contain elements of any type.
-
-    Returns:
-    list: A new list where each duplicate string is appended with its index within its group of duplicates. 
-    Non-string elements are left unchanged.
-    """
-    count_dict = {}
-    result = []
-    for i, elem in enumerate(lst):
-        if isinstance(elem, str):
-            if lst.count(elem) > 1:  # Only count duplicates
-                if elem in count_dict:
-                    count_dict[elem] += 1
-                    result.append(f"{elem}{count_dict[elem]}")
-                else:
-                    count_dict[elem] = 1
-                    result.append(f"{elem}{count_dict[elem]}")
-            else:
-                result.append(elem)
-        else:
-            result.append(elem)
-    return result
-
-def get_duplicate_indices(lst):
-    """
-    Returns a dictionary containing the indices of duplicate elements in the given list.
-
-    Parameters:
-    lst (list): A list of elements.
-
-    Returns:
-    dict: A dictionary where the keys are the duplicate elements and the values are lists of their indices.
-
-    Example:
-    >>> get_duplicate_indices([1, 2, 3, 2, 4, 1, 5, 4])
-    {1: [0, 5], 2: [1, 3], 4: [4, 7]}
-    """
-    index_dict = {}
-    for i, elem in enumerate(lst):
-        if elem is not None:
-            if elem in index_dict:
-                index_dict[elem].append(i)
-            else:
-                index_dict[elem] = [i]
-    return {key: value for key, value in index_dict.items() if len(value) > 1}
 
 def read_fieldname(files_path,filenames,fieldname,choose_x=None, choose_y=None):
     """
@@ -216,8 +166,8 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
     - q: The heat flux.
     
     """
-    choose_species_new = append_index_to_duplicates(choose_species) 
-    dublicatespecies = get_duplicate_indices(choose_species)
+    choose_species_new = ut.append_index_to_duplicates(choose_species) 
+    dublicatespecies = ut.get_duplicate_indices(choose_species)
     data = {}
     small = 1e-12
     # The magnetic and electric field is read.
