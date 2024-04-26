@@ -123,7 +123,7 @@ def read_files(files_path, filenames, fields_to_read, qom, dtype, extract_fields
         out = []
         data = read_data(files_path,filename,fields_to_read,qom,
                                     choose_species=choose_species,choose_x=choose_x,choose_y=choose_y,verbose=verbose)
-        
+        # TODO: Introduce something that check that the input of extract_fields is correct, e.g. `Jx` does not exist
         for extract_field_index in extract_fields:
             if isinstance(extract_field_index, list):
                 #logger.info(data[extract_field_index[0]][extract_field_index[1]])
@@ -166,10 +166,10 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
     - q: The heat flux.
     
     """
-    choose_species_new = ut.append_index_to_duplicates(choose_species) 
-    dublicatespecies = ut.get_duplicate_indices(choose_species)
+    #choose_species_new = ut.append_index_to_duplicates(choose_species) 
+    #dublicatespecies = ut.get_duplicate_indices(choose_species)
     data = {}
-    small = 1e-12
+    small = 1e-10
     # The magnetic and electric field is read.
     for fields in ['B', 'E']:
         if fields_to_read[fields]:
@@ -195,9 +195,12 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
             if verbose:
                 logger.info(f"loading {fields}")
             data[fields] = {}
-            for i, species in enumerate(choose_species_new): # Care must be taken that these the only species and they are actually correctly labeled
+            for i, species in enumerate(choose_species): # Care must be taken that these the only species and they are actually correctly labeled
                 if species is not None:
-                    data[fields][species] = read_fieldname(files_path,filenames,f'{fields}_{i}',choose_x,choose_y)
+                    if species in data[fields]: # we sum over identical species
+                        data[fields][species] += read_fieldname(files_path,filenames,fields+f'_{i}',choose_x,choose_y)
+                    else:
+                        data[fields][species] = read_fieldname(files_path,filenames,f'{fields}_{i}',choose_x,choose_y)
 
 
     if fields_to_read["J"]:
@@ -206,12 +209,16 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
         if verbose:
             logger.info(f"loading J")
         for component in ['x','y','z']:
-            for i, species in enumerate(choose_species_new):
+            for i, species in enumerate(choose_species):
                 if species is not None:
-                    data[f'J{component}'][species] = read_fieldname(files_path,filenames,f'J{component}_{i}',choose_x,choose_y)
-                    data[f'V{component}'][species] = data[f'J{component}'][species]/(data['rho'][species]+1e-12)
+                    if species in data[f'J{component}']: # we sum over identical species
+                        data[f'J{component}'][species] += read_fieldname(files_path,filenames,f'J{component}_{i}',choose_x,choose_y)
+                    else:
+                        data[f'J{component}'][species] = read_fieldname(files_path,filenames,f'J{component}_{i}',choose_x,choose_y)
+            for species in data[f'J{component}'].keys():
+                data[f'V{component}'][species] = data[f'J{component}'][species]/(data['rho'][species]+small)
         data['Jmagn'], data['Vmagn'] = {}, {}
-        for i, species in enumerate(choose_species_new):
+        for species in data[f'J{component}'].keys():
             if species is not None:
                 data['Jmagn'][species] = np.sqrt(data['Jx'][species]**2 + data['Jy'][species]**2 + data['Jz'][species]**2)
                 data['Vmagn'][species] = np.sqrt(data['Vx'][species]**2 + data['Vy'][species]**2 + data['Vz'][species]**2)
@@ -223,56 +230,72 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
             logger.info(f"loading P and/or PI")
         for component_1 in ['x','y','z']:
             for component_2 in ['x','y','z']:
-                if fields_to_read["P"]:
-                    data[f'P{component_1}{component_2}'] = {}
-                if fields_to_read["PI"]:
-                    data[f'PI{component_1}{component_2}'] = {}
-                for i, species in enumerate(choose_species_new):
+                data[f'PI{component_1}{component_2}'] = {}
+                data[f'P{component_1}{component_2}'] = {}
+
+                for i, species in enumerate(choose_species):
                     if species is not None:
                         try:
-                            PI = read_fieldname(files_path,filenames,f'P{component_1}{component_2}_{i}',choose_x,choose_y)
-                            if fields_to_read["PI"]:
-                                data[f'PI{component_1}{component_2}'][species] = PI
-                            if fields_to_read["P"]:
-                                data[f'P{component_1}{component_2}'][species] = (PI - data[f'J{component_1}'][species]*data[f'J{component_2}'][species]/(data[f'rho'][species]+small))/qom[i]
-                                #logger.info(f"{component_1 = }, {component_2}, {i = }, {species = }, {(data[f'P{component_1}{component_2}'][species]).shape = }")
+                            if species in data[f'PI{component_1}{component_2}']:
+                                data[f'PI{component_1}{component_2}'][species] += read_fieldname(files_path,filenames,f'P{component_1}{component_2}_{i}',choose_x,choose_y)
+                            else:
+                                data[f'PI{component_1}{component_2}'][species] = read_fieldname(files_path,filenames,f'P{component_1}{component_2}_{i}',choose_x,choose_y)
                         except:
                             if verbose:
-                                logger.info(f'Component P{component_1 = }{component_2 =} for species {species} missing because tensor is symmetric')
-                        
+                                logger.info(f'Component P{component_1}{component_2} for species {species} missing because tensor is symmetric')
+                for species in data[f'PI{component_1}{component_2}']: # because now the number of species has potentially changed
+                    i = choose_species.index(species)
+                    data[f'P{component_1}{component_2}'][species]  = (data[f'PI{component_1}{component_2}'][species] - \
+                                data[f'J{component_1}'][species]*data[f'J{component_2}'][species]/(data[f'rho'][species]+small))/qom[i]
+
+                if not fields_to_read["P"]:
+                    del data[f'P{component_1}{component_2}']
+                if not fields_to_read["PI"]:
+                    del data[f'PI{component_1}{component_2}']  
                        
         if fields_to_read["PI"]:
-            for i, species in enumerate(choose_species_new):
-                if species is not None:
-                    data['PIyx'][species] = data['PIxy'][species]
-                    data['PIzx'][species] = data['PIxz'][species]
-                    data['PIzy'][species] = data['PIyz'][species]
+            for species in data[f'PI{component_1}{component_2}']:
+                data['PIyx'][species] = data['PIxy'][species]
+                data['PIzx'][species] = data['PIxz'][species]
+                data['PIzy'][species] = data['PIyz'][species]
         if fields_to_read["P"]:
             data['Ppar'], data['Pperp'] = {}, {}
-            for i, species in enumerate(choose_species_new):
-                if species is not None:
-                    data['Pyx'][species] = data['Pxy'][species]
-                    data['Pzx'][species] = data['Pxz'][species]
-                    data['Pzy'][species] = data['Pyz'][species]
-                    if verbose:
-                        logger.info(f"loading Ppar and Pperp")
-                    data['Ppar'][species] = (data['Pxx'][species]*data['Bx']**2 + data['Pyy'][species]*data['By']**2  + data['Pzz'][species]*data['Bz']**2 + \
-                                            2*data['Pxy'][species]*data['Bx']*data['By']+2*data['Pxz'][species]*data['Bx']*data['Bz'] + \
-                                                2*data['Pyz'][species]*data['By']*data['Bz'])/(data['By']**2+data['Bx']**2+data['Bz']**2)
-                    data['Pperp'][species] = (data['Pxx'][species] + data['Pyy'][species] + data['Pzz'][species] - data['Ppar'][species])/2
+            for species in data[f'P{component_1}{component_2}']:
+                data['Pyx'][species] = data['Pxy'][species]
+                data['Pzx'][species] = data['Pxz'][species]
+                data['Pzy'][species] = data['Pyz'][species]
+                if verbose:
+                    logger.info(f"loading Ppar and Pperp")
+                data['Ppar'][species] = (data['Pxx'][species]*data['Bx']**2 + data['Pyy'][species]*data['By']**2  + data['Pzz'][species]*data['Bz']**2 + \
+                                        2*data['Pxy'][species]*data['Bx']*data['By']+2*data['Pxz'][species]*data['Bx']*data['Bz'] + \
+                                            2*data['Pyz'][species]*data['By']*data['Bz'])/(data['By']**2+data['Bx']**2+data['Bz']**2)
+                data['Pperp'][species] = (data['Pxx'][species] + data['Pyy'][species] + data['Pzz'][species] - data['Ppar'][species])/2
 
     # The heat flux is calculated (to do so you need to read rho, J and P first).
     if fields_to_read["Heat_flux"]:
         if verbose:
             logger.info(f"loading q")
         for component in ['x','y','z']:
-            data[f'q{component}'] = {}
-            for i, species in enumerate(choose_species_new):
+            data[f'EF{component}'] = {}
+            for i, species in enumerate(choose_species):
                 if species is not None:
-                    data[f'q{component}'][species] = read_fieldname(files_path,filenames,f'EF{component}_{i}',choose_x,choose_y) - \
-                        (data['Jx'][species]**2+data['Jy'][species]**2+data['Jz'][species]**2)*data[f'J{component}'][species]/(2*qom[i]*data[f'rho'][species]+small) - \
-                        (data['Pxx'][species] + data[f'Pyy'][species] + data[f'Pzz'][species])*data[f'J{component}'][species]/(2*data['rho'][species]+small) - \
-                        (data['Jx'][species]*data[f'Px{component}'][species] + data['Jy'][species]*data[f'Py{component}'][species] + data['Jz'][species]*data[f'Pz{component}'][species])/(data['rho'][species]+small)
+                    EF = read_fieldname(files_path,filenames,f'EF{component}_{i}',choose_x,choose_y)
+                    if "EF" in fields_to_read and fields_to_read["EF"] is True:
+                        if species in data[f'EF{component}']:
+                            data[f'EF{component}'][species] += EF
+                        else:
+                            data[f'EF{component}'][species] = EF
+
+            data[f'q{component}'] = {}
+            for species in data[f'EF{component}'].keys():
+                i = choose_species.index(species)
+                data[f'q{component}'][species] =  data[f'EF{component}'][species] - \
+                    (data['Jx'][species]**2+data['Jy'][species]**2+data['Jz'][species]**2)*data[f'J{component}'][species]/(2*qom[i]*data[f'rho'][species]**2+small) - \
+                    (data['Pxx'][species] + data[f'Pyy'][species] + data[f'Pzz'][species])*data[f'J{component}'][species]/(2*data['rho'][species]+small) - \
+                    (data['Jx'][species]*data[f'Px{component}'][species] + data['Jy'][species]*data[f'Py{component}'][species] + data['Jz'][species]*data[f'Pz{component}'][species])/(data['rho'][species]+small)
+            if 'EF' not in fields_to_read or not fields_to_read['EF']:
+                del data[f'EF{component}']
+    """
     # Treat dublicate species:
     for fields in data.keys():
         if fields not in ['Bmagn','Emagn','Bx','By','Bz','Ex','Ey','Ez','Bx_ext','By_ext','Bz_ext','divB']:
@@ -284,7 +307,7 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                     logger.info(f"{data[fields] = }")
                     raise e
                 for index in indices: # and remove these indices
-                    del data[fields][choose_species_new[index]]
+                    del data[fields][choose_species_new[index]]"""
         
     return data
 

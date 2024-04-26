@@ -90,14 +90,7 @@ class PyNet(torch.nn.Module):
         
         # === Deal with the scheduler === #
         scheduler_name = self.scheduler_kwargs.pop('scheduler')
-        if scheduler_name == 'steplr': # step_size=7, gamma=0.9
-            self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, **self.scheduler_kwargs)
-        elif scheduler_name == 'plateau':
-            self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, **self.scheduler_kwargs)
-        elif scheduler_name == 'no':
-            self.scheduler = None
-        else:
-            raise NotImplementedError(f"Scheduler {scheduler_name} not recognized.")
+        self.scheduler = getattr(torch.optim.lr_scheduler, scheduler_name)(self.optimizer, **self.scheduler_kwargs)
 
     @property
     def device(self):
@@ -216,7 +209,7 @@ class PyNet(torch.nn.Module):
             epoch_start_time = time.time() # track epoch time
             tr_loss = self._forward_pass(train_loader, phase='train')
             if self.scheduler is not None:
-                self.scheduler.step()
+                self.scheduler.step(tr_loss['criterion'])
             val_loss = self._forward_pass(val_loader, phase='val')
                 
             for key in tr_loss:
@@ -335,9 +328,11 @@ class MLP(PyNet):
         (6): Linear(in_features=6, out_features=1, bias=True)
       )
     )
+    >>> model = MLP([8, 3, 1], weights=[{'name': 'uniform_', 'std' : 1/np.sqrt(8)}, {'name': 'uniform_', 'std' : 1/np.sqrt(3)}, \
+        biases = [{'name': 'zeros_'},{'name': 'zeros_'}])]
     
     """
-    def __init__(self, feature_dims, activations=None, dropouts=None, **kwargs):
+    def __init__(self, feature_dims, activations=None, dropouts=None, weights=None, biases=None, **kwargs):
         super().__init__(**kwargs)
 
         self.flatten = torch.nn.Flatten()
@@ -346,8 +341,18 @@ class MLP(PyNet):
             activations = [None] * (len(feature_dims) - 1)
         if dropouts is None:
             dropouts = [None] * (len(feature_dims) - 1)
+        if weights is None:
+            weights = [None] * (len(feature_dims) - 1)
+        if biases is None:
+            biases = [None] * (len(feature_dims) - 1)
         for i in range(len(feature_dims) - 1):
             linear_layer = torch.nn.Linear(feature_dims[i], feature_dims[i + 1])
+            if weights[i] is not None:
+                name = weights[i].pop('name')
+                getattr(torch.nn.init, name)(linear_layer.weight, **weights[i])
+            if biases[i] is not None:
+                name = biases[i].pop('name')
+                getattr(torch.nn.init, name)(linear_layer.bias, **biases[i])
             seq_list.append(linear_layer)
             if activations[i] is not None:
                 activation_layer = getattr(torch.nn, activations[i])() #  'ReLu' => torch.nn.ReLU() 
@@ -356,8 +361,8 @@ class MLP(PyNet):
                 if dropouts[i] is not None:
                     dropout_layer = torch.nn.Dropout(dropouts[i])
                     seq_list.append(dropout_layer)
-            
-        self.linear_relu_stack = torch.nn.Sequential(*seq_list[:-1])
+        print(seq_list)
+        self.linear_relu_stack = torch.nn.Sequential(*seq_list)
 
         super().define_optimizer_sheduler() # To define optimizer we have to have the layers already defined
     

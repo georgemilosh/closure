@@ -201,7 +201,8 @@ class Trainer:
         if os.path.exists(config_file):
             with open(config_file, 'r') as f:
                 config = json.load(f)
-            logger.warning(f"Config file {config_file} found. Loading configuration based on it and the associated model weights/training loss!")
+            logger.info(f"==========Config file {config_file} found========")
+            logger.warning(f"Loading configuration based on it and the associated model weights/training loss!")
             if config['dataset_kwargs'] != self.config['dataset_kwargs']:
                 raise ValueError("The old and new config file have dataset_kwargs which are not consistent! You must create a new run")
             self.config  = config
@@ -245,7 +246,7 @@ class Trainer:
             for key in new_config['dataset_kwargs']:
                 if key in new_config['dataset_kwargs'] and new_config['dataset_kwargs'][key] != self.config['dataset_kwargs'][key]:
                     logger.warning(f"{key} is inconsistent between self.config and new_config. Check that you are not mixing test/train/validation")
-            logger.warning(f"Updating the config with the new config")
+            logger.warning(f"============Updating the config with the new config============")
             self.config = new_config
             self.comprehend_config()
             if self.run != '': # if we are running a trial, we need to save config to subdirectory

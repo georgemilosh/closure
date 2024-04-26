@@ -27,10 +27,7 @@ class ChannelDataLoader(DataLoader):
     """
     A custom PyTorch DataLoader class that allows for loading only specific channels of the features and targets.
     """
-    def __init__(self, dataset, feature_channel_names=None, target_channel_names=None,
-                 feature_dtype='float32', target_dtype='float32', **kwargs):
-        self.feature_dtype = getattr(torch, feature_dtype)
-        self.target_dtype = getattr(torch, target_dtype)
+    def __init__(self, dataset, feature_channel_names=None, target_channel_names=None, **kwargs):
         self.request_features = dataset.request_features
         self.request_targets = dataset.request_targets
         if feature_channel_names is not None:
@@ -121,7 +118,8 @@ class DataFrameDataset(torch.utils.data.Dataset):
                  image_file_name_column='filenames',
                  read_features_targets_kwargs = None
                  ):
-        
+        self.features_mean = None  # TODO: check that this doesn't break something
+        self.features_std = None
         
         self.target_dtype = getattr(torch, target_dtype) # parsing: convert string to torch.dtype object
         self.target_dtype_numpy = getattr(numpy, target_dtype_numpy)
@@ -246,6 +244,8 @@ class DataFrameDataset(torch.utils.data.Dataset):
             logger.info("Normalization applied to targets")
             self.targets -= self.targets_mean
             self.targets /= self.targets_std
+        self.features = torch.tensor(self.features, dtype=self.feature_dtype)
+        self.targets = torch.tensor(self.targets, dtype=self.target_dtype)    
 
 
     def __len__(self):
@@ -256,8 +256,8 @@ class DataFrameDataset(torch.utils.data.Dataset):
         Tells data loaders how to load the data from the dataset.
         """        
         features, targets = self.features[idx], self.targets[idx]
-        features = torch.tensor(features, dtype=self.feature_dtype)
-        targets = torch.tensor(targets, dtype=self.target_dtype)
+        #features = torch.tensor(features, dtype=self.feature_dtype)
+        #targets = torch.tensor(targets, dtype=self.target_dtype)
         #if self.transform is not None:
         #    features = self.transform(features)
         #if self.target_transform is not None:
