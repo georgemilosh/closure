@@ -126,8 +126,13 @@ def read_files(files_path, filenames, fields_to_read, qom, dtype, extract_fields
         # TODO: Introduce something that check that the input of extract_fields is correct, e.g. `Jx` does not exist
         for extract_field_index in extract_fields:
             if isinstance(extract_field_index, list):
-                #logger.info(data[extract_field_index[0]][extract_field_index[1]])
-                out.append(data[extract_field_index[0]][extract_field_index[1]])
+                try:
+                    out.append(data[extract_field_index[0]][extract_field_index[1]])
+                except Exception as e:
+                    logger.info(f"Failed to extract {extract_field_index = }")
+                    logger.info(f"Available fields are {data[extract_field_index[0]] = }")
+                    logger.info(f"Available data keys are {data.keys() = }")
+                    raise e
             else:
                 #logger.info(data[extract_field_index])
                 out.append(data[extract_field_index])
@@ -279,13 +284,11 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
             data[f'EF{component}'] = {}
             for i, species in enumerate(choose_species):
                 if species is not None:
-                    EF = read_fieldname(files_path,filenames,f'EF{component}_{i}',choose_x,choose_y)
-                    if "EF" in fields_to_read and fields_to_read["EF"] is True:
-                        if species in data[f'EF{component}']:
-                            data[f'EF{component}'][species] += EF
-                        else:
-                            data[f'EF{component}'][species] = EF
-
+                    if species in data[f'EF{component}']:
+                        data[f'EF{component}'][species] += read_fieldname(files_path,filenames,f'EF{component}_{i}',choose_x,choose_y)
+                    else:
+                        data[f'EF{component}'][species] = read_fieldname(files_path,filenames,f'EF{component}_{i}',choose_x,choose_y)
+            #logger.info(f"{data[f'EF{component}'].keys() = }")
             data[f'q{component}'] = {}
             for species in data[f'EF{component}'].keys():
                 i = choose_species.index(species)
@@ -293,6 +296,7 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                     (data['Jx'][species]**2+data['Jy'][species]**2+data['Jz'][species]**2)*data[f'J{component}'][species]/(2*qom[i]*data[f'rho'][species]**2+small) - \
                     (data['Pxx'][species] + data[f'Pyy'][species] + data[f'Pzz'][species])*data[f'J{component}'][species]/(2*data['rho'][species]+small) - \
                     (data['Jx'][species]*data[f'Px{component}'][species] + data['Jy'][species]*data[f'Py{component}'][species] + data['Jz'][species]*data[f'Pz{component}'][species])/(data['rho'][species]+small)
+            #logger.info(f"{data[f'q{component}'].keys() = }")
             if 'EF' not in fields_to_read or not fields_to_read['EF']:
                 del data[f'EF{component}']
     """
