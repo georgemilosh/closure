@@ -16,9 +16,9 @@ import joblib
 import read_pic as rp
 
 import logging
-#logging.basicConfig(level=logging.INFO)
-#logger = logging.getLogger(__name__)
-logger = logging.getLogger('trainers')
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+#logger = logging.getLogger('trainers')
 
 from torch.utils.data import DataLoader
 

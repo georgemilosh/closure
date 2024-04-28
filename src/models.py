@@ -13,10 +13,10 @@ import time
 from torch.utils.data import DataLoader
 import copy
 
-#logging.basicConfig(level=logging.INFO)
-#logger = logging.getLogger(__name__)
 import logging
-logger = logging.getLogger('trainers')
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+#logger = logging.getLogger('trainers')
 
 class PyNet(torch.nn.Module):
     """
@@ -34,7 +34,7 @@ class PyNet(torch.nn.Module):
     def __init__(self, model_seed=None, optimizer_kwargs=None, scheduler_kwargs=None, logger_kwargs=None):
         super().__init__() 
         logger.info(f"Initializing {self.__class__.__name__} model.")
-        logger.info(f"{model_seed=}, {optimizer_kwargs=}, {scheduler_kwargs=}, {logger_kwargs=}")
+        #logger.info(f"{model_seed=}, {optimizer_kwargs=}, {scheduler_kwargs=}, {logger_kwargs=}")
         if optimizer_kwargs is None:
             self.optimizer_kwargs = {}
         else:
@@ -361,7 +361,7 @@ class MLP(PyNet):
                 if dropouts[i] is not None:
                     dropout_layer = torch.nn.Dropout(dropouts[i])
                     seq_list.append(dropout_layer)
-        print(seq_list)
+        #print(seq_list)
         self.linear_relu_stack = torch.nn.Sequential(*seq_list)
 
         super().define_optimizer_sheduler() # To define optimizer we have to have the layers already defined

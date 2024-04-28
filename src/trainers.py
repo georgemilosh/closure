@@ -94,12 +94,13 @@ class Trainer:
             if os.path.exists(config_file):
                 with open(config_file, 'r') as f:
                     config = json.load(f)
-                logger.warning(f"Config file {config_file} found. Loading configuration based on it and ignoring the inputs to the constructor!")
+                logger.warning(f"===============Config file {config_file} found.==============")
+                logger.info(f"Loading configuration based on it.")
                 self.__dict__.update(**config) # update the attributes with the configuration file
-                dataset_kwargs = config['dataset_kwargs']
-                load_data_kwargs = config['load_data_kwargs']
-                model_kwargs = config['model_kwargs']
-                device = config['device']
+                #dataset_kwargs = config['dataset_kwargs']
+                #load_data_kwargs = config['load_data_kwargs']
+                #model_kwargs = config['model_kwargs']
+                #device = config['device']
                 work_dir = config['work_dir']
             else:
                 config = copy.deepcopy(self.__dict__) # save the attributes to the config file
@@ -119,6 +120,13 @@ class Trainer:
             f_handler.setFormatter(f_format)
             logger.addHandler(f_handler)
             logger.info(f"Logging to {self.work_dir}/training.log") # TODO: pass the logger to the constructor of the classes it creates
+            # Define the extra loggers and add the same FileHandler to them
+            datasets_logger = logging.getLogger('datasets')
+            datasets_logger.addHandler(f_handler)
+            models_logger = logging.getLogger('models')
+            models_logger.addHandler(f_handler)
+            read_pic_logger = logging.getLogger('read_pic')
+            read_pic_logger.addHandler(f_handler)
 
         self.config = copy.deepcopy(self.__dict__) # save the attributes to the config of the trainer class
         self.dataset_kwargs.pop('samples_file',None)  # guardrails against accidentally passing samples_file to DataFrameDataset     

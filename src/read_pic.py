@@ -4,9 +4,9 @@ import os
 import re
 import utilities as ut
 import logging
-logger = logging.getLogger('trainers')
-#logging.basicConfig(level=logging.INFO)
-#logger = logging.getLogger(__name__)
+#logger = logging.getLogger('trainers')
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 
