@@ -13,7 +13,7 @@ import pandas as pd
 import numpy as np
 import joblib
 
-import read_pic as rp
+from  . import read_pic as rp
 
 import logging
 logging.basicConfig(level=logging.INFO)

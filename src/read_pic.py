@@ -2,7 +2,7 @@ import h5py
 import numpy as np
 import os
 import re
-import utilities as ut
+from . import utilities as ut
 import logging
 #logger = logging.getLogger('trainers')
 logging.basicConfig(level=logging.INFO)

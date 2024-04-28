@@ -19,10 +19,9 @@ import json
 
 from torch.utils.data import DataLoader
 
-from datasets import DataFrameDataset
-from datasets import ChannelDataLoader
-import models
-import utilities as ut
+from . import datasets
+from . import models
+from . import utilities as ut
 
 import logging
 logging.basicConfig(level=logging.INFO)
@@ -94,18 +93,16 @@ class Trainer:
             if os.path.exists(config_file):
                 with open(config_file, 'r') as f:
                     config = json.load(f)
-                logger.warning(f"===============Config file {config_file} found.==============")
-                logger.info(f"Loading configuration based on it.")
+                logger.warning(f"Config file {config_file} found -> loading configuration")
                 self.__dict__.update(**config) # update the attributes with the configuration file
                 #dataset_kwargs = config['dataset_kwargs']
                 #load_data_kwargs = config['load_data_kwargs']
                 #model_kwargs = config['model_kwargs']
                 #device = config['device']
-                work_dir = config['work_dir']
+                #work_dir = config['work_dir']
             else:
                 config = copy.deepcopy(self.__dict__) # save the attributes to the config file
                 logger.info(f"Creating a new configuration file: {config_file}")
-                #print(f"{config =}")
                 os.makedirs(os.path.dirname(self.work_dir), exist_ok=True)
                 try:
                     with open(config_file, 'w') as f:
@@ -113,19 +110,19 @@ class Trainer:
                 except Exception as e:
                     logger.error(f"Error saving configuration file: {e}")
             
-        if work_dir is not None:
+        if self.work_dir is not None:
             f_handler = logging.FileHandler(f'{self.work_dir}/training.log')
             f_handler.setLevel(logging.DEBUG)
             f_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
             f_handler.setFormatter(f_format)
             logger.addHandler(f_handler)
-            logger.info(f"Logging to {self.work_dir}/training.log") # TODO: pass the logger to the constructor of the classes it creates
+            logger.info(f"========Logging to {self.work_dir}/training.log===========") 
             # Define the extra loggers and add the same FileHandler to them
-            datasets_logger = logging.getLogger('datasets')
+            datasets_logger = logging.getLogger(__name__)
             datasets_logger.addHandler(f_handler)
-            models_logger = logging.getLogger('models')
+            models_logger = logging.getLogger(models.__name__)
             models_logger.addHandler(f_handler)
-            read_pic_logger = logging.getLogger('read_pic')
+            read_pic_logger = logging.getLogger(datasets.__name__)
             read_pic_logger.addHandler(f_handler)
 
         self.config = copy.deepcopy(self.__dict__) # save the attributes to the config of the trainer class
@@ -133,14 +130,14 @@ class Trainer:
         train_sample = self.dataset_kwargs.pop('train_sample')
         val_sample = self.dataset_kwargs.pop('val_sample')
         test_sample = self.dataset_kwargs.pop('test_sample')
-        self.train_dataset = DataFrameDataset(samples_file=train_sample,norm_folder=self.work_dir,**self.dataset_kwargs)
+        self.train_dataset = datasets.DataFrameDataset(samples_file=train_sample,norm_folder=self.work_dir,**self.dataset_kwargs)
         self.dataset_kwargs.pop('scaler_features', None) # removing these to avoid passing them to the validation and test datasets
         self.dataset_kwargs.pop('scaler_targets', None)
-        self.val_dataset = DataFrameDataset(samples_file=val_sample,norm_folder=self.work_dir, 
+        self.val_dataset = datasets.DataFrameDataset(samples_file=val_sample,norm_folder=self.work_dir, 
                                             scaler_features=(self.train_dataset.features_mean,self.train_dataset.features_std), 
                                             scaler_targets=(self.train_dataset.targets_mean,self.train_dataset.targets_std),
                                             **self.dataset_kwargs)
-        self.test_dataset = DataFrameDataset(samples_file=test_sample,norm_folder=self.work_dir,
+        self.test_dataset = datasets.DataFrameDataset(samples_file=test_sample,norm_folder=self.work_dir,
                                             scaler_features=(self.train_dataset.features_mean,self.train_dataset.features_std),
                                             scaler_targets=(self.train_dataset.targets_mean,self.train_dataset.targets_std),
                                              **self.dataset_kwargs)
@@ -197,8 +194,8 @@ class Trainer:
         Returns:
             None
         """
-        self.train_loader = ChannelDataLoader(self.train_dataset, **load_data_kwargs['train_loader_kwargs'])
-        self.val_loader = ChannelDataLoader(self.val_dataset, **load_data_kwargs['val_loader_kwargs'])
+        self.train_loader = datasets.ChannelDataLoader(self.train_dataset, **load_data_kwargs['train_loader_kwargs'])
+        self.val_loader = datasets.ChannelDataLoader(self.val_dataset, **load_data_kwargs['val_loader_kwargs'])
 
     def load_run(self, run):
         """

@@ -16,7 +16,6 @@ import copy
 import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-#logger = logging.getLogger('trainers')
 
 class PyNet(torch.nn.Module):
     """
@@ -269,7 +268,10 @@ class PyNet(torch.nn.Module):
                 msg = f"{msg} | Validation loss: {val_loss}"
                 msg = f"{msg} | Time/epoch: {round(epoch_time, 5)} seconds"
                 if self.scheduler is not None:
-                    msg = f"{msg} | Learning rate: {self.scheduler.get_last_lr()}"
+                    try:
+                        msg = f"{msg} | Learning rate: {self.scheduler.get_last_lr()}"
+                    except AttributeError: # Compatability with an earlier version of Pytorch
+                        msg = f"{msg} | Learning rate: {self.scheduler._last_lr}"
 
                 logger.info(msg)
 
@@ -348,7 +350,12 @@ class MLP(PyNet):
         for i in range(len(feature_dims) - 1):
             linear_layer = torch.nn.Linear(feature_dims[i], feature_dims[i + 1])
             if weights[i] is not None:
-                name = weights[i].pop('name')
+                try:
+                    name = weights[i].pop('name')
+                except Exception as e:
+                    logger.info(f"{weights = }")
+                    logger.error(f"Error in weights: {i = }, {weights[i] = }")
+                    raise e
                 getattr(torch.nn.init, name)(linear_layer.weight, **weights[i])
             if biases[i] is not None:
                 name = biases[i].pop('name')
