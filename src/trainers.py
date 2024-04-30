@@ -116,7 +116,9 @@ class Trainer:
             f_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
             f_handler.setFormatter(f_format)
             logger.addHandler(f_handler)
+            logger.info(f"==========================================================")
             logger.info(f"========Logging to {self.work_dir}/training.log===========") 
+            logger.info(f"==========================================================")
             # Define the extra loggers and add the same FileHandler to them
             datasets_logger = logging.getLogger(__name__)
             datasets_logger.addHandler(f_handler)
@@ -215,7 +217,7 @@ class Trainer:
             model_file = f"{self.config['work_dir']}/{run}/model.pth"    # < ======= TODO: Add multiple models here
             loss_file = f"{self.config['work_dir']}/{run}/loss_dict.pkl"
             logger.info(f"Loading model weights from {model_file}")
-            self.model.load_state_dict(torch.load(model_file))
+            self.model.load_state_dict(torch.load(model_file, map_location=self.device))
             with open(loss_file, 'rb') as f:
                 logger.info(f"Loading loss dictionary from {loss_file}")
                 loss_dict = pickle.load(f)
