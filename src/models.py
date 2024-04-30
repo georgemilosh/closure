@@ -207,9 +207,10 @@ class PyNet(torch.nn.Module):
         for epoch in range(self.epochs):
             epoch_start_time = time.time() # track epoch time
             tr_loss = self._forward_pass(train_loader, phase='train')
-            if self.scheduler is not None:
-                self.scheduler.step(tr_loss['criterion'])
+            
             val_loss = self._forward_pass(val_loader, phase='val')
+            if self.scheduler is not None:
+                self.scheduler.step(val_loss['criterion'])
                 
             for key in tr_loss:
                 if key not in self.train_loss_:

@@ -268,7 +268,7 @@ class Trainer:
                 except Exception as e:
                     logger.error(f"Error saving configuration file: {e}")
 
-        best_loss = self.model.fit(self.train_loader, self.val_loader, trial=trial)   # < ======= TODO: Add multiple models here
+        best_loss = self.model.fit(self.train_loader, self.val_loader, trial=trial)   
 
         if self.work_dir is not None:
             logger.info(f"Saving the model weights and loss history to {self.work_dir}/{self.run}/")
