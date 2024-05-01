@@ -147,6 +147,7 @@ class DataFrameDataset(torch.utils.data.Dataset):
         else:
             self.prescaler_targets = prescaler_targets
         self.datalabel = datalabel
+        logger.info(f" This is {self.datalabel} set")
         self.samples_file = samples_file
         self.subsample_rate = subsample_rate
         self.subsample_seed = subsample_seed
@@ -212,7 +213,7 @@ class DataFrameDataset(torch.utils.data.Dataset):
                 if self.prescaler_features[channel] is not None:
                     self.features[:,channel,...] = self.prescaler_features[channel](self.features[:,channel,...])
                     logger.info(f"Prescaling { self.prescaler_features[channel]} applied to features")
-        if self.scaler_features is True:
+        if self.scaler_features is not False:
             processing_folder, samples_file_name = self.samples_file.rsplit('/', 1)
             name = f'{self.norm_folder}/X_{samples_file_name}_{str(self.prescaler_features)}.pkl'
             if isinstance(self.scaler_features, tuple):
@@ -240,7 +241,7 @@ class DataFrameDataset(torch.utils.data.Dataset):
                 if self.prescaler_targets[channel] is not None:
                     self.targets[:,channel,...] = self.prescaler_targets[channel](self.targets[:,channel,...])
                     logger.info(f"Prescaling { self.prescaler_targets[channel]} applied to targets")    
-        if self.scaler_targets is True:
+        if self.scaler_targets is not False:
             processing_folder, samples_file_name = self.samples_file.rsplit('/', 1)
             name = f'{self.norm_folder}/y_{samples_file_name}_{str(self.prescaler_targets)}.pkl'
             if isinstance(self.scaler_targets, tuple):
