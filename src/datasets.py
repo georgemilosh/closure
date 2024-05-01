@@ -188,13 +188,6 @@ class DataFrameDataset(torch.utils.data.Dataset):
         self.features = self.features.reshape(-1, self.features.shape[3])
         self.targets = self.targets.reshape(-1, self.targets.shape[3])
 
-        if self.subsample_rate is not None and self.datalabel != 'test':
-            logger.info(f"{len(self.features)}, {len(self.targets) = } samples before subsampling")
-            subset = np.random.permutation(int(len(self.features)*self.subsample_rate))
-            self.features = self.features[subset]
-            self.targets = self.targets[subset]
-            logger.info(f"{len(self.features)}, {len(self.targets) = } samples after subsampling")
-
         self.samples = self.targets.shape[0]
 
     def scale_data(self): 
@@ -219,7 +212,7 @@ class DataFrameDataset(torch.utils.data.Dataset):
                 if self.prescaler_features[channel] is not None:
                     self.features[:,channel,...] = self.prescaler_features[channel](self.features[:,channel,...])
                     logger.info(f"Prescaling { self.prescaler_features[channel]} applied to features")
-        if self.scaler_features is not None:
+        if self.scaler_features is True:
             processing_folder, samples_file_name = self.samples_file.rsplit('/', 1)
             name = f'{self.norm_folder}/X_{samples_file_name}_{str(self.prescaler_features)}.pkl'
             if isinstance(self.scaler_features, tuple):
@@ -238,13 +231,16 @@ class DataFrameDataset(torch.utils.data.Dataset):
             for channel in range(self.features.shape[1]):
                 self.features[:,channel,...] -= self.features_mean[channel]
                 self.features[:,channel,...] /= self.features_std[channel]
+        else:
+            self.features_mean = None
+            self.features_std = None
         # === dealing with targets ======
         if self.prescaler_targets is not None:
             for channel in range(self.targets.shape[1]):
                 if self.prescaler_targets[channel] is not None:
                     self.targets[:,channel,...] = self.prescaler_targets[channel](self.targets[:,channel,...])
                     logger.info(f"Prescaling { self.prescaler_targets[channel]} applied to targets")    
-        if self.scaler_targets is not None:
+        if self.scaler_targets is True:
             processing_folder, samples_file_name = self.samples_file.rsplit('/', 1)
             name = f'{self.norm_folder}/y_{samples_file_name}_{str(self.prescaler_targets)}.pkl'
             if isinstance(self.scaler_targets, tuple):
@@ -262,8 +258,19 @@ class DataFrameDataset(torch.utils.data.Dataset):
             logger.info("Normalization applied to targets")
             self.targets -= self.targets_mean
             self.targets /= self.targets_std
+        else:
+            self.targets_mean = None
+            self.targets_std = None
         self.features = torch.tensor(self.features, dtype=self.feature_dtype)
         self.targets = torch.tensor(self.targets, dtype=self.target_dtype)    
+
+        if self.subsample_rate is not None and self.datalabel != 'test':
+            logger.info(f"{len(self.features)}, {len(self.targets) = } samples before subsampling")
+            subset = np.random.permutation(int(len(self.features)*self.subsample_rate))
+            self.features = self.features[subset]
+            self.targets = self.targets[subset]
+            logger.info(f"{len(self.features)}, {len(self.targets) = } samples after subsampling")
+            self.samples = self.targets.shape[0]
 
 
     def __len__(self):
