@@ -115,6 +115,8 @@ class DataFrameDataset(torch.utils.data.Dataset):
                  prescaler_targets: str = None,
                  scaler_features = None,
                  scaler_targets = None,
+                 subsample_rate = None,
+                 subsample_seed = None,
                  image_file_name_column='filenames',
                  read_features_targets_kwargs = None
                  ):
@@ -144,6 +146,10 @@ class DataFrameDataset(torch.utils.data.Dataset):
             self.prescaler_targets = prescaler_targets
 
         self.samples_file = samples_file
+        self.subsample_rate = subsample_rate
+        self.subsample_seed = subsample_seed
+        if self.subsample_seed is not None:
+            np.random.seed(self.subsample_seed)
         self.image_file_name_column = image_file_name_column
         self.data_folder = data_folder
         self.norm_folder = norm_folder
@@ -168,15 +174,27 @@ class DataFrameDataset(torch.utils.data.Dataset):
         
         
         filenames = self.dataframe[self.image_file_name_column].tolist()
+
         self.request_features = self.read_features_targets_kwargs.get('request_features', None)
         self.request_targets = self.read_features_targets_kwargs.get('request_targets', None)
         self.features, self.targets = rp.read_features_targets(self.data_folder, filenames, 
                                                   feature_dtype = self.feature_dtype_numpy, 
                                                   target_dtype = self.target_dtype_numpy,**self.read_features_targets_kwargs)
+
         self.features_shape = self.features.shape
         self.targets_shape = self.targets.shape
         self.features = self.features.reshape(-1, self.features.shape[3])
         self.targets = self.targets.reshape(-1, self.targets.shape[3])
+
+        if self.subsample_rate is not None:
+            logger.info(f"{len(self.features)}, {len(self.targets) = } samples before subsampling")
+            subset = np.random.permutation(int(len(self.features)*self.subsample_rate))
+            self.features = self.features[subset]
+            self.targets = self.targets[subset]
+            self.features_shape = self.features.shape
+            self.targets_shape = self.targets.shape
+            logger.info(f"{len(self.features)}, {len(self.targets) = } samples after subsampling")
+
         self.samples = self.targets.shape[0]
 
     def scale_data(self): 

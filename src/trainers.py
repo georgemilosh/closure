@@ -116,9 +116,9 @@ class Trainer:
             f_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
             f_handler.setFormatter(f_format)
             logger.addHandler(f_handler)
-            logger.info(f"==========================================================")
+            logger.info(f" ")
             logger.info(f"========Logging to {self.work_dir}/training.log===========") 
-            logger.info(f"==========================================================")
+            logger.info(f" ")
             # Define the extra loggers and add the same FileHandler to them
             datasets_logger = logging.getLogger(__name__)
             datasets_logger.addHandler(f_handler)
