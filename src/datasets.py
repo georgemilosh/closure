@@ -17,6 +17,7 @@ from  . import read_pic as rp
 
 import logging
 logging.basicConfig(level=logging.INFO)
+logging.captureWarnings(True)
 logger = logging.getLogger(__name__)
 #logger = logging.getLogger('trainers')
 
@@ -117,6 +118,7 @@ class DataFrameDataset(torch.utils.data.Dataset):
                  scaler_targets = None,
                  subsample_rate = None,
                  subsample_seed = None,
+                 datalabel = 'train',
                  image_file_name_column='filenames',
                  read_features_targets_kwargs = None
                  ):
@@ -144,7 +146,7 @@ class DataFrameDataset(torch.utils.data.Dataset):
                                       prescaler_targets in prescaler_targets] #assuming some single variable function like numpy.log
         else:
             self.prescaler_targets = prescaler_targets
-
+        self.datalabel = datalabel
         self.samples_file = samples_file
         self.subsample_rate = subsample_rate
         self.subsample_seed = subsample_seed
@@ -186,13 +188,11 @@ class DataFrameDataset(torch.utils.data.Dataset):
         self.features = self.features.reshape(-1, self.features.shape[3])
         self.targets = self.targets.reshape(-1, self.targets.shape[3])
 
-        if self.subsample_rate is not None:
+        if self.subsample_rate is not None and self.datalabel != 'test':
             logger.info(f"{len(self.features)}, {len(self.targets) = } samples before subsampling")
             subset = np.random.permutation(int(len(self.features)*self.subsample_rate))
             self.features = self.features[subset]
             self.targets = self.targets[subset]
-            self.features_shape = self.features.shape
-            self.targets_shape = self.targets.shape
             logger.info(f"{len(self.features)}, {len(self.targets) = } samples after subsampling")
 
         self.samples = self.targets.shape[0]
@@ -223,7 +223,7 @@ class DataFrameDataset(torch.utils.data.Dataset):
             processing_folder, samples_file_name = self.samples_file.rsplit('/', 1)
             name = f'{self.norm_folder}/X_{samples_file_name}_{str(self.prescaler_features)}.pkl'
             if isinstance(self.scaler_features, tuple):
-                logger.info(f"dataset provided with scaler features")
+                logger.info(f"dataset provided with scaler features") # TODO: check if self.datalabel is correct
                 self.features_mean, self.features_std = self.scaler_features
             else:
                 if os.path.exists(name):

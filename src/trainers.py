@@ -25,7 +25,9 @@ from . import utilities as ut
 
 import logging
 logging.basicConfig(level=logging.INFO)
+logging.captureWarnings(True)
 logger = logging.getLogger(__name__)
+
 
     
 
@@ -113,9 +115,11 @@ class Trainer:
         if self.work_dir is not None:
             f_handler = logging.FileHandler(f'{self.work_dir}/training.log')
             f_handler.setLevel(logging.DEBUG)
+            warnings_logger = logging.getLogger("py.warnings")
             f_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
             f_handler.setFormatter(f_format)
             logger.addHandler(f_handler)
+            warnings_logger.addHandler(f_handler)
             logger.info(f" ")
             logger.info(f"========Logging to {self.work_dir}/training.log===========") 
             logger.info(f" ")
@@ -132,14 +136,14 @@ class Trainer:
         train_sample = self.dataset_kwargs.pop('train_sample')
         val_sample = self.dataset_kwargs.pop('val_sample')
         test_sample = self.dataset_kwargs.pop('test_sample')
-        self.train_dataset = datasets.DataFrameDataset(samples_file=train_sample,norm_folder=self.work_dir,**self.dataset_kwargs)
+        self.train_dataset = datasets.DataFrameDataset(datalabel="train", samples_file=train_sample,norm_folder=self.work_dir,**self.dataset_kwargs)
         self.dataset_kwargs.pop('scaler_features', None) # removing these to avoid passing them to the validation and test datasets
         self.dataset_kwargs.pop('scaler_targets', None)
-        self.val_dataset = datasets.DataFrameDataset(samples_file=val_sample,norm_folder=self.work_dir, 
+        self.val_dataset = datasets.DataFrameDataset(datalabel="val", samples_file=val_sample,norm_folder=self.work_dir, 
                                             scaler_features=(self.train_dataset.features_mean,self.train_dataset.features_std), 
                                             scaler_targets=(self.train_dataset.targets_mean,self.train_dataset.targets_std),
                                             **self.dataset_kwargs)
-        self.test_dataset = datasets.DataFrameDataset(samples_file=test_sample,norm_folder=self.work_dir,
+        self.test_dataset = datasets.DataFrameDataset(datalabel="test",samples_file=test_sample,norm_folder=self.work_dir,
                                             scaler_features=(self.train_dataset.features_mean,self.train_dataset.features_std),
                                             scaler_targets=(self.train_dataset.targets_mean,self.train_dataset.targets_std),
                                              **self.dataset_kwargs)

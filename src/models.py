@@ -15,6 +15,7 @@ import copy
 
 import logging
 logging.basicConfig(level=logging.INFO)
+logging.captureWarnings(True)
 logger = logging.getLogger(__name__)
 
 class PyNet(torch.nn.Module):
