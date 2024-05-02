@@ -78,7 +78,27 @@ def build_XY(files_path,choose_x=None, choose_y=None):
 
 def read_features_targets(files_path, filenames, fields_to_read=None, request_features = None, request_targets = None, 
                choose_species=None,choose_x=None, choose_y=None, feature_dtype = np.float32, target_dtype = np.float32,  verbose=False):
-    # Read qom, Lx, Ly, Lz, nxc, nyc, nzc and dt from the SimulationData.txt file.
+    """
+    Reads and extracts features and targets from simulation data files.
+        # Read qom, Lx, Ly, Lz, nxc, nyc, nzc and dt from the SimulationData.txt file.
+
+    Parameters:
+        files_path (str): The path to the directory containing the simulation data files.
+        filenames (list): A list of filenames to read from.
+        fields_to_read (list, optional): A list of fields to read from the files. If None, all fields will be read.
+        request_features (list, optional): A list of features to extract from the fields. If None, all fields will be considered as features.
+        request_targets (list, optional): A list of targets to extract from the fields. If None, all fields will be considered as targets.
+        choose_species (str, optional): The species to choose from the fields. 
+        choose_x (tuple, optional): The range of x-coordinates to choose from. If None, all x-coordinates will be considered.
+        choose_y (tuple, optional): The range of y-coordinates to choose from. If None, all y-coordinates will be considered.
+        feature_dtype (dtype, optional): The data type to use for the extracted features.
+        target_dtype (dtype, optional): The data type to use for the extracted targets.
+        verbose (bool, optional): Whether to print verbose output during the extraction process.
+
+    Returns:
+        features (ndarray): An array containing the extracted features.
+        targets (ndarray): An array containing the extracted targets.
+    """
     f=open(files_path+"SimulationData.txt","r")
     content=f.readlines()
     f.close()
