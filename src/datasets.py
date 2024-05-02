@@ -8,7 +8,7 @@ date: 2024
 import numpy
 import torch
 import os
-from typing import Any, Tuple
+from typing import Any, Tuple, Iterator, Sequence
 import pandas as pd
 import numpy as np
 import joblib
@@ -23,12 +23,81 @@ logger = logging.getLogger(__name__)
 
 from torch.utils.data import DataLoader
 
+class SubSampler(torch.utils.data.Sampler[int]):
+    """
+    A custom sampler that subsamples elements from a given sequence of indices.
+
+    Args:
+        indices (Sequence[int]): The sequence of indices to subsample from.
+        generator (Optional): The random number generator. Default is None.
+        shuffle (bool): Whether to shuffle the indices before subsampling. Default is False.
+
+    Returns:
+        Iterator[int]: An iterator that yields the subsampled indices.
+
+    Examples:
+        >>> sampler1 = SubSampler([0,1,2,3],shuffle=True)
+        >>> list(sampler1)
+        [2, 0, 3, 1]
+        >>> sampler1.indices
+        [0, 1, 2, 3]
+    """
+    indices: Sequence[int]
+    def __init__(self, indices: Sequence[int], seed=None, shuffle=False) -> None: #, device='cpu') -> None:
+        self.indices = indices
+        #self.device = device
+        if seed is None:
+            self.generator = None
+        else:
+            self.generator = torch.Generator() #device=device)
+            self.generator.manual_seed(seed)
+        self.shuffle = shuffle
+
+    def __iter__(self) -> Iterator[int]:
+        if self.shuffle:
+            for i in torch.randperm(len(self.indices), generator=self.generator): #, device=self.device): #  this line comes from torch.utils.data Random Sub Sampler
+                yield self.indices[i]
+        else:
+            for i in torch.arange(len(self.indices)): #  drop randomness
+                yield self.indices[i]
+
+    def __len__(self) -> int:
+        return len(self.indices)
 
 class ChannelDataLoader(DataLoader):
     """
-    A custom PyTorch DataLoader class that allows for loading only specific channels of the features and targets.
+    A custom data loader that allows for channel-based data loading and subsampling.
+
+    Args:
+        dataset (Dataset): The dataset to load the data from.
+        feature_channel_names (list, optional): A list of feature channel names to include in the data. If None, all feature channels will be sampled. Default is None.
+        target_channel_names (list, optional): A list of target channel names to include in the data. If None, all target channels will be sampled. Default is None.
+        subsample_rate (float, optional): The subsampling rate to apply to the data. Should be a value between 0 and 1. If None, no subsampling will be applied. Default is None.
+        Importantly subsampling creates a sampler which is used to shuffle the data. 
+        subsample_seed (int, optional): The seed value for the random number generator used for subsampling. If None, no seed will be set. Default is None.
+        **kwargs: Additional keyword arguments to be passed to the parent DataLoader class.
+
+    Attributes:
+        feature_channels (list or None): The indices of the feature channels to include in the data. If None, all feature channels will be included.
+        target_channels (list or None): The indices of the target channels to include in the data. If None, all target channels will be included.
+        subsample_rate (float or None): The subsampling rate applied to the data. If None, no subsampling was applied.
+        subsample_seed (int or None): The seed value used for subsampling. If None, no seed was set.
+
+    Methods:
+        __iter__(): Returns an iterator over the data, applying channel-based filtering if specified.
+
+    Example:
+        # Create a dataset
+        dataset = MyDataset()
+
+        # Create a ChannelDataLoader with specific feature and target channels
+        loader = ChannelDataLoader(dataset, feature_channel_names=['channel1', 'channel2'], target_channel_names=['channel3'])
+
+        # Iterate over the data
+        for features, targets in loader:
+            # Process the data
     """
-    def __init__(self, dataset, feature_channel_names=None, target_channel_names=None, **kwargs):
+    def __init__(self, dataset, feature_channel_names=None, target_channel_names=None, subsample_rate=None, subsample_seed=None, **kwargs):
         self.request_features = dataset.request_features
         self.request_targets = dataset.request_targets
         if feature_channel_names is not None:
@@ -42,8 +111,20 @@ class ChannelDataLoader(DataLoader):
         logger.info(f"ChannelDataLoader.feature_channels: {self.feature_channels}")
         logger.info(f"ChannelDataLoader.target_channels: {self.target_channels}")
         
-
-        super().__init__(dataset, **kwargs)
+        self.subsample_rate = subsample_rate
+        self.subsample_seed = subsample_seed
+        if self.subsample_seed is not None:
+            np.random.seed(self.subsample_seed)
+        if self.subsample_rate is not None:
+            seed = kwargs.pop('seed', None)
+            shuffle = kwargs.pop('shuffle', False)
+            logger.info(f"{len(dataset.features)}, {len(dataset.targets) = } samples before subsampling")
+            self.subset = np.random.permutation(int(len(dataset.features)*self.subsample_rate))
+            self.sampler = SubSampler(self.subset, seed=seed, shuffle=shuffle)
+            logger.info(f" {len(self.subset) = } samples after subsampling")
+            super().__init__(dataset, sampler=self.sampler, **kwargs)
+        else:
+            super().__init__(dataset, **kwargs) # normal operation without specifying subsampling
 
     def __iter__(self):
         if self.feature_channels is not None or self.target_channels is not None:
@@ -116,8 +197,6 @@ class DataFrameDataset(torch.utils.data.Dataset):
                  prescaler_targets: str = None,
                  scaler_features = None,
                  scaler_targets = None,
-                 subsample_rate = None,
-                 subsample_seed = None,
                  datalabel = 'train',
                  image_file_name_column='filenames',
                  read_features_targets_kwargs = None
@@ -149,10 +228,6 @@ class DataFrameDataset(torch.utils.data.Dataset):
         self.datalabel = datalabel
         logger.info(f" This is {self.datalabel} set")
         self.samples_file = samples_file
-        self.subsample_rate = subsample_rate
-        self.subsample_seed = subsample_seed
-        if self.subsample_seed is not None:
-            np.random.seed(self.subsample_seed)
         self.image_file_name_column = image_file_name_column
         self.data_folder = data_folder
         self.norm_folder = norm_folder
@@ -264,14 +339,6 @@ class DataFrameDataset(torch.utils.data.Dataset):
             self.targets_std = None
         self.features = torch.tensor(self.features, dtype=self.feature_dtype)
         self.targets = torch.tensor(self.targets, dtype=self.target_dtype)    
-
-        if self.subsample_rate is not None and self.datalabel != 'test':
-            logger.info(f"{len(self.features)}, {len(self.targets) = } samples before subsampling")
-            subset = np.random.permutation(int(len(self.features)*self.subsample_rate))
-            self.features = self.features[subset]
-            self.targets = self.targets[subset]
-            logger.info(f"{len(self.features)}, {len(self.targets) = } samples after subsampling")
-            self.samples = self.targets.shape[0]
 
 
     def __len__(self):
