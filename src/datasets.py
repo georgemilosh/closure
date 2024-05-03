@@ -125,6 +125,7 @@ class ChannelDataLoader(DataLoader):
             logger.info(f" {len(self.subset) = } samples after subsampling")
             super().__init__(dataset, sampler=self.sampler, **kwargs)
         else:
+            logger.info(f"Using full dataset (no subsampling)")
             super().__init__(dataset, **kwargs) # normal operation without specifying subsampling
 
     def __iter__(self):
