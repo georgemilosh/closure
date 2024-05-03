@@ -115,9 +115,10 @@ class ChannelDataLoader(DataLoader):
         self.subsample_seed = subsample_seed
         if self.subsample_seed is not None:
             np.random.seed(self.subsample_seed)
+
+        seed = kwargs.pop('seed', None) # these are only needed if subsample_rate is not None
+        shuffle = kwargs.pop('shuffle', False) # these are only needed if subsample_rate is not None
         if self.subsample_rate is not None:
-            seed = kwargs.pop('seed', None)
-            shuffle = kwargs.pop('shuffle', False)
             logger.info(f"{len(dataset.features)}, {len(dataset.targets) = } samples before subsampling")
             self.subset = np.random.permutation(int(len(dataset.features)*self.subsample_rate))
             self.sampler = SubSampler(self.subset, seed=seed, shuffle=shuffle)
