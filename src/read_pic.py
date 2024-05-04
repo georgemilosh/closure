@@ -396,12 +396,17 @@ def get_experiments(experiments, files_path, fields_to_read, choose_species=None
     data = {}
     for experiment in experiments:
         # sorted(os.listdir()) creates a sorted list containing the .h5 filenames, os.listdir() alone would put them in random order.
-        filenames=sorted([n for n in os.listdir(f"{files_path}{experiment}") if "Fields" in n])
+        filenames=sorted([n for n in os.listdir(f"{files_path}{experiment}") if "-Fields_" in n and n.endswith(".h5")])
         if choose_times is not None:
             selected_filenames = [filenames[i] for i in choose_times]
         else:
             selected_filenames = filenames
-        times=[int(n[-9:-3])*dt for n in filenames]  # the last 6 characters of the filename are the time in units of dt.
+        try:
+            times=[int(n[-9:-3])*dt for n in filenames]  # the last 6 characters of the filename are the time in units of dt.
+        except Exception as e:
+            logger.info(f"Failed to extract times from {n = }")
+            logger.info(f"{filenames=}")
+            raise e
         logger.info(times)
         data[experiment] = read_data(f"{files_path}{experiment}/",selected_filenames,fields_to_read,qom,
                                      choose_species=choose_species,choose_x=choose_x,choose_y=choose_y,verbose=verbose)
