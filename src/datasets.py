@@ -292,7 +292,7 @@ class DataFrameDataset(torch.utils.data.Dataset):
                     logger.info(f"Prescaling { self.prescaler_features[channel]} applied to features")
         if self.scaler_features is not False:
             processing_folder, samples_file_name = self.samples_file.rsplit('/', 1)
-            name = f'{self.norm_folder}/X_{samples_file_name}_{str(self.prescaler_features)}.pkl'
+            name = f'{self.norm_folder}/X.pkl' #_{samples_file_name}_{str(self.prescaler_features)}.pkl' # X_{samples_file_name}_{str(self.prescaler_features)}.pkl'
             if isinstance(self.scaler_features, tuple):
                 logger.info(f"dataset provided with scaler features") # TODO: check if self.datalabel is correct
                 self.features_mean, self.features_std = self.scaler_features
@@ -320,7 +320,7 @@ class DataFrameDataset(torch.utils.data.Dataset):
                     logger.info(f"Prescaling { self.prescaler_targets[channel]} applied to targets")    
         if self.scaler_targets is not False:
             processing_folder, samples_file_name = self.samples_file.rsplit('/', 1)
-            name = f'{self.norm_folder}/y_{samples_file_name}_{str(self.prescaler_targets)}.pkl'
+            name = f'{self.norm_folder}/y.pkl' #y_{samples_file_name}_{str(self.prescaler_targets)}.pkl'
             if isinstance(self.scaler_targets, tuple):
                 logger.info(f"dataset provided with scaler targets")
                 self.targets_mean, self.targets_std = self.scaler_targets
