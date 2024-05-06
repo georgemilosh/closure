@@ -198,8 +198,10 @@ class PyNet(torch.nn.Module):
             optuna.exceptions.TrialPruned: If the optuna trial is pruned.
 
         """
-        self.train_loss_ = {} # training history
-        self.val_loss_ = {} # validation history
+        if not hasattr(self, 'train_loss_'):
+            self.train_loss_ = {} # training history
+        if not hasattr(self, 'val_loss_'):
+            self.val_loss_ = {} # validation history
 
         total_start_time = time.time() # track total training time
         best_loss = torch.inf  # track best loss

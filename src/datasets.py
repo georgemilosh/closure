@@ -307,7 +307,11 @@ class DataFrameDataset(torch.utils.data.Dataset):
                     logger.info(f"Saved self.features_mean, self.features_std to {name}")
             logger.info("Normalization applied to features")
             for channel in range(self.features.shape[1]):
-                self.features[:,channel,...] -= self.features_mean[channel]
+                try:
+                    self.features[:,channel,...] -= self.features_mean[channel]
+                except Exception as e:
+                    logger.info(f"{self.features.shape = }, {self.features_mean = }")
+                    raise e
                 self.features[:,channel,...] /= self.features_std[channel]
         else:
             self.features_mean = None

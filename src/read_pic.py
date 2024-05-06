@@ -296,6 +296,13 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                                         2*data['Pxy'][species]*data['Bx']*data['By']+2*data['Pxz'][species]*data['Bx']*data['Bz'] + \
                                             2*data['Pyz'][species]*data['By']*data['Bz'])/(data['By']**2+data['Bx']**2+data['Bz']**2)
                 data['Pperp'][species] = (data['Pxx'][species] + data['Pyy'][species] + data['Pzz'][species] - data['Ppar'][species])/2
+            if "gyro_radius" in fields_to_read and fields_to_read["gyro_radius"]:
+                for species in data[f'P{component_1}{component_2}']:
+                    data['gyro_radius'] = {}
+                    i = choose_species.index(species)
+                    p = data['Pxx'][species]+data['Pyy'][species]+data['Pzz'][species]
+                    vth=np.sqrt(np.abs(p/(data['rho'][species]+small)*qom[i]))
+                    data['gyro_radius'][species] = np.abs(vth/(qom[i]*data['Bmagn']))
 
     # The heat flux is calculated (to do so you need to read rho, J and P first).
     if fields_to_read["Heat_flux"]:
@@ -407,13 +414,14 @@ def get_experiments(experiments, files_path, fields_to_read, choose_species=None
             logger.info(f"Failed to extract times from {n = }")
             logger.info(f"{filenames=}")
             raise e
-        logger.info(times)
+        #logger.info(times)
         data[experiment] = read_data(f"{files_path}{experiment}/",selected_filenames,fields_to_read,qom,
                                      choose_species=choose_species,choose_x=choose_x,choose_y=choose_y,verbose=verbose)
         if choose_x is None:
             choose_x = [0,x.shape[0]]
         if choose_y is None:
             choose_y = [0,y.shape[0]]
-        logger.info(choose_x, choose_y)
+        if verbose:
+            logger.info(choose_x, choose_y)
         X, Y = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], indexing='ij')
     return data, X, Y, qom
