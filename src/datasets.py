@@ -263,8 +263,8 @@ class DataFrameDataset(torch.utils.data.Dataset):
 
         self.features_shape = self.features.shape
         self.targets_shape = self.targets.shape
-        self.features = self.features.reshape(-1, self.features.shape[3])
-        self.targets = self.targets.reshape(-1, self.targets.shape[3])
+        self.features = self.features.reshape(-1, self.features.shape[-1])
+        self.targets = self.targets.reshape(-1, self.targets.shape[-1])
 
         self.samples = self.targets.shape[0]
 

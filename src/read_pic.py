@@ -70,8 +70,20 @@ def build_XY(files_path,choose_x=None, choose_y=None):
     x=np.linspace(0,Lx,nxc+1)
     y=np.linspace(0,Ly,nyc+1)
     
-    
-    X, Y = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], indexing='ij')
+    if isinstance(choose_x[0],list):
+        if not isinstance(choose_y[0],list):
+            raise ValueError("choose_x and choose_y must be of the same type")
+        X = []
+        Y = []
+        for i in range(len(choose_x)): # deal with the situation where the user wants to extract multiple regions
+            assert len(choose_x) == len(choose_y), "choose_x and choose_y must have the same length"
+            X_i, Y_i = np.meshgrid(x[choose_x[i][0]:choose_x[i][1]], y[choose_y[i][0]:choose_y[i][1]], indexing='ij')
+            X.append(X_i)
+            Y.append(Y_i)
+        X = np.concatenate(X,axis=1)
+        Y = np.concatenate(Y,axis=1) 
+    else:
+        X, Y = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], indexing='ij')
 
     return X, Y
 
@@ -122,19 +134,31 @@ def read_features_targets(files_path, filenames, fields_to_read=None, request_fe
         if "Time step" in n:
             dt=float(re.split("=",re.sub(" |\n","",n))[1])
 
-    # The x, y and z axes are set.
-    x=np.linspace(0,Lx,nxc+1)
-    y=np.linspace(0,Ly,nyc+1)
-    
-    #extract_fields = request_features + request_targets
-    features = read_files(files_path, filenames, fields_to_read, qom, feature_dtype, 
+    if isinstance(choose_x[0],list):
+        if not isinstance(choose_y[0],list):
+            raise ValueError("choose_x and choose_y must be of the same type")
+        features = []
+        targets = []
+        for i in range(len(choose_x)): # deal with the situation where the user wants to extract multiple regions
+            assert len(choose_x) == len(choose_y), "choose_x and choose_y must have the same length"
+            features.append(read_files(files_path, filenames, fields_to_read, qom, feature_dtype, 
                           extract_fields=ut.species_to_list(request_features), choose_species=choose_species, 
-                          choose_x=choose_x, choose_y=choose_y, verbose=verbose)
-    targets = read_files(files_path, filenames, fields_to_read, qom, target_dtype, 
-                         extract_fields=ut.species_to_list(request_targets), choose_species=choose_species, 
-                         choose_x=choose_x, choose_y=choose_y, verbose=verbose)
-    
-    X, Y = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], indexing='ij')
+                          choose_x=choose_x[i], choose_y=choose_y[i], verbose=verbose))
+            logger.info(f"{features[-1].shape =}")
+            
+            targets.append(read_files(files_path, filenames, fields_to_read, qom, target_dtype,
+                            extract_fields=ut.species_to_list(request_targets), choose_species=choose_species, 
+                            choose_x=choose_x[i], choose_y=choose_y[i], verbose=verbose)) 
+            logger.info(f"{targets[-1].shape =}")
+        features = np.concatenate(features,axis=2)
+        targets = np.concatenate(targets,axis=2) 
+    else:
+        features = read_files(files_path, filenames, fields_to_read, qom, feature_dtype, 
+                            extract_fields=ut.species_to_list(request_features), choose_species=choose_species, 
+                            choose_x=choose_x, choose_y=choose_y, verbose=verbose)
+        targets = read_files(files_path, filenames, fields_to_read, qom, target_dtype, 
+                            extract_fields=ut.species_to_list(request_targets), choose_species=choose_species, 
+                            choose_x=choose_x, choose_y=choose_y, verbose=verbose)
 
     return features, targets
 
