@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 
-def read_fieldname(files_path,filenames,fieldname,choose_x=None, choose_y=None):
+def read_fieldname(files_path,filenames,fieldname,choose_x=None, choose_y=None, verbose=False):
     """
     Read a specific field from multiple files and return a subset of the field.
 
@@ -22,6 +22,7 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=None, choose_y=None):
     - fieldname (str): The name of the field to read.
     - choose_x (list, optional): A list specifying the range of indices to select along the x-axis. Defaults to None.
     - choose_y (list, optional): A list specifying the range of indices to select along the y-axis. Defaults to None.
+    - verbose (bool, optional): A flag indicating whether to logger.info debug information.
 
     Returns:
     - numpy.ndarray: A subset of the field, with the z-dimension removed.
@@ -31,12 +32,17 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=None, choose_y=None):
     if not isinstance(filenames, list):
         filenames = [filenames]
     for filename in filenames:
-        with h5py.File(files_path+filename,"r") as n:
-            field.append(np.array(n[f"/Step#0/Block/{fieldname}/0"]))
-            if choose_x is None:
-                choose_x = [0,field[-1].shape[2]-1]
-            if choose_y is None:
-                choose_y = [0,field[-1].shape[1]-1]
+        try:
+            with h5py.File(files_path+filename,"r") as n:
+                field.append(np.array(n[f"/Step#0/Block/{fieldname}/0"]))
+                if choose_x is None:
+                    choose_x = [0,field[-1].shape[2]-1]
+                if choose_y is None:
+                    choose_y = [0,field[-1].shape[1]-1]
+        except Exception as e:
+            if verbose:
+                logger.error(f"Failed to read {fieldname} from {filename} using path {files_path}")
+            raise e
     
     return np.squeeze(np.transpose(np.array(field))[choose_x[0]:choose_x[1],choose_y[0]:choose_y[1],0,:]) # transposing means swapping x and y and remove z
 
@@ -111,7 +117,11 @@ def read_features_targets(files_path, filenames, fields_to_read=None, request_fe
         features (ndarray): An array containing the extracted features.
         targets (ndarray): An array containing the extracted targets.
     """
-    f=open(files_path+"SimulationData.txt","r")
+    try: # looks in the specific folder, or in the root:
+        f=open(files_path+filenames[0].rsplit("/",1)[0]+"/SimulationData.txt","r")
+    except FileNotFoundError:
+        f=open(files_path+"SimulationData.txt","r")
+   
     content=f.readlines()
     f.close()
 
@@ -226,7 +236,7 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
             if verbose:
                 logger.info(f"loading {fields}")
             for component in ['x','y','z']:
-                data[f'{fields}{component}'] = read_fieldname(files_path,filenames,f"{fields}{component}",choose_x,choose_y)
+                data[f'{fields}{component}'] = read_fieldname(files_path,filenames,f"{fields}{component}",choose_x,choose_y,verbose=verbose)
             try:    
                 data[f'{fields}magn'] = np.sqrt(data[f'{fields}x']**2 + data[f'{fields}y']**2 + data[f'{fields}z']**2)
             except Exception as e:
@@ -234,12 +244,12 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                 raise e
         if fields_to_read[f"{fields}_ext"]:
             for component in ['x','y','z']:
-                data[f'B{component}_ext'] = read_fieldname(files_path,filenames,f"{fields}{component}_ext",choose_x,choose_y)
+                data[f'B{component}_ext'] = read_fieldname(files_path,filenames,f"{fields}{component}_ext",choose_x,choose_y,verbose=verbose)
     # The divergence of B is read.
     if fields_to_read["divB"]:
         if verbose:
                 logger.info(f"loading divB")
-        data['divB'] = read_fieldname(files_path,filenames,'divB')
+        data['divB'] = read_fieldname(files_path,filenames,'divB',verbose=verbose)
     for fields in ['rho', 'N', 'Qrem']:
         if fields_to_read[fields]:
             if verbose:
@@ -248,9 +258,9 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
             for i, species in enumerate(choose_species): # Care must be taken that these the only species and they are actually correctly labeled
                 if species is not None:
                     if species in data[fields]: # we sum over identical species
-                        data[fields][species] += read_fieldname(files_path,filenames,fields+f'_{i}',choose_x,choose_y)
+                        data[fields][species] += read_fieldname(files_path,filenames,fields+f'_{i}',choose_x,choose_y,verbose=verbose)
                     else:
-                        data[fields][species] = read_fieldname(files_path,filenames,f'{fields}_{i}',choose_x,choose_y)
+                        data[fields][species] = read_fieldname(files_path,filenames,f'{fields}_{i}',choose_x,choose_y,verbose=verbose)
 
 
     if fields_to_read["J"]:
@@ -262,9 +272,9 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
             for i, species in enumerate(choose_species):
                 if species is not None:
                     if species in data[f'J{component}']: # we sum over identical species
-                        data[f'J{component}'][species] += read_fieldname(files_path,filenames,f'J{component}_{i}',choose_x,choose_y)
+                        data[f'J{component}'][species] += read_fieldname(files_path,filenames,f'J{component}_{i}',choose_x,choose_y,verbose=verbose)
                     else:
-                        data[f'J{component}'][species] = read_fieldname(files_path,filenames,f'J{component}_{i}',choose_x,choose_y)
+                        data[f'J{component}'][species] = read_fieldname(files_path,filenames,f'J{component}_{i}',choose_x,choose_y,verbose=verbose)
             for species in data[f'J{component}'].keys():
                 data[f'V{component}'][species] = data[f'J{component}'][species]/(data['rho'][species]+small)
         data['Jmagn'], data['Vmagn'] = {}, {}
@@ -287,9 +297,9 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                     if species is not None:
                         try:
                             if species in data[f'PI{component_1}{component_2}']:
-                                data[f'PI{component_1}{component_2}'][species] += read_fieldname(files_path,filenames,f'P{component_1}{component_2}_{i}',choose_x,choose_y)
+                                data[f'PI{component_1}{component_2}'][species] += read_fieldname(files_path,filenames,f'P{component_1}{component_2}_{i}',choose_x,choose_y,verbose=verbose)
                             else:
-                                data[f'PI{component_1}{component_2}'][species] = read_fieldname(files_path,filenames,f'P{component_1}{component_2}_{i}',choose_x,choose_y)
+                                data[f'PI{component_1}{component_2}'][species] = read_fieldname(files_path,filenames,f'P{component_1}{component_2}_{i}',choose_x,choose_y,verbose=verbose)
                         except:
                             if verbose:
                                 logger.info(f'Component P{component_1}{component_2} for species {species} missing because tensor is symmetric')
@@ -337,9 +347,9 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
             for i, species in enumerate(choose_species):
                 if species is not None:
                     if species in data[f'EF{component}']:
-                        data[f'EF{component}'][species] += read_fieldname(files_path,filenames,f'EF{component}_{i}',choose_x,choose_y)
+                        data[f'EF{component}'][species] += read_fieldname(files_path,filenames,f'EF{component}_{i}',choose_x,choose_y,verbose=verbose)
                     else:
-                        data[f'EF{component}'][species] = read_fieldname(files_path,filenames,f'EF{component}_{i}',choose_x,choose_y)
+                        data[f'EF{component}'][species] = read_fieldname(files_path,filenames,f'EF{component}_{i}',choose_x,choose_y,verbose=verbose)
             #logger.info(f"{data[f'EF{component}'].keys() = }")
             data[f'q{component}'] = {}
             for species in data[f'EF{component}'].keys():
@@ -351,20 +361,6 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
             #logger.info(f"{data[f'q{component}'].keys() = }")
             if 'EF' not in fields_to_read or not fields_to_read['EF']:
                 del data[f'EF{component}']
-    """
-    # Treat dublicate species:
-    for fields in data.keys():
-        if fields not in ['Bmagn','Emagn','Bx','By','Bz','Ex','Ey','Ez','Bx_ext','By_ext','Bz_ext','divB']:
-            for dublicatespecie, indices in dublicatespecies.items():
-                try:
-                    data[fields][dublicatespecie] = np.sum([data[fields][choose_species_new[i]] for i in indices], axis=0)
-                except Exception as e:
-                    logger.info(f"{indices = }, {choose_species_new = }, {i = }, {dublicatespecie = }, {fields = }")
-                    logger.info(f"{data[fields] = }")
-                    raise e
-                for index in indices: # and remove these indices
-                    del data[fields][choose_species_new[index]]"""
-        
     return data
 
 def get_experiments(experiments, files_path, fields_to_read, choose_species=None, choose_times=None,choose_x=None, choose_y=None, verbose=False):
