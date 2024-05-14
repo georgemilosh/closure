@@ -11,7 +11,7 @@ import logging
 import torch
 import pickle
 import warnings
-
+import psutil
 
 import copy
 import os
@@ -122,6 +122,7 @@ class Trainer:
             warnings_logger.addHandler(f_handler)
             logger.info(f" ")
             logger.info(f"========Logging to {self.work_dir}/training.log===========") 
+            logger.info(f"host: {os.uname().nodename}")
             logger.info(f" ")
             # Define the extra loggers and add the same FileHandler to them
             datasets_logger = logging.getLogger(__name__)
@@ -136,19 +137,31 @@ class Trainer:
         train_sample = self.dataset_kwargs.pop('train_sample')
         val_sample = self.dataset_kwargs.pop('val_sample')
         test_sample = self.dataset_kwargs.pop('test_sample')
-        self.train_dataset = datasets.DataFrameDataset(datalabel="train", samples_file=train_sample,norm_folder=self.work_dir,**self.dataset_kwargs)
-        self.dataset_kwargs.pop('scaler_features', None) # removing these to avoid passing them to the validation and test datasets
-        self.dataset_kwargs.pop('scaler_targets', None)
-        self.val_dataset = datasets.DataFrameDataset(datalabel="val", samples_file=val_sample,norm_folder=self.work_dir, 
+
+        self.set_dataset(datalabel="train", samples_file=train_sample)
+        self.set_dataset(datalabel="val", samples_file=val_sample)
+        self.set_dataset(datalabel="test", samples_file=test_sample)
+        
+        self.comprehend_config()
+    
+    def set_dataset(self,datalabel="test", samples_file=None):
+        if datalabel == "train":
+            self.train_dataset = datasets.DataFrameDataset(datalabel=datalabel, samples_file=samples_file,norm_folder=self.work_dir,
+                                                       **self.dataset_kwargs)
+            self.dataset_kwargs.pop('scaler_features', None) # removing these to avoid passing them to the validation and test datasets
+            self.dataset_kwargs.pop('scaler_targets', None)
+        elif datalabel == "val":
+            self.val_dataset = datasets.DataFrameDataset(datalabel=datalabel, samples_file=samples_file,norm_folder=self.work_dir, 
                                             scaler_features=(self.train_dataset.features_mean,self.train_dataset.features_std), 
                                             scaler_targets=(self.train_dataset.targets_mean,self.train_dataset.targets_std),
                                             **self.dataset_kwargs)
-        self.test_dataset = datasets.DataFrameDataset(datalabel="test",samples_file=test_sample,norm_folder=self.work_dir,
+        elif datalabel == "test":
+            self.test_dataset = datasets.DataFrameDataset(datalabel=datalabel,samples_file=samples_file,norm_folder=self.work_dir,
                                             scaler_features=(self.train_dataset.features_mean,self.train_dataset.features_std),
                                             scaler_targets=(self.train_dataset.targets_mean,self.train_dataset.targets_std),
                                              **self.dataset_kwargs)
-        
-        self.comprehend_config()
+        else:
+            raise ValueError(f"Unknown datalabel: {datalabel}")
     
     def comprehend_config(self):
         """
@@ -271,8 +284,11 @@ class Trainer:
                         f.write(json.dumps(self.config, indent=4))
                 except Exception as e:
                     logger.error(f"Error saving configuration file: {e}")
-
+ 
+        # Getting % usage of virtual_memory ( 3rd field)
+        print(f'Prior to fit: RAM memory % used: {psutil.virtual_memory()[2]}, RAM Used (GB):, {psutil.virtual_memory()[3]/1000000000}, process RAM usage (GB): {psutil.Process(os.getpid()).memory_info().rss / 1024 ** 3}')
         best_loss = self.model.fit(self.train_loader, self.val_loader, trial=trial)   
+        print(f'After fit: RAM memory % used: {psutil.virtual_memory()[2]}, RAM Used (GB):, {psutil.virtual_memory()[3]/1000000000}, process RAM usage (GB): {psutil.Process(os.getpid()).memory_info().rss / 1024 ** 3}')
 
         if self.work_dir is not None:
             logger.info(f"Saving the model weights and loss history to {self.work_dir}/{self.run}/")

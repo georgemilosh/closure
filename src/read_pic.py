@@ -52,7 +52,7 @@ def build_XY(files_path,choose_x=None, choose_y=None):
     f=open(files_path+"SimulationData.txt","r")
     content=f.readlines()
     f.close()
-
+    # TODO: deal with qom in more serious way, so that it is readed from the correct folder if the filenames are from different folders
     qom=[]
     for n in content:
         if "QOM" in n:
