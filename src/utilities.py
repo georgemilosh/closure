@@ -1,5 +1,8 @@
 import subprocess
-
+from . import trainers as tr
+import pandas as pd
+import torch
+import torchmetrics
 
 def species_to_list(input_list):
     """
@@ -81,5 +84,48 @@ def get_git_revision_hash() -> str:
     """
     return subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode('ascii').strip()
 
+def parse_score(score):
+    """
+    This function takes a score name and converts them to class object of this scores"""
+    if score in ['MSE', 'L1Loss']:
+        return getattr(torch.nn, score)()
+    elif score == 'r2':
+        return torchmetrics.functional.r2_score
 
-# TODO: write a function that plots the predicted vs actual values of a regression model
+def compare_metrics(work_dirs=['./'], runs=['./0'], metric=None):
+    loss_df = None
+
+    for work_dir, run in zip(work_dirs,runs):
+        trainer = tr.Trainer(work_dir=work_dir)
+        trainer.load_run(run)
+        prediction = trainer.model.predict(trainer.test_dataset.features)
+        ground_truth = trainer.test_dataset.targets[:,trainer.val_loader.target_channels].squeeze()
+        # computing total loss
+        total_loss = trainer.model._compute_loss(ground_truth,prediction,trainer.model.criterion).cpu().numpy()
+        score = {}
+        if metric is not None:
+            for metric_name in metric:
+                score[f"total_{metric_name}"] = trainer.model._compute_loss(ground_truth,prediction,
+                                                                 parse_score(metric_name)).cpu().numpy()
+        if trainer.train_loader.target_channels is None:
+            list_of_target_indices = range(len(trainer.train_dataset.prescaler_targets))
+        else:
+            list_of_target_indices = trainer.train_loader.target_channels
+        loss_dict = {'work_dir': work_dir, 'exp' : work_dir.rsplit('/')[-2],'run': run, 'total_loss': total_loss}
+        if metric is not None:
+            loss_dict.update(score)
+        # computing per channel loss
+        for channel in list_of_target_indices:
+            target_loss = trainer.model._compute_loss(ground_truth[:, channel], prediction[:, channel], trainer.model.criterion)
+            loss_dict[trainer.train_dataset.request_targets[channel]] = target_loss.cpu().numpy()
+            if metric is not None:
+                for metric_name in metric:
+                    loss_dict[f"{trainer.train_dataset.request_targets[channel]}_{metric_name}"] = \
+                        trainer.model._compute_loss(ground_truth[:, channel], prediction[:, channel],
+                                                                 parse_score(metric_name)).cpu().numpy()
+
+        if loss_df is None:
+            loss_df = pd.DataFrame(columns=loss_dict.keys())
+        loss_df.loc[len(loss_df)] = loss_dict
+
+    return loss_df
