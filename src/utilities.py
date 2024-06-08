@@ -3,6 +3,10 @@ from . import trainers as tr
 import pandas as pd
 import torch
 import torchmetrics
+import matplotlib.pyplot as plt
+import numpy as np
+from . import read_pic as rp
+import os
 
 def species_to_list(input_list):
     """
@@ -93,6 +97,17 @@ def parse_score(score):
         return torchmetrics.functional.r2_score
 
 def compare_metrics(work_dirs=['./'], runs=['./0'], metric=None):
+    """
+    Compare metrics for different runs in the given work directories.
+
+    Args:
+        work_dirs (list, optional): List of work directories. Defaults to ['./'].
+        runs (list, optional): List of runs. Defaults to ['./0'].
+        metric (list, optional): List of metrics to compare. Defaults to None.
+
+    Returns:
+        pandas.DataFrame: DataFrame containing the comparison results.
+    """
     loss_df = None
 
     for work_dir, run in zip(work_dirs,runs):
@@ -129,3 +144,85 @@ def compare_metrics(work_dirs=['./'], runs=['./0'], metric=None):
         loss_df.loc[len(loss_df)] = loss_dict
 
     return loss_df
+
+def pred_ground_targets(trainer):
+    """
+    This function takes a trainer object assuming that the run has already been loaded and 
+    returns the predicted and ground truth targets.
+
+    Args:
+        trainer (Trainer): A Trainer object.
+
+    Returns:
+        tuple: A tuple containing the predicted and ground truth targets.
+    """
+    prediction = trainer.model.predict(trainer.test_dataset.features)
+    ground_truth = trainer.test_dataset.targets[:,trainer.val_loader.target_channels].squeeze()
+    loss = trainer.model._compute_loss(ground_truth,prediction,trainer.model.criterion)
+    print(f"Total loss {loss}")
+    if trainer.train_loader.target_channels is None:
+        list_of_target_indices = range(len(trainer.train_dataset.prescaler_targets))
+    else:
+        list_of_target_indices = trainer.train_loader.target_channels
+    for channel in list_of_target_indices:
+        loss = trainer.model._compute_loss(ground_truth[:,channel],prediction[:,channel],trainer.model.criterion)
+        print(f'Loss for channel {channel}:  {trainer.train_dataset.request_targets[channel]}, loss = {loss}')
+    return prediction, ground_truth, list_of_target_indices
+
+def plot_pred_targets(trainer, target_name: str, prediction=None, ground_truth=None, 
+                      list_of_target_indices=None):
+    """
+    This function takes a trainer object and a channel index and plots the predicted and ground truth targets along with the errors.
+    Each panel is saved as a figure to a file
+
+    Args:
+        trainer (Trainer): A Trainer object.
+    """
+    channel = trainer.train_dataset.request_targets.index(target_name)
+    if trainer.train_loader.target_channels is None:
+        list_of_target_indices = range(len(trainer.train_dataset.prescaler_targets))
+    else:
+        list_of_target_indices = trainer.train_loader.target_channels
+
+    func = [trainer.train_dataset.prescaler_targets[i] for i in list_of_target_indices][channel]
+    if func == None:
+        invfunc = lambda a: a
+    elif func.__name__ == 'log':
+        invfunc = np.exp
+    elif func.__name__ == 'arcsinh':
+        invfunc = np.sinh
+
+    print(f"{invfunc = }")
+    X, Y = rp.build_XY(f"{trainer.dataset_kwargs['data_folder']}/brecht/data11/",choose_x=trainer.dataset_kwargs['read_features_targets_kwargs']['choose_x'],
+                choose_y = trainer.dataset_kwargs['read_features_targets_kwargs']['choose_y'])
+    prediction_reshaped = invfunc((prediction.numpy()*trainer.test_dataset.targets_std[list_of_target_indices]+
+                        trainer.test_dataset.targets_mean[list_of_target_indices])[...,channel]).reshape(trainer.test_dataset.targets_shape[:-1]+(1,))
+    ground_truth_reshaped = invfunc((ground_truth.numpy()*trainer.test_dataset.targets_std[list_of_target_indices]+
+                            trainer.test_dataset.targets_mean[list_of_target_indices])[...,channel]).reshape(trainer.test_dataset.targets_shape[:-1]+(1,))
+    # Create a figure and subplots
+    fig, axs = plt.subplots(3, 3, figsize=(12, 6))
+    if not os.path.exists('img'):
+        # Create the directory
+        os.makedirs('img')
+    # Iterate over the panels
+    for i in range(3):
+        error = (ground_truth_reshaped[i,...,0] - prediction_reshaped[i,...,0])/(ground_truth_reshaped[i,...,0].max())
+        vmax = ground_truth_reshaped[i,...,0].max()
+        vmax = [vmax, vmax, .5]
+        vmin = 0 #-ground_truth_reshaped[i,...,0].max()
+        vmin = [vmin, vmin, -.5]
+        cmaps = ['plasma', 'plasma', 'seismic']
+        for j, (data,label) in enumerate(zip([ground_truth_reshaped[i,...,0], prediction_reshaped[i,...,0], error],
+                                            ['real', 'predict', 'error'])):
+            f, ax = plt.subplots(1, 1, figsize=(6, 3))
+            for axes in [ax, axs[i,j]]:
+                im = axes.pcolormesh(X, Y, data, vmax=vmax[j], vmin=vmin[j], cmap=cmaps[j])
+                axes.set_title(f"{label} {target_name} @ {trainer.test_dataset.dataframe['filenames'].iloc[i].rsplit('_')[-1].rsplit('.')[0]}")
+                axes.set_xlabel('X')
+                axes.set_ylabel('Y')
+                f.colorbar(im, ax=axes)
+                f.savefig(f'img/{target_name}_time{i}_{label}.png',bbox_inches='tight')
+                plt.close(f)
+    # Adjust the layout of the subplots
+    plt.tight_layout()
+    plt.show()
