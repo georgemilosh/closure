@@ -115,6 +115,7 @@ class ChannelDataLoader(DataLoader):
         
         self.subsample_rate = subsample_rate
         self.subsample_seed = subsample_seed
+        assert kwargs['batch_size'] <= self.subsample_rate*len(dataset), "Batch size must be less than the number of samples in the dataset times subsample rate (ideally several times). Try increasing the latter"
         if self.subsample_seed is not None:
             np.random.seed(self.subsample_seed)
         
@@ -131,6 +132,8 @@ class ChannelDataLoader(DataLoader):
         if self.subsample_rate is not None:
             logger.info(f"{len(dataset.features)}, {len(dataset.targets) = } samples before subsampling")
             self.subset = np.random.permutation(int(len(dataset.features)*self.subsample_rate))
+            if self.subsample_rate > 1:
+                self.subset = self.subset % len(dataset.features)
             self.sampler = SubSampler(self.subset, seed=seed, shuffle=shuffle)
             logger.info(f" {len(self.subset) = } samples after subsampling")
             super().__init__(dataset, sampler=self.sampler, **kwargs)
@@ -141,14 +144,22 @@ class ChannelDataLoader(DataLoader):
     def __iter__(self):
         for features, targets in super().__iter__():
             if self.patch_dim is not None:
-                x = np.random.randint(0, features.shape[2] - self.patch_dim[0])
-                y = np.random.randint(0, features.shape[3] - self.patch_dim[1])
-                features = features[:, :, x:x+self.patch_dim[0], y:y+self.patch_dim[1]]
-                targets = targets[:, :, x:x+self.patch_dim[0], y:y+self.patch_dim[1]]
+                # Generate random start points for patches
+                x_starts = np.random.randint(0, features.shape[2] - self.patch_dim[0], size=features.shape[0])
+                y_starts = np.random.randint(0, features.shape[3] - self.patch_dim[1], size=features.shape[0])
+                patched_features = torch.empty((features.shape[0], features.shape[1], self.patch_dim[0], self.patch_dim[1]))
+                patched_targets = torch.empty((targets.shape[0], targets.shape[1], self.patch_dim[0], self.patch_dim[1]))
+                
+                # Extract patches using advanced indexing
+                for i, (x, y) in enumerate(zip(x_starts, y_starts)):
+                    patched_features[i] = features[i, :, x:x+self.patch_dim[0], y:y+self.patch_dim[1]]
+                    patched_targets[i] = targets[i, :, x:x+self.patch_dim[0], y:y+self.patch_dim[1]]
+                
+                
             if self.feature_channels is not None or self.target_channels is not None:
-                features = features[:, self.feature_channels, ...]
-                targets = targets[:, self.target_channels, ...]
-            yield features, targets
+                patched_features = features[:, self.feature_channels, ...]
+                patched_targets = targets[:, self.target_channels, ...]
+            yield patched_features, patched_targets
 
 class DataFrameDataset(torch.utils.data.Dataset):
     """
@@ -322,8 +333,12 @@ class DataFrameDataset(torch.utils.data.Dataset):
                     self.features_mean, self.features_std = joblib.load(name)
                     logger.info(f"Loaded self.features_mean, self.features_std from {name}")
                 else:
-                    self.features_mean = np.asarray(np.mean(self.features, axis=0), dtype=self.feature_dtype_numpy)
-                    self.features_std = np.asarray(np.std(self.features, axis=0), dtype=self.feature_dtype_numpy)
+                    if len(self.features.shape) > 2:
+                        self.features_mean = np.asarray(np.mean(self.features, axis=(0, 2, 3)), dtype=self.feature_dtype_numpy)
+                        self.features_std = np.asarray(np.std(self.features, axis=(0, 2, 3)), dtype=self.feature_dtype_numpy)
+                    else:
+                        self.features_mean = np.asarray(np.mean(self.features, axis=0), dtype=self.feature_dtype_numpy)
+                        self.features_std = np.asarray(np.std(self.features, axis=0), dtype=self.feature_dtype_numpy)
                     joblib.dump((self.features_mean, self.features_std), name)
                     logger.info(f"Saved self.features_mean, self.features_std to {name}")
             logger.info("Normalization applied to features")
@@ -354,13 +369,18 @@ class DataFrameDataset(torch.utils.data.Dataset):
                     self.targets_mean, self.targets_std = joblib.load(name)
                     logger.info(f"Loaded self.targets_mean, self.targets_std from {name}")
                 else:
-                    self.targets_mean = np.asarray(np.mean(self.targets, axis=0), dtype=self.target_dtype_numpy)
-                    self.targets_std = np.asarray(np.std(self.targets, axis=0), dtype=self.target_dtype_numpy)
+                    if len(self.targets.shape) > 2:
+                        self.targets_mean = np.asarray(np.mean(self.targets, axis=(0, 2, 3)), dtype=self.target_dtype_numpy)
+                        self.targets_std = np.asarray(np.std(self.targets, axis=(0, 2, 3)), dtype=self.target_dtype_numpy)
+                    else:
+                        self.targets_mean = np.asarray(np.mean(self.targets, axis=0), dtype=self.target_dtype_numpy)
+                        self.targets_std = np.asarray(np.std(self.targets, axis=0), dtype=self.target_dtype_numpy)
                     joblib.dump((self.targets_mean, self.targets_std), name)
                     logger.info(f"Saved self.targets_mean, self.targets_std to {name}")
             logger.info("Normalization applied to targets")
-            self.targets -= self.targets_mean
-            self.targets /= self.targets_std
+            for channel in range(self.targets.shape[1]):
+                self.targets[:,channel,...] -= self.targets_mean[channel]
+                self.targets[:,channel,...] /= self.targets_std[channel]
         else:
             self.targets_mean = None
             self.targets_std = None

@@ -306,7 +306,41 @@ class CNet(PyNet):
         x = self.fc3(x)
         return x
    
+class FCNN(PyNet):
+    def __init__(self, channels, kernels, activations=None, batch_norms=None, dropouts=None, **kwargs):
+        super().__init__(**kwargs) # To pass optimizer_kwargs, scheduler_kwargs, logger_kwargs to PyNet constructor
+        seq_list = []
+        if activations is None:
+            activations = [None] * (len(channels) - 1)
+        if batch_norms is None:
+            batch_norms = [None] * (len(channels) - 1)
+        if dropouts is None:
+            dropouts = [None] * (len(channels) - 1)
+        for i in range(len(channels)-1):
+            seq_list.append(nn.Conv2d(channels[i], channels[i+1], kernels[i], padding=(kernels[i]-1)//2))
+            if activations[i] is not None:
+                seq_list.append(getattr(nn, activations[i])())
+            if batch_norms[i] is not None and batch_norms[i]:
+                seq_list.append(nn.BatchNorm2d(channels[i+1]))
+            if dropouts[i] is not None and dropouts[i] > 0.0:
+                seq_list.append(nn.Dropout2d(dropouts[i]))
+        self.seq_model = torch.nn.Sequential(*seq_list)
 
+        super().define_optimizer_sheduler() # To define optimizer we have to have the layers already defined
+    def forward(self, x):
+        """
+        Forward pass of the FCNN.
+
+        Args:
+            x (torch.Tensor): The input tensor.
+
+        Returns:
+            torch.Tensor: The output tensor.
+
+        """
+        out = self.seq_model(x)
+        return out
+        
 class MLP(PyNet):
     """
     Multi-Layer Perceptron (MLP) model.
