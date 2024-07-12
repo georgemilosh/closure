@@ -75,6 +75,7 @@ class ChannelDataLoader(DataLoader):
         subsample_rate (float, optional): The subsampling rate to apply to the data. Should be a value between 0 and 1. If None, no subsampling will be applied. Default is None.
         Importantly subsampling creates a sampler which is used to shuffle the data. 
         subsample_seed (int, optional): The seed value for the random number generator used for subsampling. If None, no seed will be set. Default is None.
+        patch_dim (list, optional): The dimensions of the patch to sample from the image. Default is None.
         **kwargs: Additional keyword arguments to be passed to the parent DataLoader class.
 
     Attributes:
@@ -97,7 +98,8 @@ class ChannelDataLoader(DataLoader):
         for features, targets in loader:
             # Process the data
     """
-    def __init__(self, dataset, feature_channel_names=None, target_channel_names=None, subsample_rate=None, subsample_seed=None, **kwargs):
+    def __init__(self, dataset, feature_channel_names=None, target_channel_names=None, 
+                 subsample_rate=None, subsample_seed=None, patch_dim=None, **kwargs):
         self.request_features = dataset.request_features
         self.request_targets = dataset.request_targets
         if feature_channel_names is not None:
@@ -115,6 +117,14 @@ class ChannelDataLoader(DataLoader):
         self.subsample_seed = subsample_seed
         if self.subsample_seed is not None:
             np.random.seed(self.subsample_seed)
+        
+        self.patch_dim = patch_dim
+        if self.patch_dim is not None:
+            logger.info(f"Using {self.patch_dim = }")
+            assert len(self.patch_dim) == 2, "Patch dimensions must be a list of length 2"
+            assert dataset.flatten == False, "Patch sampling only works with non-flattened data"
+            assert self.patch_dim[0] <= dataset.features.shape[2], "Patch width must be less than or equal to the image width"
+            assert self.patch_dim[1] <= dataset.features.shape[3], "Patch height must be less than or equal to the image height"
 
         seed = kwargs.pop('seed', None) # these are only needed if subsample_rate is not None
         shuffle = kwargs.pop('shuffle', False) # these are only needed if subsample_rate is not None
@@ -127,16 +137,18 @@ class ChannelDataLoader(DataLoader):
         else:
             logger.info(f"Using full dataset (no subsampling)")
             super().__init__(dataset, **kwargs) # normal operation without specifying subsampling
-
+    
     def __iter__(self):
-        if self.feature_channels is not None or self.target_channels is not None:
-            for features, targets in super().__iter__():
-                features = features[:, self.feature_channels]
-                targets = targets[:, self.target_channels]
-                yield features, targets
-        else:
-            for features, targets in super().__iter__():
-                yield features, targets
+        for features, targets in super().__iter__():
+            if self.patch_dim is not None:
+                x = np.random.randint(0, features.shape[2] - self.patch_dim[0])
+                y = np.random.randint(0, features.shape[3] - self.patch_dim[1])
+                features = features[:, :, x:x+self.patch_dim[0], y:y+self.patch_dim[1]]
+                targets = targets[:, :, x:x+self.patch_dim[0], y:y+self.patch_dim[1]]
+            if self.feature_channels is not None or self.target_channels is not None:
+                features = features[:, self.feature_channels, ...]
+                targets = targets[:, self.target_channels, ...]
+            yield features, targets
 
 class DataFrameDataset(torch.utils.data.Dataset):
     """
@@ -173,6 +185,7 @@ class DataFrameDataset(torch.utils.data.Dataset):
         read_features_targets_kwargs (dict): Additional keyword arguments to pass to the `read_features_targets` function.
         logger: The logger object for logging messages.
         dataframe (pd.DataFrame): The DataFrame containing the sample filenames.
+        flatten (bool): Whether to flatten the features and targets. Default is True.
         features (np.ndarray): The features of the dataset.
         targets (np.ndarray): The targets of the dataset.
         features_shape (tuple): The shape of the features.
@@ -200,11 +213,13 @@ class DataFrameDataset(torch.utils.data.Dataset):
                  scaler_features = None,
                  scaler_targets = None,
                  datalabel = 'train',
+                 flatten = True,
                  image_file_name_column='filenames',
                  read_features_targets_kwargs = None
                  ):
         self.features_mean = None  # TODO: check that this doesn't break something
         self.features_std = None
+        self.flatten = flatten
         
         self.target_dtype = getattr(torch, target_dtype) # parsing: convert string to torch.dtype object
         self.target_dtype_numpy = getattr(numpy, target_dtype_numpy)
@@ -249,6 +264,7 @@ class DataFrameDataset(torch.utils.data.Dataset):
         Prepares the features and targets for further processing based on this dataframe.
 
         """
+        logger.info(f"Datasplit performed according to {self.samples_file}")
         self.dataframe = pd.read_csv(self.samples_file)
         self.dataframe = self.dataframe.reset_index(drop=True, inplace=False)
         
@@ -263,8 +279,13 @@ class DataFrameDataset(torch.utils.data.Dataset):
 
         self.features_shape = self.features.shape
         self.targets_shape = self.targets.shape
-        self.features = self.features.reshape(-1, self.features.shape[-1])
-        self.targets = self.targets.reshape(-1, self.targets.shape[-1])
+        if self.flatten:
+            self.features = self.features.reshape(-1, self.features.shape[-1])
+            self.targets = self.targets.reshape(-1, self.targets.shape[-1])
+        else:
+            self.features = self.features.transpose(0, 3, 1, 2)
+            self.targets = self.targets.transpose(0, 3, 1, 2)
+        logger.info(f"Features shape: {self.features.shape}, Targets shape: {self.targets.shape}")
 
         self.samples = self.targets.shape[0]
 
@@ -291,7 +312,7 @@ class DataFrameDataset(torch.utils.data.Dataset):
                     self.features[:,channel,...] = self.prescaler_features[channel](self.features[:,channel,...])
                     logger.info(f"Prescaling { self.prescaler_features[channel]} applied to features")
         if self.scaler_features is not False:
-            processing_folder, samples_file_name = self.samples_file.rsplit('/', 1)
+            #processing_folder, samples_file_name = self.samples_file.rsplit('/', 1)
             name = f'{self.norm_folder}/X.pkl' #_{samples_file_name}_{str(self.prescaler_features)}.pkl' # X_{samples_file_name}_{str(self.prescaler_features)}.pkl'
             if isinstance(self.scaler_features, tuple):
                 logger.info(f"dataset provided with scaler features") # TODO: check if self.datalabel is correct
@@ -323,7 +344,7 @@ class DataFrameDataset(torch.utils.data.Dataset):
                     self.targets[:,channel,...] = self.prescaler_targets[channel](self.targets[:,channel,...])
                     logger.info(f"Prescaling { self.prescaler_targets[channel]} applied to targets")    
         if self.scaler_targets is not False:
-            processing_folder, samples_file_name = self.samples_file.rsplit('/', 1)
+            #processing_folder, samples_file_name = self.samples_file.rsplit('/', 1)
             name = f'{self.norm_folder}/y.pkl' #y_{samples_file_name}_{str(self.prescaler_targets)}.pkl'
             if isinstance(self.scaler_targets, tuple):
                 logger.info(f"dataset provided with scaler targets")

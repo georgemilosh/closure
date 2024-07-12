@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 
-def read_fieldname(files_path,filenames,fieldname,choose_x=None, choose_y=None, verbose=False):
+def read_fieldname(files_path,filenames,fieldname,choose_x=None, choose_y=None, choose_z=None, verbose=False):
     """
     Read a specific field from multiple files and return a subset of the field.
 
@@ -22,6 +22,7 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=None, choose_y=None, 
     - fieldname (str): The name of the field to read.
     - choose_x (list, optional): A list specifying the range of indices to select along the x-axis. Defaults to None.
     - choose_y (list, optional): A list specifying the range of indices to select along the y-axis. Defaults to None.
+    - choose_z (list, optional): A list specifying the range of indices to select along the z-axis. Defaults to None.
     - verbose (bool, optional): A flag indicating whether to logger.info debug information.
 
     Returns:
@@ -39,15 +40,20 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=None, choose_y=None, 
                     choose_x = [0,field[-1].shape[2]-1]
                 if choose_y is None:
                     choose_y = [0,field[-1].shape[1]-1]
+                if choose_z is None:
+                    choose_z = [0,field[-1].shape[0]-1]
         except Exception as e:
             if verbose:
                 logger.error(f"Failed to read {fieldname} from {filename} using path {files_path}")
             raise e
-    
-    return np.squeeze(np.transpose(np.array(field))[choose_x[0]:choose_x[1],choose_y[0]:choose_y[1],0,:]) # transposing means swapping x and y and remove z
+    a = np.transpose(np.array(field))[choose_x[0]:choose_x[1],choose_y[0]:choose_y[1],choose_z[0]:choose_z[1],:]
+    if a.shape[1] <= 2:
+        return np.squeeze(a[:,0,:])
+    else:
+        return np.squeeze(a) # transposing means swapping x and y and remove z
 
 
-def build_XY(files_path,choose_x=None, choose_y=None):
+def build_XY(files_path,choose_x=None, choose_y=None, choose_z=None):
     # Read qom, Lx, Ly, Lz, nxc, nyc, nzc and dt from the SimulationData.txt file.
     f=open(files_path+"SimulationData.txt","r")
     content=f.readlines()
@@ -61,8 +67,8 @@ def build_XY(files_path,choose_x=None, choose_y=None):
             Lx=float(re.split("=",re.sub(" |\n","",n))[1])
         if "y-Length" in n:
             Ly=float(re.split("=",re.sub(" |\n","",n))[1])
-        #if "z-Length" in n:
-        #    Lz=float(re.split("=",re.sub(" |\n","",n))[1])
+        if "z-Length" in n:
+            Lz=float(re.split("=",re.sub(" |\n","",n))[1])
         if "Number of cells (x)" in n:
             nxc=int(re.split("=",re.sub(" |\n","",n))[1])
         if "Number of cells (y)" in n:
@@ -75,27 +81,44 @@ def build_XY(files_path,choose_x=None, choose_y=None):
     # The x, y and z axes are set.
     x=np.linspace(0,Lx,nxc+1)
     y=np.linspace(0,Ly,nyc+1)
+    z=np.linspace(0,Lz,nzc+1)
     
     if isinstance(choose_x[0],list):
         if not isinstance(choose_y[0],list):
             raise ValueError("choose_x and choose_y must be of the same type")
         X = []
         Y = []
+        if nzc > 1:
+            Z = []
         for i in range(len(choose_x)): # deal with the situation where the user wants to extract multiple regions
             assert len(choose_x) == len(choose_y), "choose_x and choose_y must have the same length"
-            X_i, Y_i = np.meshgrid(x[choose_x[i][0]:choose_x[i][1]], y[choose_y[i][0]:choose_y[i][1]], indexing='ij')
-            X.append(X_i)
-            Y.append(Y_i)
+            if nzc > 1:
+                assert len(choose_x) == len(choose_z), "choose_x and choose_y must have the same length"
+                X_i, Y_i, Z_i = np.meshgrid(x[choose_x[i][0]:choose_x[i][1]], y[choose_y[i][0]:choose_y[i][1]], z[choose_z[i][0]:choose_z[i][1]], indexing='ij')
+                X.append(X_i)
+                Y.append(Y_i)
+                Z.append(Z_i)
+            else:
+                X_i, Y_i = np.meshgrid(x[choose_x[i][0]:choose_x[i][1]], y[choose_y[i][0]:choose_y[i][1]], indexing='ij')
+                X.append(X_i)
+                Y.append(Y_i)
         X = np.concatenate(X,axis=1)
         Y = np.concatenate(Y,axis=1) 
+        if nzc > 1:
+            Z = np.concatenate(Z,axis=1)
     else:
-        X, Y = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], indexing='ij')
-
-    return X, Y
+        if nzc > 1:
+            X, Y, Z = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], z[choose_z[0]:choose_z[1]], indexing='ij')
+        else:
+            X, Y = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], indexing='ij')
+    if nzc > 1:
+        return X, Y, Z
+    else:
+        return X, Y
 
 
 def read_features_targets(files_path, filenames, fields_to_read=None, request_features = None, request_targets = None, 
-               choose_species=None,choose_x=None, choose_y=None, feature_dtype = np.float32, target_dtype = np.float32,  verbose=False):
+               choose_species=None,choose_x=None, choose_y=None, choose_z=None, feature_dtype = np.float32, target_dtype = np.float32,  verbose=False):
     """
     Reads and extracts features and targets from simulation data files.
         # Read qom, Lx, Ly, Lz, nxc, nyc, nzc and dt from the SimulationData.txt file.
@@ -109,6 +132,7 @@ def read_features_targets(files_path, filenames, fields_to_read=None, request_fe
         choose_species (str, optional): The species to choose from the fields. 
         choose_x (tuple, optional): The range of x-coordinates to choose from. If None, all x-coordinates will be considered.
         choose_y (tuple, optional): The range of y-coordinates to choose from. If None, all y-coordinates will be considered.
+        choose_z (tuple, optional): The range of z-coordinates to choose from. If None, all z-coordinates will be considered.
         feature_dtype (dtype, optional): The data type to use for the extracted features.
         target_dtype (dtype, optional): The data type to use for the extracted targets.
         verbose (bool, optional): Whether to print verbose output during the extraction process.
@@ -149,35 +173,40 @@ def read_features_targets(files_path, filenames, fields_to_read=None, request_fe
             raise ValueError("choose_x and choose_y must be of the same type")
         features = []
         targets = []
+        if choose_z is None:
+            choose_z = [None]*len(choose_x)
         for i in range(len(choose_x)): # deal with the situation where the user wants to extract multiple regions
             assert len(choose_x) == len(choose_y), "choose_x and choose_y must have the same length"
+            
             features.append(read_files(files_path, filenames, fields_to_read, qom, feature_dtype, 
                           extract_fields=ut.species_to_list(request_features), choose_species=choose_species, 
-                          choose_x=choose_x[i], choose_y=choose_y[i], verbose=verbose))
-            logger.info(f"{features[-1].shape =}")
+                          choose_x=choose_x[i], choose_y=choose_y[i], choose_z=choose_z[i], verbose=verbose))
+            if verbose:
+                logger.info(f"{features[-1].shape =}")
             
             targets.append(read_files(files_path, filenames, fields_to_read, qom, target_dtype,
                             extract_fields=ut.species_to_list(request_targets), choose_species=choose_species, 
-                            choose_x=choose_x[i], choose_y=choose_y[i], verbose=verbose)) 
-            logger.info(f"{targets[-1].shape =}")
+                            choose_x=choose_x[i], choose_y=choose_y[i], choose_z=choose_z[i], verbose=verbose)) 
+            if verbose:
+                logger.info(f"{targets[-1].shape =}")
         features = np.concatenate(features,axis=2)
         targets = np.concatenate(targets,axis=2) 
     else:
         features = read_files(files_path, filenames, fields_to_read, qom, feature_dtype, 
                             extract_fields=ut.species_to_list(request_features), choose_species=choose_species, 
-                            choose_x=choose_x, choose_y=choose_y, verbose=verbose)
+                            choose_x=choose_x, choose_y=choose_y, choose_z=choose_z, verbose=verbose)
         targets = read_files(files_path, filenames, fields_to_read, qom, target_dtype, 
                             extract_fields=ut.species_to_list(request_targets), choose_species=choose_species, 
-                            choose_x=choose_x, choose_y=choose_y, verbose=verbose)
+                            choose_x=choose_x, choose_y=choose_y, choose_z=choose_z, verbose=verbose)
 
     return features, targets
 
-def read_files(files_path, filenames, fields_to_read, qom, dtype, extract_fields=None, choose_species=None, choose_x=None, choose_y=None, verbose=False):
+def read_files(files_path, filenames, fields_to_read, qom, dtype, extract_fields=None, choose_species=None, choose_x=None, choose_y=None, choose_z=None, verbose=False):
     out2 = []
     for filename in filenames:
         out = []
         data = read_data(files_path,filename,fields_to_read,qom,
-                                    choose_species=choose_species,choose_x=choose_x,choose_y=choose_y,verbose=verbose)
+                                    choose_species=choose_species,choose_x=choose_x,choose_y=choose_y,choose_z=choose_z, verbose=verbose)
         # TODO: Introduce something that check that the input of extract_fields is correct, e.g. `Jx` does not exist
         for extract_field_index in extract_fields:
             if isinstance(extract_field_index, list):
@@ -194,7 +223,7 @@ def read_files(files_path, filenames, fields_to_read, qom, dtype, extract_fields
         out2.append(np.array(out))
     return np.array(out2, dtype=dtype).transpose(0,2,3,1)  # we want to have the time as the first index, then x, then y, then the field
 
-def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, choose_x=None, choose_y=None, verbose=False):
+def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, choose_x=None, choose_y=None, choose_z=None, verbose=False):
     """
     Reads and processes data from files.
 
@@ -206,6 +235,7 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
     - choose_species (list): A list of species to choose.
     - choose_x (float): The x-coordinates to choose.
     - choose_y (float): The y-coordinates to choose.
+    - choose_z (float): The z-coordinates to choose.
     - verbose (bool): A flag indicating whether to logger.info debug information.
 
     Returns:
@@ -236,7 +266,7 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
             if verbose:
                 logger.info(f"loading {fields}")
             for component in ['x','y','z']:
-                data[f'{fields}{component}'] = read_fieldname(files_path,filenames,f"{fields}{component}",choose_x,choose_y,verbose=verbose)
+                data[f'{fields}{component}'] = read_fieldname(files_path,filenames,f"{fields}{component}",choose_x,choose_y,choose_z,verbose=verbose)
             try:    
                 data[f'{fields}magn'] = np.sqrt(data[f'{fields}x']**2 + data[f'{fields}y']**2 + data[f'{fields}z']**2)
             except Exception as e:
@@ -244,7 +274,7 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                 raise e
         if fields_to_read[f"{fields}_ext"]:
             for component in ['x','y','z']:
-                data[f'B{component}_ext'] = read_fieldname(files_path,filenames,f"{fields}{component}_ext",choose_x,choose_y,verbose=verbose)
+                data[f'B{component}_ext'] = read_fieldname(files_path,filenames,f"{fields}{component}_ext",choose_x,choose_y,choose_z,verbose=verbose)
     # The divergence of B is read.
     if fields_to_read["divB"]:
         if verbose:
@@ -258,9 +288,9 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
             for i, species in enumerate(choose_species): # Care must be taken that these the only species and they are actually correctly labeled
                 if species is not None:
                     if species in data[fields]: # we sum over identical species
-                        data[fields][species] += read_fieldname(files_path,filenames,fields+f'_{i}',choose_x,choose_y,verbose=verbose)
+                        data[fields][species] += read_fieldname(files_path,filenames,fields+f'_{i}',choose_x,choose_y,choose_z,verbose=verbose)
                     else:
-                        data[fields][species] = read_fieldname(files_path,filenames,f'{fields}_{i}',choose_x,choose_y,verbose=verbose)
+                        data[fields][species] = read_fieldname(files_path,filenames,f'{fields}_{i}',choose_x,choose_y,choose_z,verbose=verbose)
 
 
     if fields_to_read["J"]:
@@ -272,9 +302,9 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
             for i, species in enumerate(choose_species):
                 if species is not None:
                     if species in data[f'J{component}']: # we sum over identical species
-                        data[f'J{component}'][species] += read_fieldname(files_path,filenames,f'J{component}_{i}',choose_x,choose_y,verbose=verbose)
+                        data[f'J{component}'][species] += read_fieldname(files_path,filenames,f'J{component}_{i}',choose_x,choose_y,choose_z,verbose=verbose)
                     else:
-                        data[f'J{component}'][species] = read_fieldname(files_path,filenames,f'J{component}_{i}',choose_x,choose_y,verbose=verbose)
+                        data[f'J{component}'][species] = read_fieldname(files_path,filenames,f'J{component}_{i}',choose_x,choose_y,choose_z,verbose=verbose)
             for species in data[f'J{component}'].keys():
                 data[f'V{component}'][species] = data[f'J{component}'][species]/(data['rho'][species]+small)
         data['Jmagn'], data['Vmagn'] = {}, {}
@@ -297,9 +327,9 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                     if species is not None:
                         try:
                             if species in data[f'PI{component_1}{component_2}']:
-                                data[f'PI{component_1}{component_2}'][species] += read_fieldname(files_path,filenames,f'P{component_1}{component_2}_{i}',choose_x,choose_y,verbose=verbose)
+                                data[f'PI{component_1}{component_2}'][species] += read_fieldname(files_path,filenames,f'P{component_1}{component_2}_{i}',choose_x,choose_y,choose_z,verbose=verbose)
                             else:
-                                data[f'PI{component_1}{component_2}'][species] = read_fieldname(files_path,filenames,f'P{component_1}{component_2}_{i}',choose_x,choose_y,verbose=verbose)
+                                data[f'PI{component_1}{component_2}'][species] = read_fieldname(files_path,filenames,f'P{component_1}{component_2}_{i}',choose_x,choose_y,choose_z,verbose=verbose)
                         except:
                             if verbose:
                                 logger.info(f'Component P{component_1}{component_2} for species {species} missing because tensor is symmetric')
@@ -347,9 +377,9 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
             for i, species in enumerate(choose_species):
                 if species is not None:
                     if species in data[f'EF{component}']:
-                        data[f'EF{component}'][species] += read_fieldname(files_path,filenames,f'EF{component}_{i}',choose_x,choose_y,verbose=verbose)
+                        data[f'EF{component}'][species] += read_fieldname(files_path,filenames,f'EF{component}_{i}',choose_x,choose_y,choose_z,verbose=verbose)
                     else:
-                        data[f'EF{component}'][species] = read_fieldname(files_path,filenames,f'EF{component}_{i}',choose_x,choose_y,verbose=verbose)
+                        data[f'EF{component}'][species] = read_fieldname(files_path,filenames,f'EF{component}_{i}',choose_x,choose_y,choose_z,verbose=verbose)
             #logger.info(f"{data[f'EF{component}'].keys() = }")
             data[f'q{component}'] = {}
             for species in data[f'EF{component}'].keys():
@@ -363,7 +393,7 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                 del data[f'EF{component}']
     return data
 
-def get_experiments(experiments, files_path, fields_to_read, choose_species=None, choose_times=None,choose_x=None, choose_y=None, verbose=False):
+def get_experiments(experiments, files_path, fields_to_read, choose_species=None, choose_times=None,choose_x=None, choose_y=None, choose_z=None, verbose=False):
     """
     Retrieves data from experiments and returns the data structure stored as a dictionary along with the corresponding meshgrid.
 
@@ -378,6 +408,7 @@ def get_experiments(experiments, files_path, fields_to_read, choose_species=None
                 i.e. [0, 1, 5], otherwise choose_times = None means take all times
     - choose_x (list): A list specifying the range of x indices to choose. If None is given, the whole range is chosen.
     - choose_y (list): A list specifying the range of y indices to choose. If None is given, the whole range is chosen.
+    - choose_z (list): A list specifying the range of z indices to choose. If None is given, the whole range is chosen.
     - verbose (bool): A flag indicating whether to logger.info debug information when reading data such as which fields are being imported.
 
     Returns:
@@ -390,7 +421,7 @@ def get_experiments(experiments, files_path, fields_to_read, choose_species=None
         choose_species = ['e1',None,'e2',None] # the ones which have directive None will be ignored, the ones which have same name will be summed over
     """    
     # Read qom, Lx, Ly, Lz, nxc, nyc, nzc and dt from the SimulationData.txt file.
-    f=open(files_path+"SimulationData.txt","r")
+    f=open(f"{files_path}/{experiments[0]}/SimulationData.txt","r")
     content=f.readlines()
     f.close()
 
@@ -402,8 +433,8 @@ def get_experiments(experiments, files_path, fields_to_read, choose_species=None
             Lx=float(re.split("=",re.sub(" |\n","",n))[1])
         if "y-Length" in n:
             Ly=float(re.split("=",re.sub(" |\n","",n))[1])
-        #if "z-Length" in n:
-        #    Lz=float(re.split("=",re.sub(" |\n","",n))[1])
+        if "z-Length" in n:
+            Lz=float(re.split("=",re.sub(" |\n","",n))[1])
         if "Number of cells (x)" in n:
             nxc=int(re.split("=",re.sub(" |\n","",n))[1])
         if "Number of cells (y)" in n:
@@ -416,7 +447,7 @@ def get_experiments(experiments, files_path, fields_to_read, choose_species=None
     # The x, y and z axes are set.
     x=np.linspace(0,Lx,nxc+1)
     y=np.linspace(0,Ly,nyc+1)
-    #z=np.linspace(0,Lz,nzc+1)    
+    z=np.linspace(0,Lz,nzc+1)    
     #compute dx and dy to be used for the gradients computation
     #dx = Lx/nxc
     #dy = Ly/nyc
@@ -436,12 +467,20 @@ def get_experiments(experiments, files_path, fields_to_read, choose_species=None
             raise e
         #logger.info(times)
         data[experiment] = read_data(f"{files_path}{experiment}/",selected_filenames,fields_to_read,qom,
-                                     choose_species=choose_species,choose_x=choose_x,choose_y=choose_y,verbose=verbose)
+                                     choose_species=choose_species,choose_x=choose_x,choose_y=choose_y,choose_z=choose_z,verbose=verbose)
         if choose_x is None:
             choose_x = [0,x.shape[0]]
         if choose_y is None:
             choose_y = [0,y.shape[0]]
+        if choose_z is None:
+            choose_z = [0,z.shape[0]]
         if verbose:
-            logger.info(choose_x, choose_y)
-        X, Y = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], indexing='ij')
-    return data, X, Y, qom
+            logger.info(f"{choose_x = }, {choose_y = }, {choose_z = }")
+        if nzc == 1:
+            X, Y = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], indexing='ij')
+        else:
+            X, Y, Z = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], z[choose_z[0]:choose_z[1]], indexing='ij')
+    if nzc == 1:
+        return data, X, Y, qom
+    else:
+        return data, X, Y, Z, qom
