@@ -90,7 +90,10 @@ class PyNet(torch.nn.Module):
         
         # === Deal with the scheduler === #
         scheduler_name = self.scheduler_kwargs.pop('scheduler')
-        self.scheduler = getattr(torch.optim.lr_scheduler, scheduler_name)(self.optimizer, **self.scheduler_kwargs)
+        if scheduler_name is not None:
+            self.scheduler = getattr(torch.optim.lr_scheduler, scheduler_name)(self.optimizer, **self.scheduler_kwargs)
+        else:
+            self.scheduler = None
 
     @property
     def device(self):
@@ -124,7 +127,7 @@ class PyNet(torch.nn.Module):
         self.targets_dtype = out.dtype
         return torch.cat(predictions)
 
-    def _compute_loss(self, ground_truth, prediction, criterion):
+    def _compute_loss(self, prediction, ground_truth, criterion):
         """
         Compute the loss between the ground_truth and prediction values using the provided criterion.        
         """
@@ -134,7 +137,12 @@ class PyNet(torch.nn.Module):
         if not isinstance(ground_truth, torch.Tensor):
             logger.warning(f'Object ground_truth is not a tensor. Casting to tensor of {self.targets_dtype}.')
             ground_truth = torch.tensor(ground_truth, dtype=self.targets_dtype)
-        loss = criterion(ground_truth, prediction)
+        try:
+            loss = criterion(prediction, ground_truth)
+        except Exception as e:
+            logger.info(f"{ground_truth.shape =  }, {prediction.shape = }, {criterion = }")
+            logger.error(f"Error in computing loss: {e}")
+            raise e
 
         # apply regularization if any
         # loss += penalty.item() 
@@ -169,7 +177,11 @@ class PyNet(torch.nn.Module):
             self.optimizer.zero_grad() # zero the parameter gradients
             with torch.set_grad_enabled(phase == 'train'): # track gradients only if in train
                 out = self(features)
-                loss = self._compute_loss(out, targets, self.criterion)
+                try:
+                    loss = self._compute_loss(out, targets, self.criterion)
+                except Exception as e:
+                    logger.error(f"{out.shape = }, {targets.shape = }, {features.shape = }, {self.criterion = }")
+                    raise e
                 if phase == 'train':
                     loss.backward()
                     self.optimizer.step()

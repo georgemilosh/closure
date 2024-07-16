@@ -115,7 +115,10 @@ class ChannelDataLoader(DataLoader):
         
         self.subsample_rate = subsample_rate
         self.subsample_seed = subsample_seed
-        assert kwargs['batch_size'] <= self.subsample_rate*len(dataset), "Batch size must be less than the number of samples in the dataset times subsample rate (ideally several times). Try increasing the latter"
+        if self.subsample_rate is not None:
+            assert kwargs['batch_size'] <= self.subsample_rate*len(dataset), "Batch size must be less than the number of samples in the dataset times subsample rate (ideally several times). Try increasing the latter"
+        else:
+            assert kwargs['batch_size'] <= len(dataset), "Batch size must be less than the number of samples in the dataset"
         if self.subsample_seed is not None:
             np.random.seed(self.subsample_seed)
         
@@ -317,12 +320,12 @@ class DataFrameDataset(torch.utils.data.Dataset):
         Repeat 1-3 for the targets.
         """
         # === dealing with features ======
-        if self.prescaler_features is not None:
+        if self.prescaler_features is not None and self.prescaler_features is not False:
             for channel in range(self.features.shape[1]):
                 if self.prescaler_features[channel] is not None:
                     self.features[:,channel,...] = self.prescaler_features[channel](self.features[:,channel,...])
                     logger.info(f"Prescaling { self.prescaler_features[channel]} applied to features")
-        if self.scaler_features is not False:
+        if self.scaler_features is not None and self.scaler_features is not False:
             #processing_folder, samples_file_name = self.samples_file.rsplit('/', 1)
             name = f'{self.norm_folder}/X.pkl' #_{samples_file_name}_{str(self.prescaler_features)}.pkl' # X_{samples_file_name}_{str(self.prescaler_features)}.pkl'
             if isinstance(self.scaler_features, tuple):
@@ -353,12 +356,12 @@ class DataFrameDataset(torch.utils.data.Dataset):
             self.features_mean = None
             self.features_std = None
         # === dealing with targets ======
-        if self.prescaler_targets is not None:
+        if self.prescaler_targets is not None and self.prescaler_targets is not False:
             for channel in range(self.targets.shape[1]):
                 if self.prescaler_targets[channel] is not None:
                     self.targets[:,channel,...] = self.prescaler_targets[channel](self.targets[:,channel,...])
                     logger.info(f"Prescaling { self.prescaler_targets[channel]} applied to targets")    
-        if self.scaler_targets is not False:
+        if self.scaler_targets is not None and self.scaler_targets is not False:
             #processing_folder, samples_file_name = self.samples_file.rsplit('/', 1)
             name = f'{self.norm_folder}/y.pkl' #y_{samples_file_name}_{str(self.prescaler_targets)}.pkl'
             if isinstance(self.scaler_targets, tuple):

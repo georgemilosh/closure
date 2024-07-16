@@ -148,17 +148,23 @@ class Trainer:
         if datalabel == "train":
             self.train_dataset = datasets.DataFrameDataset(datalabel=datalabel, samples_file=samples_file,norm_folder=self.work_dir,
                                                        **self.dataset_kwargs)
-            self.dataset_kwargs.pop('scaler_features', None) # removing these to avoid passing them to the validation and test datasets
-            self.dataset_kwargs.pop('scaler_targets', None)
+            if self.dataset_kwargs.pop('scaler_features', None) is True: # removing these to avoid passing them to the validation and test datasets
+                self.scaler_features = (self.train_dataset.features_mean,self.train_dataset.features_std)
+            else: # if it is None or it is False we should not try to pass normalization of the train set to the val or test sets
+                self.scaler_features = None
+            if self.dataset_kwargs.pop('scaler_targets', None) is True:
+                self.scaler_targets = (self.train_dataset.targets_mean,self.train_dataset.targets_std)
+            else: # if it is None or it is False we should not try to pass normalization of the train set to the val or test sets
+                self.scaler_targets = None
         elif datalabel == "val":
             self.val_dataset = datasets.DataFrameDataset(datalabel=datalabel, samples_file=samples_file,norm_folder=self.work_dir, 
-                                            scaler_features=(self.train_dataset.features_mean,self.train_dataset.features_std), 
-                                            scaler_targets=(self.train_dataset.targets_mean,self.train_dataset.targets_std),
+                                            scaler_features=self.scaler_features, 
+                                            scaler_targets=self.scaler_targets,
                                             **self.dataset_kwargs)
         elif datalabel == "test":
             self.test_dataset = datasets.DataFrameDataset(datalabel=datalabel,samples_file=samples_file,norm_folder=self.work_dir,
-                                            scaler_features=(self.train_dataset.features_mean,self.train_dataset.features_std),
-                                            scaler_targets=(self.train_dataset.targets_mean,self.train_dataset.targets_std),
+                                            scaler_features=self.scaler_features, 
+                                            scaler_targets=self.scaler_targets,
                                              **self.dataset_kwargs)
         else:
             raise ValueError(f"Unknown datalabel: {datalabel}")
@@ -284,7 +290,7 @@ class Trainer:
                         f.write(json.dumps(self.config, indent=4))
                 except Exception as e:
                     logger.error(f"Error saving configuration file: {e}")
- 
+
         # Getting % usage of virtual_memory ( 3rd field)
         logger.info(f'Prior to fit: RAM memory % used: {psutil.virtual_memory()[2]}, RAM Used (GB):, {psutil.virtual_memory()[3]/1000000000}, process RAM usage (GB): {psutil.Process(os.getpid()).memory_info().rss / 1024 ** 3}')
         best_loss = self.model.fit(self.train_loader, self.val_loader, trial=trial)   
