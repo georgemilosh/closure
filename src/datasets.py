@@ -283,11 +283,11 @@ class DataFrameDataset(torch.utils.data.Dataset):
         self.dataframe = self.dataframe.reset_index(drop=True, inplace=False)
         
         
-        filenames = self.dataframe[self.image_file_name_column].tolist()
+        self.filenames = self.dataframe[self.image_file_name_column].tolist()
 
         self.request_features = self.read_features_targets_kwargs.get('request_features', None)
         self.request_targets = self.read_features_targets_kwargs.get('request_targets', None)
-        self.features, self.targets = rp.read_features_targets(self.data_folder, filenames, 
+        self.features, self.targets = rp.read_features_targets(self.data_folder, self.filenames, 
                                                   feature_dtype = self.feature_dtype_numpy, 
                                                   target_dtype = self.target_dtype_numpy,**self.read_features_targets_kwargs)
 

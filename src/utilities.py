@@ -178,6 +178,14 @@ def plot_pred_targets(trainer, target_name: str, prediction=None, ground_truth=N
     Args:
         trainer (Trainer): A Trainer object.
     """
+
+    if prediction is None or ground_truth is None or list_of_target_indices is None:
+        prediction, ground_truth, list_of_target_indices = pred_ground_targets(trainer)
+    
+    pred_shape = [1 for _ in prediction.cpu().numpy().shape]
+    pred_shape[1] = -1
+    pred_shape = tuple(pred_shape)
+
     channel = trainer.train_dataset.request_targets.index(target_name)
     if trainer.train_loader.target_channels is None:
         list_of_target_indices = range(len(trainer.train_dataset.prescaler_targets))
@@ -193,12 +201,13 @@ def plot_pred_targets(trainer, target_name: str, prediction=None, ground_truth=N
         invfunc = np.sinh
 
     print(f"{invfunc = }")
-    X, Y = rp.build_XY(f"{trainer.dataset_kwargs['data_folder']}/brecht/data11/",choose_x=trainer.dataset_kwargs['read_features_targets_kwargs']['choose_x'],
-                choose_y = trainer.dataset_kwargs['read_features_targets_kwargs']['choose_y'])
-    prediction_reshaped = invfunc((prediction.numpy()*trainer.test_dataset.targets_std[list_of_target_indices]+
-                        trainer.test_dataset.targets_mean[list_of_target_indices])[...,channel]).reshape(trainer.test_dataset.targets_shape[:-1]+(1,))
-    ground_truth_reshaped = invfunc((ground_truth.numpy()*trainer.test_dataset.targets_std[list_of_target_indices]+
-                            trainer.test_dataset.targets_mean[list_of_target_indices])[...,channel]).reshape(trainer.test_dataset.targets_shape[:-1]+(1,))
+    X, Y = rp.build_XY(f"{trainer.dataset_kwargs['data_folder']}/{trainer.test_dataset.filenames[0].rsplit('/',1)[0]}/",
+                        choose_x=trainer.dataset_kwargs['read_features_targets_kwargs']['choose_x'],
+                        choose_y = trainer.dataset_kwargs['read_features_targets_kwargs']['choose_y'])
+    prediction_reshaped = invfunc((prediction.cpu().numpy()*trainer.test_dataset.targets_std[list_of_target_indices].reshape(pred_shape)+
+                       trainer.test_dataset.targets_mean[list_of_target_indices].reshape(pred_shape))[:,channel]).reshape(trainer.test_dataset.targets_shape[:-1]+(1,))
+    ground_truth_reshaped = invfunc((ground_truth.numpy()*trainer.test_dataset.targets_std[list_of_target_indices].reshape(pred_shape)+
+                         trainer.test_dataset.targets_mean[list_of_target_indices].reshape(pred_shape))[:,channel]).reshape(trainer.test_dataset.targets_shape[:-1]+(1,))
     # Create a figure and subplots
     fig, axs = plt.subplots(3, 3, figsize=(12, 6))
     if not os.path.exists('img'):
