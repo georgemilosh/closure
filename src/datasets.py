@@ -146,6 +146,13 @@ class ChannelDataLoader(DataLoader):
     
     def __iter__(self):
         for features, targets in super().__iter__():
+            if self.feature_channels is not None or self.target_channels is not None:
+                patched_features = features[:, self.feature_channels, ...]
+                patched_targets = targets[:, self.target_channels, ...]
+            else:
+                patched_features = features
+                patched_targets = targets
+
             if self.patch_dim is not None:
                 # Generate random start points for patches
                 x_starts = np.random.randint(0, features.shape[2] - self.patch_dim[0], size=features.shape[0])
@@ -157,11 +164,7 @@ class ChannelDataLoader(DataLoader):
                 for i, (x, y) in enumerate(zip(x_starts, y_starts)):
                     patched_features[i] = features[i, :, x:x+self.patch_dim[0], y:y+self.patch_dim[1]]
                     patched_targets[i] = targets[i, :, x:x+self.patch_dim[0], y:y+self.patch_dim[1]]
-                
-                
-            if self.feature_channels is not None or self.target_channels is not None:
-                patched_features = features[:, self.feature_channels, ...]
-                patched_targets = targets[:, self.target_channels, ...]
+            
             yield patched_features, patched_targets
 
 class DataFrameDataset(torch.utils.data.Dataset):

@@ -116,11 +116,11 @@ def compare_metrics(work_dirs=['./'], runs=['./0'], metric=None):
         prediction = trainer.model.predict(trainer.test_dataset.features)
         ground_truth = trainer.test_dataset.targets[:,trainer.val_loader.target_channels].squeeze()
         # computing total loss
-        total_loss = trainer.model._compute_loss(ground_truth,prediction,trainer.model.criterion).cpu().numpy()
+        total_loss = trainer.model._compute_loss(ground_truth.flatten(),prediction.flatten(),trainer.model.criterion).cpu().numpy()
         score = {}
         if metric is not None:
             for metric_name in metric:
-                score[f"total_{metric_name}"] = trainer.model._compute_loss(ground_truth,prediction,
+                score[f"total_{metric_name}"] = trainer.model._compute_loss(ground_truth.flatten(),prediction.flatten(),
                                                                  parse_score(metric_name)).cpu().numpy()
         if trainer.train_loader.target_channels is None:
             list_of_target_indices = range(len(trainer.train_dataset.prescaler_targets))
@@ -131,12 +131,12 @@ def compare_metrics(work_dirs=['./'], runs=['./0'], metric=None):
             loss_dict.update(score)
         # computing per channel loss
         for channel in list_of_target_indices:
-            target_loss = trainer.model._compute_loss(ground_truth[:, channel], prediction[:, channel], trainer.model.criterion)
+            target_loss = trainer.model._compute_loss(ground_truth[:, channel].flatten(), prediction[:, channel].flatten(), trainer.model.criterion)
             loss_dict[trainer.train_dataset.request_targets[channel]] = target_loss.cpu().numpy()
             if metric is not None:
                 for metric_name in metric:
                     loss_dict[f"{trainer.train_dataset.request_targets[channel]}_{metric_name}"] = \
-                        trainer.model._compute_loss(ground_truth[:, channel], prediction[:, channel],
+                        trainer.model._compute_loss(ground_truth[:, channel].flatten(), prediction[:, channel].flatten(),
                                                                  parse_score(metric_name)).cpu().numpy()
 
         if loss_df is None:
@@ -158,14 +158,14 @@ def pred_ground_targets(trainer):
     """
     prediction = trainer.model.predict(trainer.test_dataset.features)
     ground_truth = trainer.test_dataset.targets[:,trainer.val_loader.target_channels].squeeze()
-    loss = trainer.model._compute_loss(ground_truth,prediction,trainer.model.criterion)
+    loss = trainer.model._compute_loss(ground_truth.flatten(),prediction.flatten(),trainer.model.criterion)
     print(f"Total loss {loss}")
     if trainer.train_loader.target_channels is None:
         list_of_target_indices = range(len(trainer.train_dataset.prescaler_targets))
     else:
         list_of_target_indices = trainer.train_loader.target_channels
     for channel in list_of_target_indices:
-        loss = trainer.model._compute_loss(ground_truth[:,channel],prediction[:,channel],trainer.model.criterion)
+        loss = trainer.model._compute_loss(ground_truth[:,channel].flatten(),prediction[:,channel].flatten(),trainer.model.criterion)
         print(f'Loss for channel {channel}:  {trainer.train_dataset.request_targets[channel]}, loss = {loss}')
     return prediction, ground_truth, list_of_target_indices
 
@@ -218,9 +218,14 @@ def plot_pred_targets(trainer, target_name: str, prediction=None, ground_truth=N
         error = (ground_truth_reshaped[i,...,0] - prediction_reshaped[i,...,0])/(ground_truth_reshaped[i,...,0].max())
         vmax = ground_truth_reshaped[i,...,0].max()
         vmax = [vmax, vmax, .5]
-        vmin = 0 #-ground_truth_reshaped[i,...,0].max()
+        if ground_truth_reshaped[i,...,0].min()*ground_truth_reshaped[i,...,0].max() > 0:
+            vmin = 0
+            cmaps = ['plasma', 'plasma', 'seismic']
+        else:
+            vmin = -ground_truth_reshaped[i,...,0].max()
+            cmaps = ['seismic', 'seismic', 'seismic']
         vmin = [vmin, vmin, -.5]
-        cmaps = ['plasma', 'plasma', 'seismic']
+        
         for j, (data,label) in enumerate(zip([ground_truth_reshaped[i,...,0], prediction_reshaped[i,...,0], error],
                                             ['real', 'predict', 'error'])):
             f, ax = plt.subplots(1, 1, figsize=(6, 3))
