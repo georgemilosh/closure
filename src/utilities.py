@@ -111,6 +111,8 @@ def compare_metrics(work_dirs=['./'], runs=['./0'], metric=None):
     loss_df = None
 
     for work_dir, run in zip(work_dirs,runs):
+        if not os.path.exists(work_dir):
+            raise ValueError(f"Work directory '{work_dir}' does not exist.")
         trainer = tr.Trainer(work_dir=work_dir)
         trainer.load_run(run)
         prediction = trainer.model.predict(trainer.test_dataset.features)

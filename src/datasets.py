@@ -12,6 +12,7 @@ from typing import Any, Tuple, Iterator, Sequence
 import pandas as pd
 import numpy as np
 import joblib
+import scipy.ndimage as nd
 
 from  . import read_pic as rp
 
@@ -185,6 +186,8 @@ class DataFrameDataset(torch.utils.data.Dataset):
         scaler_targets (tuple or None, optional): The scaler for targets. If a tuple is provided, it should contain the mean and standard deviation of the targets. Defaults to None.
         image_file_name_column (str, optional): The column name in the DataFrame that contains the image filenames. Defaults to 'filenames'.
         read_features_targets_kwargs (dict, optional): Additional keyword arguments to pass to the `read_features_targets` function. Defaults to None.
+        filter_features (str, optional): The filter to apply to the features. Defaults to None.
+        filter_targets (str, optional): The filter to apply to the targets. Defaults to None.
 
     Attributes:
         target_dtype (torch.dtype): The data type of the targets.
@@ -232,7 +235,9 @@ class DataFrameDataset(torch.utils.data.Dataset):
                  datalabel = 'train',
                  flatten = True,
                  image_file_name_column='filenames',
-                 read_features_targets_kwargs = None
+                 read_features_targets_kwargs = None,
+                 filter_features = None, # filter to apply to the features
+                filter_targets = None, # filter to apply to the targets
                  ):
         self.features_mean = None  # TODO: check that this doesn't break something
         self.features_std = None
@@ -253,6 +258,40 @@ class DataFrameDataset(torch.utils.data.Dataset):
         else:
             self.prescaler_features = prescaler_features
         
+        self.filter_featuers_kwargs = None
+        
+        if filter_features is not None:
+            filter_features_copy = filter_features.copy()
+            logger.info("Filtering features")
+            if not isinstance(filter_features, dict):
+                self.filter_features = getattr(nd, filter_features_copy)
+            else:
+                filter_features_name = filter_features_copy.pop("name", None)
+                self.filter_features = getattr(nd, filter_features_name)
+                self.filter_featuers_kwargs = filter_features_copy
+                if isinstance(self.filter_featuers_kwargs['axes'], list):
+                    self.filter_featuers_kwargs['axes'] = tuple(self.filter_featuers_kwargs['axes'])
+                if self.filter_featuers_kwargs['axes'] is None or self.filter_featuers_kwargs['axes'] != (1,2):
+                    logger.warning(f"Filtering features should be aplied to only spatial dimensions. {self.filter_featuers_kwargs['axes'] = } and it should be (1.2)")
+        else:
+            self.filter_features = None
+        self.filter_targets_kwargs = None
+        if filter_targets is not None:
+            filter_targets_copy = filter_targets.copy()
+            logger.info("Filtering targets")
+            if not isinstance(filter_targets, dict):
+                self.filter_targets = getattr(nd, filter_targets_copy)
+            else:
+                filter_targets_name = filter_targets_copy.pop("name", None)
+                self.filter_targets = getattr(nd, filter_targets_name)
+                self.filter_targets_kwargs = filter_targets_copy
+                if isinstance(self.filter_targets_kwargs['axes'], list):
+                    self.filter_targets_kwargs['axes'] = tuple(self.filter_targets_kwargs['axes'])
+                if self.filter_targets_kwargs['axes'] is None or self.filter_targets_kwargs['axes'] != (1,2):
+                    logger.warning("Filtering targets should be aplied to only spatial dimensions")
+        else:
+            self.filter_targets = None
+
         if prescaler_targets is not None:
             self.prescaler_targets = [getattr(numpy, prescaler_targets) 
                                       if prescaler_targets is not None else None for 
@@ -293,7 +332,10 @@ class DataFrameDataset(torch.utils.data.Dataset):
         self.features, self.targets = rp.read_features_targets(self.data_folder, self.filenames, 
                                                   feature_dtype = self.feature_dtype_numpy, 
                                                   target_dtype = self.target_dtype_numpy,**self.read_features_targets_kwargs)
-
+        if self.filter_features is not None:
+            self.features = self.filter_features(self.features, **self.filter_featuers_kwargs)
+        if self.filter_targets is not None:
+            self.targets = self.filter_targets(self.targets, **self.filter_targets_kwargs)
         self.features_shape = self.features.shape
         self.targets_shape = self.targets.shape
         if self.flatten:

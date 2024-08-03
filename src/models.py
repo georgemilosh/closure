@@ -12,11 +12,13 @@ import optuna
 import time
 from torch.utils.data import DataLoader
 import copy
+import sys
 
 import logging
 logging.basicConfig(level=logging.INFO)
 logging.captureWarnings(True)
 logger = logging.getLogger(__name__)
+optuna.logging.get_logger("__name__").addHandler(logging.StreamHandler(sys.stdout))
 
 class PyNet(torch.nn.Module):
     """
@@ -254,6 +256,7 @@ class PyNet(torch.nn.Module):
                 trial.report(val_loss['criterion'], epoch)
                 # Handle pruning based on the intermediate value.
                 if trial.should_prune():
+                    logger.info("Raising TrialPruned exception.")
                     raise optuna.exceptions.TrialPruned()
                 
         # restore model and return best accuracy
@@ -317,7 +320,100 @@ class CNet(PyNet):
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
         return x
-   
+
+class ResNet(PyNet):
+    """
+    ResNet model for image classification.
+    This class represents a ResNet model for image classification. It inherits from the `PyNet` class and implements the forward pass method.
+    Attributes:
+        channels (list): List of integers representing the number of input and output channels for each convolutional layer.
+        kernels (list): List of integers representing the kernel size for each convolutional layer.
+        activations (nn.ModuleList): ModuleList containing the activation functions for each convolutional layer.
+        batch_norms (nn.ModuleList): ModuleList containing the batch normalization layers for each convolutional layer.
+        dropouts (nn.ModuleList): ModuleList containing the dropout layers for each convolutional layer.
+        convs (nn.ModuleList): ModuleList containing the convolutional layers.
+        skip_connect (dict): Dictionary containing the indices of the layers to be skipped in the skip connection. 
+            The key is the index of the current layer, and the value is the index of the layer whose values are added to the current layer before the activation
+    Methods:
+        __init__(self, channels, kernels, activations=None, batch_norms=None, dropouts=None, skip_connect=None, **kwargs):
+            Initializes the ResNet model with the given parameters.
+        forward(self, x):
+            Performs the forward pass of the ResNet model.
+    """    
+    def __init__(self, channels, kernels, activations=None, batch_norms=None, 
+                 dropouts=None, skip_connect=None, **kwargs):
+        super().__init__(**kwargs) # To pass optimizer_kwargs, scheduler_kwargs, logger_kwargs to PyNet constructor
+        self.channels = channels
+        self.kernels = kernels
+        if activations is None:
+            activations = [None] * (len(channels) - 1)
+        if batch_norms is None:
+            batch_norms = [None] * (len(channels) - 1)
+        if dropouts is None:
+            dropouts = [None] * (len(channels) - 1)
+        if skip_connect is None:
+            self.skip_connect = {}
+        else:
+            for key, value in skip_connect.items():
+                assert key > value, f"Skip connection must be to higher (key) from lower layer (value), but we have {key = }, {value = }"
+            self.skip_connect = skip_connect
+        self.skip_convs = nn.ModuleList()
+        self.convs = nn.ModuleList()
+        self.activations = nn.ModuleList()
+        self.batch_norms = nn.ModuleList()
+        self.dropouts = nn.ModuleList()
+        for i in range(len(channels)-1):
+            self.convs.append(nn.Conv2d(channels[i], channels[i+1], kernels[i], padding=(kernels[i]-1)//2))
+            if i in self.skip_connect:
+                self.skip_convs.append(nn.Conv2d(channels[self.skip_connect[i]+1], channels[i+1], kernels[i], padding=(kernels[i]-1)//2))
+            else:
+                self.skip_convs.append(None)
+            if activations[i] is not None:
+                self.activations.append(getattr(nn, activations[i])())
+            else:
+                self.activations.append(None)
+            if batch_norms[i] is not None and batch_norms[i]:
+                self.batch_norms.append(nn.BatchNorm2d(channels[i+1]))
+            else:
+                self.batch_norms.append(None)
+            if dropouts[i] is not None and dropouts[i] > 0.0:
+                self.dropouts.append(nn.Dropout2d(dropouts[i]))
+            else:
+                self.dropouts.append(None)
+
+        super().define_optimizer_sheduler() # To define optimizer we have to have the layers already defined
+
+    def forward(self, x):
+        """
+        Forward pass of the FCNN.
+
+        Args:
+            x (torch.Tensor): The input tensor.
+
+        Returns:
+            torch.Tensor: The output tensor.
+
+        """
+        out = x
+        out_store = []
+        for i in range(len(self.channels) - 1):
+            out = self.convs[i](out)
+            if self.skip_convs[i] is not None:
+                out += self.skip_convs[i](out_store[self.skip_connect[i]])
+                """try:
+                    out += self.skip_convs[i](out_store[self.skip_connect[i]])
+                except Exception as e:
+                    logger.error(f"{i = }, {self.skip_connect[i] = }, {self.skip_convs[i] = }, {self.convs[i] = }, {out_store[self.skip_connect[i]].shape = }")
+                    raise e"""
+            if self.activations[i] is not None:
+                out = self.activations[i](out)
+            if self.batch_norms[i] is not None:
+                out = self.batch_norms[i](out)
+            if self.dropouts[i] is not None:
+                out = self.dropouts[i](out)
+            out_store.append(out)
+        return out
+    
 class FCNN(PyNet):
     def __init__(self, channels, kernels, activations=None, batch_norms=None, dropouts=None, **kwargs):
         super().__init__(**kwargs) # To pass optimizer_kwargs, scheduler_kwargs, logger_kwargs to PyNet constructor

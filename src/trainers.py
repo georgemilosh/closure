@@ -125,7 +125,7 @@ class Trainer:
             logger.info(f"host: {os.uname().nodename}")
             logger.info(f" ")
             # Define the extra loggers and add the same FileHandler to them
-            datasets_logger = logging.getLogger(__name__)
+            datasets_logger = logging.getLogger(__name__) # TODO: Fix the names  
             datasets_logger.addHandler(f_handler)
             models_logger = logging.getLogger(models.__name__)
             models_logger.addHandler(f_handler)
