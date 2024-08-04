@@ -18,7 +18,8 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logging.captureWarnings(True)
 logger = logging.getLogger(__name__)
-optuna.logging.get_logger("__name__").addHandler(logging.StreamHandler(sys.stdout))
+optuna.logging.get_logger(__name__).addHandler(logging.StreamHandler(sys.stdout))
+optuna.logging.enable_propagation()  # Propagate logs to the root logger.
 
 class PyNet(torch.nn.Module):
     """
@@ -220,6 +221,7 @@ class PyNet(torch.nn.Module):
         total_start_time = time.time() # track total training time
         best_loss = torch.inf  # track best loss
         epoch_best = 0
+        self.lr = []
         # ---- train process ----
         for epoch in range(self.epochs):
             epoch_start_time = time.time() # track epoch time
@@ -244,7 +246,11 @@ class PyNet(torch.nn.Module):
                 best_weights = copy.deepcopy(self.state_dict())
                 epoch_best = epoch
             self._logging(tr_loss, val_loss, epoch+1,self.epochs, epoch_time, **self.logger_kwargs)
-            
+            if self.scheduler is not None:
+                try:
+                    self.lr.append(self.scheduler.get_last_lr())
+                except AttributeError: # Compatability with an earlier version of Pytorch
+                    self.lr.append(self.scheduler._last_lr)
             # ---- early stopping ----
             if self.early_stopping is not None:
                 if epoch - epoch_best > self.early_stopping:
@@ -351,12 +357,11 @@ class ResNet(PyNet):
             batch_norms = [None] * (len(channels) - 1)
         if dropouts is None:
             dropouts = [None] * (len(channels) - 1)
-        if skip_connect is None:
-            self.skip_connect = {}
-        else:
+        self.skip_connect = {}
+        if skip_connect is not None:
             for key, value in skip_connect.items():
-                assert key > value, f"Skip connection must be to higher (key) from lower layer (value), but we have {key = }, {value = }"
-            self.skip_connect = skip_connect
+                assert int(key) > value, f"Skip connection must be to higher (key) from lower layer (value), but we have {int(key) = }, {value = }"
+                self.skip_connect[int(key)] = value
         self.skip_convs = nn.ModuleList()
         self.convs = nn.ModuleList()
         self.activations = nn.ModuleList()
@@ -369,7 +374,10 @@ class ResNet(PyNet):
             else:
                 self.skip_convs.append(None)
             if activations[i] is not None:
-                self.activations.append(getattr(nn, activations[i])())
+                if isinstance(activations[i], list):
+                    self.activations.append(getattr(nn, activations[i][0])(*activations[i][1:]))
+                else:
+                    self.activations.append(getattr(nn, activations[i])())
             else:
                 self.activations.append(None)
             if batch_norms[i] is not None and batch_norms[i]:

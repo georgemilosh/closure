@@ -70,7 +70,7 @@ class Trainer:
 
     """
     def __init__(self, dataset_kwargs=None, load_data_kwargs=None, model_kwargs=None, 
-                 device=None,work_dir=None):
+                 device=None,work_dir=None, log_name="training.log", log_level="INFO"):
         """
         Initialize a Trainer object.
 
@@ -86,10 +86,11 @@ class Trainer:
         self.load_data_kwargs = load_data_kwargs
         self.model_kwargs = model_kwargs
         self.device = device
+        self.log_name = log_name
+        self.log_level = getattr(logging, log_level)
         
         # === Deal with the configuration file === #
         if work_dir is not None:
-            
             os.makedirs(os.path.dirname(self.work_dir), exist_ok=True)
             config_file = os.path.join(self.work_dir, 'config.json')
             if os.path.exists(config_file):
@@ -97,11 +98,6 @@ class Trainer:
                     config = json.load(f)
                 logger.warning(f"Config file {config_file} found -> loading configuration")
                 self.__dict__.update(**config) # update the attributes with the configuration file
-                #dataset_kwargs = config['dataset_kwargs']
-                #load_data_kwargs = config['load_data_kwargs']
-                #model_kwargs = config['model_kwargs']
-                #device = config['device']
-                #work_dir = config['work_dir']
             else:
                 config = copy.deepcopy(self.__dict__) # save the attributes to the config file
                 logger.info(f"Creating a new configuration file: {config_file}")
@@ -113,24 +109,29 @@ class Trainer:
                     logger.error(f"Error saving configuration file: {e}")
             
         if self.work_dir is not None:
-            f_handler = logging.FileHandler(f'{self.work_dir}/training.log')
-            f_handler.setLevel(logging.DEBUG)
+            f_handler = logging.FileHandler(f'{self.work_dir}/{self.log_name}')
+            f_handler.setLevel(self.log_level)
             warnings_logger = logging.getLogger("py.warnings")
             f_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
             f_handler.setFormatter(f_format)
             logger.addHandler(f_handler)
             warnings_logger.addHandler(f_handler)
+            logger.setLevel(self.log_level)
             logger.info(f" ")
-            logger.info(f"========Logging to {self.work_dir}/training.log===========") 
+            logger.info(f"========Logging to {self.work_dir}/{self.log_name} on level {log_level}===========") 
             logger.info(f"host: {os.uname().nodename}")
             logger.info(f" ")
             # Define the extra loggers and add the same FileHandler to them
             datasets_logger = logging.getLogger(__name__) # TODO: Fix the names  
             datasets_logger.addHandler(f_handler)
+            datasets_logger.setLevel(self.log_level)
             models_logger = logging.getLogger(models.__name__)
             models_logger.addHandler(f_handler)
+            models_logger.setLevel(self.log_level)
+            #models.optuna.logging.get_logger(models.__name__).addHandler(f_handler)
             read_pic_logger = logging.getLogger(datasets.__name__)
             read_pic_logger.addHandler(f_handler)
+            read_pic_logger.setLevel(self.log_level)
 
         self.config = copy.deepcopy(self.__dict__) # save the attributes to the config of the trainer class
         self.dataset_kwargs.pop('samples_file',None)  # guardrails against accidentally passing samples_file to DataFrameDataset     
