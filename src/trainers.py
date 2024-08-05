@@ -109,7 +109,23 @@ class Trainer:
                     logger.error(f"Error saving configuration file: {e}")
             
         if self.work_dir is not None:
-            f_handler = logging.FileHandler(f'{self.work_dir}/{self.log_name}')
+            self.set_logger(f'{self.work_dir}/{self.log_name}')
+
+        self.config = copy.deepcopy(self.__dict__) # save the attributes to the config of the trainer class
+        self.dataset_kwargs.pop('samples_file',None)  # guardrails against accidentally passing samples_file to DataFrameDataset     
+        train_sample = self.dataset_kwargs.pop('train_sample')
+        val_sample = self.dataset_kwargs.pop('val_sample')
+        test_sample = self.dataset_kwargs.pop('test_sample')
+
+        self.set_dataset(datalabel="train", samples_file=train_sample)
+        self.set_dataset(datalabel="val", samples_file=val_sample)
+        self.set_dataset(datalabel="test", samples_file=test_sample)
+        
+        self.comprehend_config()
+    
+    def set_logger(self, log_dir=None):
+        if log_dir is not None:
+            f_handler = logging.FileHandler(log_dir)
             f_handler.setLevel(self.log_level)
             warnings_logger = logging.getLogger("py.warnings")
             f_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -118,7 +134,7 @@ class Trainer:
             warnings_logger.addHandler(f_handler)
             logger.setLevel(self.log_level)
             logger.info(f" ")
-            logger.info(f"========Logging to {self.work_dir}/{self.log_name} on level {log_level}===========") 
+            logger.info(f"========Logging to {log_dir} on level {self.log_level}===========") 
             logger.info(f"host: {os.uname().nodename}")
             logger.info(f" ")
             # Define the extra loggers and add the same FileHandler to them
@@ -133,18 +149,6 @@ class Trainer:
             read_pic_logger.addHandler(f_handler)
             read_pic_logger.setLevel(self.log_level)
 
-        self.config = copy.deepcopy(self.__dict__) # save the attributes to the config of the trainer class
-        self.dataset_kwargs.pop('samples_file',None)  # guardrails against accidentally passing samples_file to DataFrameDataset     
-        train_sample = self.dataset_kwargs.pop('train_sample')
-        val_sample = self.dataset_kwargs.pop('val_sample')
-        test_sample = self.dataset_kwargs.pop('test_sample')
-
-        self.set_dataset(datalabel="train", samples_file=train_sample)
-        self.set_dataset(datalabel="val", samples_file=val_sample)
-        self.set_dataset(datalabel="test", samples_file=test_sample)
-        
-        self.comprehend_config()
-    
     def set_dataset(self,datalabel="test", samples_file=None):
         if datalabel == "train":
             self.train_dataset = datasets.DataFrameDataset(datalabel=datalabel, samples_file=samples_file,norm_folder=self.work_dir,
@@ -232,7 +236,9 @@ class Trainer:
         if os.path.exists(config_file):
             with open(config_file, 'r') as f:
                 config = json.load(f)
-            logger.info(f"==========Config file {config_file} found========")
+            if self.work_dir is not None:
+                self.set_logger(f'{self.work_dir}/{run}/run.log')
+            logger.info(f"==========Config file {config_file} found, logging to {self.work_dir}/{run}/run.log========")
             logger.warning(f"Loading configuration based on it and the associated model weights/training loss!")
             if config['dataset_kwargs'] != self.config['dataset_kwargs']:
                 raise ValueError("The old and new config file have dataset_kwargs which are not consistent! You must create a new run")
@@ -283,8 +289,11 @@ class Trainer:
             if self.run != '': # if we are running a trial, we need to save config to subdirectory
                 if os.path.exists(f"{self.work_dir}/{self.run}/config.json"):
                     raise FileExistsError(f"Config file {self.work_dir}/{self.run}/config.json already exists. Overwriting not allowed!")
+                if self.work_dir is not None:
+                    os.makedirs(os.path.dirname(f"{self.work_dir}/{self.run}/"), exist_ok=True)
+                    self.set_logger(f'{self.work_dir}/{self.run}/run.log')
                 logger.info(f"Saving the new configuration to {self.work_dir}/{self.run}/config.json")
-                os.makedirs(os.path.dirname(f"{self.work_dir}/{self.run}/"), exist_ok=True)
+                
                 config_file = os.path.join(f"{self.work_dir}/{self.run}/", 'config.json')
                 try:
                     with open(config_file, 'w') as f:

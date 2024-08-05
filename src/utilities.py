@@ -96,6 +96,43 @@ def parse_score(score):
     elif score == 'r2':
         return torchmetrics.functional.r2_score
 
+def compare_runs(work_dirs=['./'], runs=['./0'], metric=None, rescale=True, renorm=True, verbose=True, **kwargs):
+    """
+    Compare metrics for different runs in the given work directories.
+
+    Args:
+        work_dirs (list, optional): List of work directories. Defaults to ['./'].
+        runs (list, optional): List of runs. Defaults to ['./0'].
+        metric (list, optional): List of metrics to compare. Defaults to None.
+        **kwargs (dict): Additional keyword arguments to be passed when loading the trainer
+
+    Returns:
+        pandas.DataFrame: DataFrame containing the comparison results.
+    """
+    loss_df = None
+
+    for work_dir, run in zip(work_dirs,runs):
+        if not os.path.exists(work_dir):
+            raise ValueError(f"Work directory '{work_dir}' does not exist.")
+        trainer = tr.Trainer(work_dir=work_dir, **kwargs)
+        trainer.load_run(run)
+        ground_truth_scaled, prediction_scaled = transform_targets(trainer, rescale=rescale, renorm=renorm)
+        score_total = evaluate_loss(trainer, ground_truth_scaled, prediction_scaled, 
+                                          'MSELoss', verbose=verbose)
+        if metric is not None:
+            for metric_name in metric:
+                score_total.update(evaluate_loss(trainer, ground_truth_scaled, prediction_scaled, 
+                                                   metric_name, verbose=verbose))
+                
+        loss_dict = {'work_dir': work_dir, 'exp' : work_dir.rsplit('/')[-2],'run': run}
+        loss_dict.update(score_total)
+       
+        if loss_df is None:
+            loss_df = pd.DataFrame(columns=loss_dict.keys())
+        loss_df.loc[len(loss_df)] = loss_dict
+
+    return loss_df
+
 def compare_metrics(work_dirs=['./'], runs=['./0'], metric=None):
     """
     Compare metrics for different runs in the given work directories.
@@ -147,7 +184,143 @@ def compare_metrics(work_dirs=['./'], runs=['./0'], metric=None):
 
     return loss_df
 
-def pred_ground_targets(trainer):
+def transform_targets(trainer, rescale=True, renorm=True, verbose=True):
+    """
+    Transforms the predicted and ground truth targets based on the trainer's configuration.
+    Args:
+        trainer: The trainer object containing the model, test dataset, and train dataset.
+        rescale (bool): Whether to rescale the targets.
+        renorm (bool): Whether to renormalize the targets.
+        verbose (bool): Whether to print the loss values.
+    Returns:
+        prediction_scaled: The scaled predicted targets.
+        ground_truth_scaled: The scaled ground truth targets.
+    """
+
+    prediction = trainer.model.predict(trainer.test_dataset.features)
+    ground_truth = trainer.test_dataset.targets[:,trainer.val_loader.target_channels].squeeze()
+    pred_shape = [1 for _ in prediction.cpu().numpy().shape]
+    pred_shape[1] = -1
+    pred_shape = tuple(pred_shape)
+
+    if trainer.train_loader.target_channels is None:
+        list_of_target_indices = range(len(trainer.train_dataset.prescaler_targets))
+    else:
+        list_of_target_indices = trainer.train_loader.target_channels
+
+    if renorm:
+        prediction_scaled = (prediction*trainer.test_dataset.targets_std[list_of_target_indices].reshape(pred_shape)+
+                            trainer.test_dataset.targets_mean[list_of_target_indices].reshape(pred_shape))
+        ground_truth_scaled = (ground_truth*trainer.test_dataset.targets_std[list_of_target_indices].reshape(pred_shape)+
+                                trainer.test_dataset.targets_mean[list_of_target_indices].reshape(pred_shape))
+    if rescale:
+        for channel, _ in enumerate(trainer.train_dataset.request_targets):
+            if trainer.train_loader.target_channels is None:
+                list_of_target_indices = range(len(trainer.train_dataset.prescaler_targets))
+            else:
+                list_of_target_indices = trainer.train_loader.target_channels
+
+            func = [trainer.train_dataset.prescaler_targets[i] for i in list_of_target_indices][channel]
+            if func == None:
+                invfunc = lambda a: a
+            elif func.__name__ == 'log':
+                invfunc = torch.exp
+            elif func.__name__ == 'arcsinh':
+                invfunc = torch.sinh
+            if verbose:
+                print(f"{invfunc = }")
+            prediction_scaled[:,channel] = invfunc(prediction_scaled[:,channel])
+            ground_truth_scaled[:,channel] = invfunc(ground_truth_scaled[:,channel])
+    return ground_truth_scaled, prediction_scaled 
+
+def compute_loss(ground_truth, prediction, criterion):
+    if criterion == 'r2':
+        loss = (1- torch.nn.MSELoss()(ground_truth,prediction)/torch.var(ground_truth)).cpu().numpy()
+    else:
+        loss = getattr(torch.nn, criterion)()(ground_truth,prediction).cpu().numpy()
+    return loss
+
+def evaluate_loss(trainer, ground_truth, prediction, criterion, verbose=True):
+    """
+    This function takes a trainer object assuming that the run has already been loaded and 
+    returns the loss
+
+    Args:
+        trainer (Trainer): A Trainer object.
+        ground_truth (torch.Tensor): The ground truth targets.
+        prediction (torch.Tensor): The predicted targets.
+        criterion (str): The loss function to use, e.g. 'MSELoss', 'L1Loss', 'r2'.
+    Returns:
+        tuple: A tuple containing the predicted and ground truth targets.
+    """
+    label = f'total_{criterion}'
+    loss = {label : compute_loss(ground_truth.flatten(),prediction.flatten(),criterion)}
+    if verbose:
+        print(f"Total loss {loss[label]}")
+    if trainer.train_loader.target_channels is None:
+        list_of_target_indices = range(len(trainer.train_dataset.prescaler_targets))
+    else:
+        list_of_target_indices = trainer.train_loader.target_channels
+    for channel in list_of_target_indices:
+        label = f'{trainer.train_dataset.request_targets[channel]}_{criterion}'
+        loss[label] = compute_loss(ground_truth[:,channel].flatten(),prediction[:,channel].flatten(),criterion)
+        if verbose:
+            print(f'Loss for channel {channel}:  {trainer.train_dataset.request_targets[channel]}, loss = {loss[label]}')
+    return loss
+
+def graph_pred_targets(trainer, target_name: str, ground_truth_scaled, prediction_scaled):
+    """
+    Generate and display a grid of subplots showing the ground truth, predictions, and error for a specific target variable.
+    Parameters:
+    - trainer: The trainer object containing the datasets and other necessary information.
+    - target_name: The name of the target variable to visualize.
+    - ground_truth_scaled: The scaled ground truth values for the target variable.
+    - prediction_scaled: The scaled predicted values for the target variable.
+    Returns:
+    None
+    """
+    channel = trainer.train_dataset.request_targets.index(target_name)
+    prediction_reshaped = prediction_scaled[:,channel].reshape(trainer.test_dataset.targets_shape[:-1]+(1,)).cpu().numpy()
+    ground_truth_reshaped = ground_truth_scaled[:,channel].reshape(trainer.test_dataset.targets_shape[:-1]+(1,)).cpu().numpy()
+
+    X, Y = rp.build_XY(f"{trainer.dataset_kwargs['data_folder']}/{trainer.test_dataset.filenames[0].rsplit('/',1)[0]}/",
+                        choose_x=trainer.dataset_kwargs['read_features_targets_kwargs']['choose_x'],
+                        choose_y = trainer.dataset_kwargs['read_features_targets_kwargs']['choose_y'])
+    import os
+    # Create a figure and subplots
+    fig, axs = plt.subplots(3, 3, figsize=(12, 6))
+    if not os.path.exists('img'):
+        # Create the directory
+        os.makedirs('img')
+    # Iterate over the panels
+    for i in range(3):
+        error = (ground_truth_reshaped[i,...,0] - prediction_reshaped[i,...,0])/(ground_truth_reshaped[i,...,0].max())
+        vmax = ground_truth_reshaped[i,...,0].max()
+        vmax = [vmax, vmax, .5]
+        if ground_truth_reshaped[i,...,0].min()*ground_truth_reshaped[i,...,0].max() > 0:
+            vmin = 0
+            cmaps = ['plasma', 'plasma', 'seismic']
+        else:
+            vmin = -ground_truth_reshaped[i,...,0].max()
+            cmaps = ['seismic', 'seismic', 'seismic']
+        vmin = [vmin, vmin, -.5]
+        
+        for j, (data,label) in enumerate(zip([ground_truth_reshaped[i,...,0], prediction_reshaped[i,...,0], error],
+                                            ['real', 'predict', 'error'])):
+            f, ax = plt.subplots(1, 1, figsize=(6, 3))
+            for axes in [ax, axs[i,j]]:
+                im = axes.pcolormesh(X, Y, data, vmax=vmax[j], vmin=vmin[j], cmap=cmaps[j])
+                axes.set_title(f"{label} {target_name} @ {trainer.test_dataset.dataframe['filenames'].iloc[i].rsplit('_')[-1].rsplit('.')[0]}")
+                axes.set_xlabel('X')
+                axes.set_ylabel('Y')
+                f.colorbar(im, ax=axes)
+                f.savefig(f'img/{target_name}_time{i}_{label}.png',bbox_inches='tight')
+                plt.close(f)
+    # Adjust the layout of the subplots
+    plt.tight_layout()
+    plt.show()
+
+def pred_ground_targets(trainer, verbose=True):
     """
     This function takes a trainer object assuming that the run has already been loaded and 
     returns the predicted and ground truth targets.
@@ -158,17 +331,20 @@ def pred_ground_targets(trainer):
     Returns:
         tuple: A tuple containing the predicted and ground truth targets.
     """
+    print("The function pred_ground_targets is deprecated. Use transform_targets instead.")
     prediction = trainer.model.predict(trainer.test_dataset.features)
     ground_truth = trainer.test_dataset.targets[:,trainer.val_loader.target_channels].squeeze()
     loss = trainer.model._compute_loss(ground_truth.flatten(),prediction.flatten(),trainer.model.criterion)
-    print(f"Total loss {loss}")
+    if verbose:
+        print(f"Total loss {loss}")
     if trainer.train_loader.target_channels is None:
         list_of_target_indices = range(len(trainer.train_dataset.prescaler_targets))
     else:
         list_of_target_indices = trainer.train_loader.target_channels
     for channel in list_of_target_indices:
         loss = trainer.model._compute_loss(ground_truth[:,channel].flatten(),prediction[:,channel].flatten(),trainer.model.criterion)
-        print(f'Loss for channel {channel}:  {trainer.train_dataset.request_targets[channel]}, loss = {loss}')
+        if verbose:
+            print(f'Loss for channel {channel}:  {trainer.train_dataset.request_targets[channel]}, loss = {loss}')
     return prediction, ground_truth, list_of_target_indices
 
 def plot_pred_targets(trainer, target_name: str, prediction=None, ground_truth=None, 
@@ -180,7 +356,7 @@ def plot_pred_targets(trainer, target_name: str, prediction=None, ground_truth=N
     Args:
         trainer (Trainer): A Trainer object.
     """
-
+    print("The function pred_ground_targets is deprecated. Use graph_pred_targets instead.")
     if prediction is None or ground_truth is None or list_of_target_indices is None:
         prediction, ground_truth, list_of_target_indices = pred_ground_targets(trainer)
     
@@ -208,7 +384,7 @@ def plot_pred_targets(trainer, target_name: str, prediction=None, ground_truth=N
                         choose_y = trainer.dataset_kwargs['read_features_targets_kwargs']['choose_y'])
     prediction_reshaped = invfunc((prediction.cpu().numpy()*trainer.test_dataset.targets_std[list_of_target_indices].reshape(pred_shape)+
                        trainer.test_dataset.targets_mean[list_of_target_indices].reshape(pred_shape))[:,channel]).reshape(trainer.test_dataset.targets_shape[:-1]+(1,))
-    ground_truth_reshaped = invfunc((ground_truth.numpy()*trainer.test_dataset.targets_std[list_of_target_indices].reshape(pred_shape)+
+    ground_truth_reshaped = invfunc((ground_truth.cpu().numpy()*trainer.test_dataset.targets_std[list_of_target_indices].reshape(pred_shape)+
                          trainer.test_dataset.targets_mean[list_of_target_indices].reshape(pred_shape))[:,channel]).reshape(trainer.test_dataset.targets_shape[:-1]+(1,))
     # Create a figure and subplots
     fig, axs = plt.subplots(3, 3, figsize=(12, 6))
