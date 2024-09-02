@@ -107,11 +107,11 @@ class Trainer:
                         f.write(json.dumps(config, indent=4))
                 except Exception as e:
                     logger.error(f"Error saving configuration file: {e}")
-            
+        self.config = copy.deepcopy(self.__dict__) # save the attributes to the config of the trainer class 
         if self.work_dir is not None:
-            self.set_logger(f'{self.work_dir}/{self.log_name}')
+            self.f_handler = self.set_logger(f'{self.work_dir}/{self.log_name}')
 
-        self.config = copy.deepcopy(self.__dict__) # save the attributes to the config of the trainer class
+        
         self.dataset_kwargs.pop('samples_file',None)  # guardrails against accidentally passing samples_file to DataFrameDataset     
         train_sample = self.dataset_kwargs.pop('train_sample')
         val_sample = self.dataset_kwargs.pop('val_sample')
@@ -138,16 +138,18 @@ class Trainer:
             logger.info(f"host: {os.uname().nodename}")
             logger.info(f" ")
             # Define the extra loggers and add the same FileHandler to them
-            datasets_logger = logging.getLogger(__name__) # TODO: Fix the names  
-            datasets_logger.addHandler(f_handler)
-            datasets_logger.setLevel(self.log_level)
+            datasets_logger = logging.getLogger(__name__) # TODO: Fix the names 
+            self.apply_handler(datasets_logger, f_handler, self.log_level) 
             models_logger = logging.getLogger(models.__name__)
-            models_logger.addHandler(f_handler)
-            models_logger.setLevel(self.log_level)
-            #models.optuna.logging.get_logger(models.__name__).addHandler(f_handler)
+            self.apply_handler(models_logger, f_handler, self.log_level)
             read_pic_logger = logging.getLogger(datasets.__name__)
-            read_pic_logger.addHandler(f_handler)
-            read_pic_logger.setLevel(self.log_level)
+            self.apply_handler(read_pic_logger, f_handler, self.log_level)
+        return f_handler
+            
+    def apply_handler(self, logger, f_handler, log_level):
+        logger.addHandler(f_handler)
+        logger.setLevel(log_level)
+        return None
 
     def set_dataset(self,datalabel="test", samples_file=None):
         if datalabel == "train":

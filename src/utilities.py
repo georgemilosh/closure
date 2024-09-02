@@ -116,7 +116,7 @@ def compare_runs(work_dirs=['./'], runs=['./0'], metric=None, rescale=True, reno
             raise ValueError(f"Work directory '{work_dir}' does not exist.")
         trainer = tr.Trainer(work_dir=work_dir, **kwargs)
         trainer.load_run(run)
-        ground_truth_scaled, prediction_scaled = transform_targets(trainer, rescale=rescale, renorm=renorm)
+        ground_truth_scaled, prediction_scaled = transform_targets(trainer, rescale=rescale, renorm=renorm, verbose=verbose)
         score_total = evaluate_loss(trainer, ground_truth_scaled, prediction_scaled, 
                                           'MSELoss', verbose=verbose)
         if metric is not None:

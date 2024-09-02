@@ -456,7 +456,11 @@ def get_experiments(experiments, files_path, fields_to_read, choose_species=None
         # sorted(os.listdir()) creates a sorted list containing the .h5 filenames, os.listdir() alone would put them in random order.
         filenames=sorted([n for n in os.listdir(f"{files_path}{experiment}") if "-Fields_" in n and n.endswith(".h5")])
         if choose_times is not None:
-            selected_filenames = [filenames[i] for i in choose_times]
+            try:
+                selected_filenames = [filenames[i] for i in choose_times]
+            except Exception as e:
+                logger.info(f"Inconsistent size: {len(filenames) = }  {len(choose_times) = }")
+                raise e
         else:
             selected_filenames = filenames
         try:
