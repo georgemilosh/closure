@@ -11,6 +11,7 @@ import torch.nn.functional as F
 import optuna
 import time
 from torch.utils.data import DataLoader
+from torch.nn.parallel import DistributedDataParallel as DDP
 import copy
 import sys
 
@@ -21,10 +22,11 @@ logger = logging.getLogger(__name__)
 optuna.logging.get_logger(__name__).addHandler(logging.StreamHandler(sys.stdout))
 optuna.logging.enable_propagation()  # Propagate logs to the root logger.
 
-class PyNet(torch.nn.Module):
+class PyNet:
     """
-    base class for neural nets
+    base class for managing neural nets
     Args:
+    
     model_seed : int, optional
         Seed for the model weights, by default None
     optimizer_kwargs : dict, optional
@@ -33,11 +35,18 @@ class PyNet(torch.nn.Module):
         Keyword arguments for initializing the scheduler, by default None
     logger_kwargs : dict, optional
         Keyword arguments for initializing the logger, by default None
+
+    Attributes:
+    model : (torch.nn.Module) : The neural network model.
     """
-    def __init__(self, model_seed=None, optimizer_kwargs=None, scheduler_kwargs=None, logger_kwargs=None):
-        super().__init__() 
-        logger.info(f"Initializing {self.__class__.__name__} model.")
-        #logger.info(f"{model_seed=}, {optimizer_kwargs=}, {scheduler_kwargs=}, {logger_kwargs=}")
+    def __init__(self, model='FCNN', model_seed=None, optimizer_kwargs=None, scheduler_kwargs=None, logger_kwargs=None,
+                rank=None, local_rank=None, **kwargs): 
+        model_class =  globals() [model] #getattr(__name__, model)
+        self.local_rank = local_rank
+        logger.info(f"{torch.cuda.is_available() = }")
+        self.model = model_class(**kwargs).to(local_rank)
+        logger.info(f"Initializing model {self.model}")
+        self.dpp_model = DDP(self.model, device_ids=[self.local_rank])
         if optimizer_kwargs is None:
             self.optimizer_kwargs = {}
         else:
@@ -49,13 +58,15 @@ class PyNet(torch.nn.Module):
         self.early_stopping = self.scheduler_kwargs.pop('early_stopping', None)
         self.epochs = self.scheduler_kwargs.pop('epochs')
         self.logger_kwargs = logger_kwargs
+        
+
         if model_seed is not None:
             torch.manual_seed(model_seed) # set the seed for the weights
+        self.define_optimizer_sheduler()
 
     def define_optimizer_sheduler(self):
         """
-        Defines the optimization criterion, optimizer, and scheduler for the model. This function should be called
-        by any subclass of PyNet in the __init__ method after the layers have been defined.
+        Defines the optimization criterion, optimizer, and scheduler for the model. 
 
         This method handles the following steps:
         1. Sets the optimization criterion based on the provided criterion name.
@@ -87,7 +98,7 @@ class PyNet(torch.nn.Module):
          # === Deal with the optimizer === #
         optimizer_name = self.optimizer_kwargs.pop('optimizer')
         if isinstance(optimizer_name, str):
-            self.optimizer = getattr(torch.optim, optimizer_name)(self.parameters(), **self.optimizer_kwargs)
+            self.optimizer = getattr(torch.optim, optimizer_name)(self.model.parameters(), **self.optimizer_kwargs)
         else:
             self.optimizer = optimizer_name # assuming that optimizer is already passed, e.g. optimizer = torch.optim.Adam(model.parameters())
         
@@ -124,7 +135,7 @@ class PyNet(torch.nn.Module):
         loader = DataLoader(features, batch_size=32)
         for features in loader:
             with torch.no_grad():
-                out = self(features.to(self.device))
+                out = self.model(features.to(self.device))
             predictions.append(out)
         self.features_dtype = features.dtype
         self.targets_dtype = out.dtype
@@ -165,10 +176,11 @@ class PyNet(torch.nn.Module):
             float: The average loss over all batches in the data loader at the best epoch.
         """
         if phase == 'train':
-            self.train()
+            self.model.train()
         else:
-            self.eval()
+            self.model.eval()
         num_batches = len(loader)
+        logger.info(f"Forward pass has {num_batches} batches.")
 
         if self.metrics is not None:
             running_metrics = {metric._get_name(): 0.0 for metric in self.metrics}
@@ -179,7 +191,7 @@ class PyNet(torch.nn.Module):
             features, targets = self._to_device(features, targets, self.device)
             self.optimizer.zero_grad() # zero the parameter gradients
             with torch.set_grad_enabled(phase == 'train'): # track gradients only if in train
-                out = self(features)
+                out = self.model(features)
                 try:
                     loss = self._compute_loss(out, targets, self.criterion)
                 except Exception as e:
@@ -192,6 +204,7 @@ class PyNet(torch.nn.Module):
             if self.metrics is not None:
                 for metric in self.metrics:
                     running_metrics[metric._get_name()] += self._compute_loss(out, targets, metric).item()
+        
 
         for key in running_metrics:
             running_metrics[key] /= num_batches
@@ -226,8 +239,8 @@ class PyNet(torch.nn.Module):
         for epoch in range(self.epochs):
             epoch_start_time = time.time() # track epoch time
             tr_loss = self._forward_pass(train_loader, phase='train')
-            
-            val_loss = self._forward_pass(val_loader, phase='val')
+            if self.rank == 0:
+                val_loss = self._forward_pass(val_loader, phase='val')
             if self.scheduler is not None:
                 self.scheduler.step(val_loss['criterion'])
                 
@@ -272,7 +285,7 @@ class PyNet(torch.nn.Module):
         total_time = time.time() - total_start_time
 
         # final message
-        logger.info(f"""End of training. Total time: {round(total_time, 5)} seconds""")
+        logger.info(f"""End of training on | {self.rank = }, {self.device = }. Total time: {round(total_time, 5)} seconds""")
         return best_loss
 
         
@@ -301,7 +314,7 @@ class PyNet(torch.nn.Module):
                 logger.info(msg)
 
 
-class CNet(PyNet):
+class CNet(torch.nn.Module):
     def __init__(self, **kwargs):
         super().__init__(**kwargs) # To pass optimizer_kwargs, scheduler_kwargs, logger_kwargs to PyNet constructor
         self.pool = nn.MaxPool2d(2, 2) 
@@ -313,7 +326,7 @@ class CNet(PyNet):
         self.fc2 = nn.Linear(120, 84)
         self.fc3 = nn.Linear(84, 1)
     
-        super().define_optimizer_sheduler() # To define optimizer we have to have the layers already defined
+        #super().define_optimizer_sheduler() # To define optimizer we have to have the layers already defined
 
     def forward(self, x): 
         x = self.pool(F.relu(self.conv1(x))) 
@@ -327,7 +340,7 @@ class CNet(PyNet):
         x = self.fc3(x)
         return x
 
-class ResNet(PyNet):
+class ResNet(torch.nn.Module):
     """
     ResNet model for image classification.
     This class represents a ResNet model for image classification. It inherits from the `PyNet` class and implements the forward pass method.
@@ -389,7 +402,7 @@ class ResNet(PyNet):
             else:
                 self.dropouts.append(None)
 
-        super().define_optimizer_sheduler() # To define optimizer we have to have the layers already defined
+        #super().define_optimizer_sheduler() # To define optimizer we have to have the layers already defined
 
     def forward(self, x):
         """
@@ -422,7 +435,7 @@ class ResNet(PyNet):
             out_store.append(out)
         return out
     
-class FCNN(PyNet):
+class FCNN(torch.nn.Module):
     def __init__(self, channels, kernels, activations=None, batch_norms=None, dropouts=None, **kwargs):
         super().__init__(**kwargs) # To pass optimizer_kwargs, scheduler_kwargs, logger_kwargs to PyNet constructor
         seq_list = []
@@ -442,7 +455,7 @@ class FCNN(PyNet):
                 seq_list.append(nn.Dropout2d(dropouts[i]))
         self.seq_model = torch.nn.Sequential(*seq_list)
 
-        super().define_optimizer_sheduler() # To define optimizer we have to have the layers already defined
+        #super().define_optimizer_sheduler() # To define optimizer we have to have the layers already defined
     def forward(self, x):
         """
         Forward pass of the FCNN.
@@ -457,7 +470,7 @@ class FCNN(PyNet):
         out = self.seq_model(x)
         return out
         
-class MLP(PyNet):
+class MLP(torch.nn.Module):
     """
     Multi-Layer Perceptron (MLP) model.
 
@@ -525,7 +538,7 @@ class MLP(PyNet):
         #print(seq_list)
         self.linear_relu_stack = torch.nn.Sequential(*seq_list)
 
-        super().define_optimizer_sheduler() # To define optimizer we have to have the layers already defined
+        #super().define_optimizer_sheduler() # To define optimizer we have to have the layers already defined
     
 
     def forward(self, x):

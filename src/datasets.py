@@ -8,7 +8,12 @@ date: 2024
 import numpy
 import torch
 import os
-from typing import Any, Tuple, Iterator, Sequence
+from typing import Any, Tuple, Iterator, Sequence, TypeVar, Optional
+from torch.utils.data.distributed import Sampler
+import torch.distributed as dist
+from torch.utils.data import DataLoader
+import math
+
 import pandas as pd
 import numpy as np
 import joblib
@@ -20,9 +25,135 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logging.captureWarnings(True)
 logger = logging.getLogger(__name__)
-#logger = logging.getLogger('trainers')
 
-from torch.utils.data import DataLoader
+__all__ = ["DistributedSampler", ]
+
+T_co = TypeVar('T_co', covariant=True)
+
+
+class DistributedSampler(Sampler[T_co]):
+    r"""Sampler that restricts data loading to a subset of the dataset based on provided indices.
+
+    It is especially useful in conjunction with
+    :class:`torch.nn.parallel.DistributedDataParallel`. In such a case, each
+    process can pass a :class:`~torch.utils.data.DistributedSampler` instance as a
+    :class:`~torch.utils.data.DataLoader` sampler, and load a subset of the
+    original dataset that is exclusive to it (the class works only with the indices of the dataset).
+
+    .. note::
+        Dataset is assumed to be of constant size and that any instance of it always
+        returns the same elements in the same order.
+
+    Args:
+        indices: indices of the Dataset used for sampling.
+        num_replicas (int, optional): Number of processes participating in
+            distributed training. By default, :attr:`world_size` is retrieved from the
+            current distributed group.
+        rank (int, optional): Rank of the current process within :attr:`num_replicas`.
+            By default, :attr:`rank` is retrieved from the current distributed
+            group.
+        shuffle (bool, optional): If ``True`` (default), sampler will shuffle the
+            indices_out.
+        seed (int, optional): random seed used to shuffle the sampler if
+            :attr:`shuffle=True`. This number should be identical across all
+            processes in the distributed group. Default: ``0``.
+        drop_last (bool, optional): if ``True``, then the sampler will drop the
+            tail of the data to make it evenly divisible across the number of
+            replicas. If ``False``, the sampler will add extra indices_out to make
+            the data evenly divisible across the replicas. Default: ``False``.
+
+    .. warning::
+        In distributed mode, calling the :meth:`set_epoch` method at
+        the beginning of each epoch **before** creating the :class:`DataLoader` iterator
+        is necessary to make shuffling work properly across multiple epochs. Otherwise,
+        the same ordering will be always used.
+
+    Example::
+
+        >>> # xdoctest: +SKIP
+        >>> sampler = DistributedSampler(indices) if is_distributed else None
+        >>> loader = DataLoader(dataset, shuffle=(sampler is None),
+        ...                     sampler=sampler)
+        >>> for epoch in range(start_epoch, n_epochs):
+        ...     if is_distributed:
+        ...         sampler.set_epoch(epoch)
+        ...     train(loader)
+    """
+    indices: Sequence[int]
+    def __init__(self, indices: Sequence[int], num_replicas: Optional[int] = None,
+                 rank: Optional[int] = None, shuffle: bool = True,
+                 seed: int = 0, drop_last: bool = False) -> None:
+        if num_replicas is None:
+            if not dist.is_available():
+                raise RuntimeError("Requires distributed package to be available")
+            num_replicas = dist.get_world_size()
+        if rank is None:
+            if not dist.is_available():
+                raise RuntimeError("Requires distributed package to be available")
+            rank = dist.get_rank()
+        if rank >= num_replicas or rank < 0:
+            raise ValueError(
+                f"Invalid rank {rank}, rank should be in the interval [0, {num_replicas - 1}]")
+        self.indices = indices
+        self.num_replicas = num_replicas
+        self.rank = rank
+        self.epoch = 0
+        self.drop_last = drop_last
+        # If the dataset length is evenly divisible by # of replicas, then there
+        # is no need to drop any data, since the dataset will be split equally.
+        if self.drop_last and len(self.indices) % self.num_replicas != 0:  # type: ignore[arg-type]
+            # Split to nearest available length that is evenly divisible.
+            # This is to ensure each rank receives the same amount of data when
+            # using this Sampler.
+            self.num_samples = math.ceil(
+                (len(self.indices) - self.num_replicas) / self.num_replicas  # type: ignore[arg-type]
+            )
+        else:
+            self.num_samples = math.ceil(len(self.indices) / self.num_replicas)  # type: ignore[arg-type]
+        self.total_size = self.num_samples * self.num_replicas
+        self.shuffle = shuffle
+        self.seed = seed
+
+    def __iter__(self) -> Iterator[T_co]:
+        if self.shuffle:
+            # deterministically shuffle based on epoch and seed
+            g = torch.Generator()
+            g.manual_seed(self.seed + self.epoch)
+            indices_out = torch.randperm(len(self.indices), generator=g).tolist()  # type: ignore[arg-type]
+        else:
+            indices_out = list(range(len(self.indices)))  # type: ignore[arg-type]
+
+        if not self.drop_last:
+            # add extra samples to make it evenly divisible
+            padding_size = self.total_size - len(indices_out)
+            if padding_size <= len(indices_out):
+                indices_out += indices_out[:padding_size]
+            else:
+                indices_out += (indices_out * math.ceil(padding_size / len(indices_out)))[:padding_size]
+        else:
+            # remove tail of data to make it evenly divisible.
+            indices_out = indices_out[:self.total_size]
+        assert len(indices_out) == self.total_size
+
+        # subsample
+        indices_out = indices_out[self.rank:self.total_size:self.num_replicas]
+        assert len(indices_out) == self.num_samples
+
+        return iter(indices_out)
+
+    def __len__(self) -> int:
+        return self.num_samples
+
+    def set_epoch(self, epoch: int) -> None:
+        r"""
+        Sets the epoch for this sampler. When :attr:`shuffle=True`, this ensures all replicas
+        use a different random ordering for each epoch. Otherwise, the next iteration of this
+        sampler will yield the same ordering.
+
+        Args:
+            epoch (int): Epoch number.
+        """
+        self.epoch = epoch
 
 class SubSampler(torch.utils.data.Sampler[int]):
     """
@@ -77,6 +208,7 @@ class ChannelDataLoader(DataLoader):
         Importantly subsampling creates a sampler which is used to shuffle the data. 
         subsample_seed (int, optional): The seed value for the random number generator used for subsampling. If None, no seed will be set. Default is None.
         patch_dim (list, optional): The dimensions of the patch to sample from the image. Default is None.
+        sampler_type (str, optional): The type of sampler to use for subsampling. Default is 'serial'. Another option is 'distributed'.
         **kwargs: Additional keyword arguments to be passed to the parent DataLoader class.
 
     Attributes:
@@ -100,9 +232,16 @@ class ChannelDataLoader(DataLoader):
             # Process the data
     """
     def __init__(self, dataset, feature_channel_names=None, target_channel_names=None, 
-                 subsample_rate=None, subsample_seed=None, patch_dim=None, **kwargs):
+                 subsample_rate=None, subsample_seed=None, patch_dim=None, sampler_type='serial', 
+                 world_size = None, rank = None, gpus_per_node = None, local_rank = None,
+                 **kwargs):
         self.request_features = dataset.request_features
         self.request_targets = dataset.request_targets
+        self.sampler_type = sampler_type
+        self.world_size = world_size
+        self.rank = rank
+        self.gpus_per_node = gpus_per_node
+        self.local_rank = local_rank
         if feature_channel_names is not None:
             self.feature_channels = [self.request_features.index(channel) for channel in feature_channel_names]
         else:
@@ -133,17 +272,31 @@ class ChannelDataLoader(DataLoader):
 
         seed = kwargs.pop('seed', None) # these are only needed if subsample_rate is not None
         shuffle = kwargs.pop('shuffle', False) # these are only needed if subsample_rate is not None
-        if self.subsample_rate is not None:
-            logger.info(f"{len(dataset.features)}, {len(dataset.targets) = } samples before subsampling")
-            self.subset = np.random.permutation(int(len(dataset.features)*self.subsample_rate))
-            if self.subsample_rate > 1:
-                self.subset = self.subset % len(dataset.features)
+
+        if self.subsample_rate is None:
+            self.subsample_rate = 1
+
+        
+        logger.info(f"{len(dataset.features)}, {len(dataset.targets) = } samples before subsampling")
+        self.subset = np.random.permutation(int(len(dataset.features)*self.subsample_rate))
+        if self.subsample_rate > 1:
+            self.subset = self.subset % len(dataset.features)  # if subsample_rate > 1, then we want to loop over the dataset multiple times
+            
+        logger.info(f"{len(self.subset) = } samples after subsampling")
+        
+        if sampler_type == 'distributed':
+            self.sampler = torch.utils.data.distributed.DistributedSampler(self.subset,
+                                                                    num_replicas=self.world_size,
+                                                                    rank=self.rank)
+        elif sampler_type == 'serial':
             self.sampler = SubSampler(self.subset, seed=seed, shuffle=shuffle)
-            logger.info(f" {len(self.subset) = } samples after subsampling")
-            super().__init__(dataset, sampler=self.sampler, **kwargs)
         else:
-            logger.info(f"Using full dataset (no subsampling)")
-            super().__init__(dataset, **kwargs) # normal operation without specifying subsampling
+            raise ValueError(f"Sampler type {sampler_type} not recognized")
+            #super().__init__(dataset, sampler=self.sampler, **kwargs)
+        #else:
+        #    logger.info(f"Using full dataset (no subsampling)")
+            #super().__init__(dataset, **kwargs) # normal operation without specifying subsampling
+        super().__init__(dataset, sampler=self.sampler, **kwargs)
     
     def __iter__(self):
         for features, targets in super().__iter__():

@@ -12,12 +12,13 @@ import torch
 import pickle
 import warnings
 import psutil
-
+import argparse
 import copy
 import os
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 import json
-
-from torch.utils.data import DataLoader
+from socket import gethostname
 
 from . import datasets
 from . import models
@@ -28,7 +29,16 @@ logging.basicConfig(level=logging.INFO)
 logging.captureWarnings(True)
 logger = logging.getLogger(__name__)
 
+class CustomFilter(logging.Filter):
+    def __init__(self, rank, local_rank):
+        super().__init__()
+        self.rank = rank
+        self.local_rank = local_rank
 
+    def filter(self, record):
+        record.rank = self.rank
+        record.local_rank = self.local_rank
+        return True
     
 
 class Trainer:
@@ -70,7 +80,8 @@ class Trainer:
 
     """
     def __init__(self, dataset_kwargs=None, load_data_kwargs=None, model_kwargs=None, 
-                 device=None,work_dir=None, log_name="training.log", log_level="INFO"):
+                 device=None, work_dir=None, log_name=None, log_level=None,
+                 world_size=None, rank=None, gpus_per_node=None, local_rank=None, num_workers=None):
         """
         Initialize a Trainer object.
 
@@ -81,6 +92,10 @@ class Trainer:
             device (str, optional): Device to use for training. Defaults to None.
             work_dir (str, optional): Directory to save training outputs. Defaults to None.
         """
+        if log_name == None:
+            log_name = "training.log"
+        if log_level == None:
+            log_level = "INFO"
         self.work_dir = work_dir
         self.dataset_kwargs = dataset_kwargs
         self.load_data_kwargs = load_data_kwargs
@@ -88,6 +103,11 @@ class Trainer:
         self.device = device
         self.log_name = log_name
         self.log_level = getattr(logging, log_level)
+        self.world_size = world_size
+        self.rank = rank
+        self.gpus_per_node = gpus_per_node
+        self.local_rank = local_rank
+        self.num_workers = num_workers
         
         # === Deal with the configuration file === #
         if work_dir is not None:
@@ -97,6 +117,33 @@ class Trainer:
                 with open(config_file, 'r') as f:
                     config = json.load(f)
                 logger.warning(f"Config file {config_file} found -> loading configuration")
+                assert config['work_dir'] == self.work_dir, f"work_dir in the config file is different from the current work_dir: {config['work_dir']} != {self.work_dir}"
+                # === Applying local changes to the configuration file === #
+                # === this is useful if we would like to load traner object with different parameters === #
+                # === and particularly useful when trainging and testing on different architectures === #
+                if self.dataset_kwargs is not None:
+                    config['dataset_kwargs'] = self.dataset_kwargs
+                if self.load_data_kwargs is not None:
+                    config['load_data_kwargs'] = self.load_data_kwargs
+                if self.model_kwargs is not None:
+                    config['model_kwargs'] = self.model_kwargs
+                if self.device is not None:
+                    config['device'] = self.device
+                if self.log_name is not None:
+                    config['log_name'] = self.log_name
+                if self.log_level is not None:
+                    config['log_level'] = self.log_level
+                if self.world_size is not None:
+                    config['world_size'] = self.world_size
+                if self.rank is not None:
+                    config['rank'] = self.rank
+                if self.gpus_per_node is not None:
+                    config['gpus_per_node'] = self.gpus_per_node
+                if self.local_rank is not None:
+                    config['local_rank'] = self.local_rank
+                if self.num_workers is not None:
+                    config['num_workers'] = self.num_workers
+                
                 self.__dict__.update(**config) # update the attributes with the configuration file
             else:
                 config = copy.deepcopy(self.__dict__) # save the attributes to the config file
@@ -122,19 +169,24 @@ class Trainer:
         self.set_dataset(datalabel="test", samples_file=test_sample)
         
         self.comprehend_config()
-    
+
     def set_logger(self, log_dir=None):
         if log_dir is not None:
             f_handler = logging.FileHandler(log_dir)
             f_handler.setLevel(self.log_level)
             warnings_logger = logging.getLogger("py.warnings")
-            f_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            f_format = logging.Formatter('@rank: %(rank)s - @local: %(local_rank)s at %(asctime)s - %(name)s - %(levelname)s - %(message)s')
             f_handler.setFormatter(f_format)
+
+            # Add the custom filter to the handler
+            custom_filter = CustomFilter(self.rank, self.local_rank)
+            f_handler.addFilter(custom_filter)
+
             logger.addHandler(f_handler)
             warnings_logger.addHandler(f_handler)
             logger.setLevel(self.log_level)
             logger.info(f" ")
-            logger.info(f"========Logging to {log_dir} on level {self.log_level}===========") 
+            logger.info(f"===Logging to {log_dir} on level {self.log_level}, @ {self.rank=}, {self.local_rank=}, {self.device=} ===") 
             logger.info(f"host: {os.uname().nodename}")
             logger.info(f" ")
             # Define the extra loggers and add the same FileHandler to them
@@ -198,17 +250,14 @@ class Trainer:
 
         if isinstance(model_kwargs, dict): # if model is not instantiated we create it
             logger.warning(f"Creating new model. Note this will replace any previous model")
-            model_name = model_kwargs.pop('model')
-            model_class = getattr(models, model_name)
-            self.model = model_class(**model_kwargs) # < ======= TODO: Add multiple models here
-            logger.info(f"Successfully parsed the {model_name} class")
+            
+            self.model = models.PyNet(**model_kwargs, rank=self.rank, local_rank=self.local_rank) 
+            #logger.info(f"Successfully parsed the {model_name} class")
             logger.info(f"Creating object: {self.model}")
         else: # if model is already instantiated
             logger.info(f"Model provided as an input {model_kwargs =}")
             self.model = model_kwargs
-        self.device = self._get_device(device)
-        self.model.to(self.device)
-        logger.info(f"{self.model.device = }")
+        logger.info(f"{self.device = } on {self.local_rank = }")
         
         logger.info(f"Code version git hash: {ut.get_git_revision_hash()}") # TODO: add this to the config file and raise error if it doesn't coincide wiht the current version
 
@@ -226,8 +275,10 @@ class Trainer:
         Returns:
             None
         """
-        self.train_loader = datasets.ChannelDataLoader(self.train_dataset, **load_data_kwargs['train_loader_kwargs'])
-        self.val_loader = datasets.ChannelDataLoader(self.val_dataset, **load_data_kwargs['val_loader_kwargs'])
+        self.train_loader = datasets.ChannelDataLoader(self.train_dataset, sampler_type='distributed', world_size = self.world_size, 
+                                                       rank = self.rank, gpus_per_node = self.gpus_per_node, local_rank = self.local_rank,
+                                                        num_workers=self.num_workers, pin_memory=True, **load_data_kwargs['train_loader_kwargs'])
+        self.val_loader = datasets.ChannelDataLoader(self.val_dataset, sampler_type='serial', **load_data_kwargs['val_loader_kwargs'])
 
     def load_run(self, run):
         """
@@ -280,7 +331,7 @@ class Trainer:
         trial = None
         if config is not None:
             new_config = copy.deepcopy(config) # to avoid changing the original dictionary
-            trial = new_config.pop('trial',None) # handling optuna trials
+            trial = new_config.pop('trial',None) # handling optuna trials # TODO: check that this is working in distributed mode
 
             for key in new_config['dataset_kwargs']:
                 if key in new_config['dataset_kwargs'] and new_config['dataset_kwargs'][key] != self.config['dataset_kwargs'][key]:
@@ -289,33 +340,37 @@ class Trainer:
             self.config = new_config
             self.comprehend_config()
             if self.run != '': # if we are running a trial, we need to save config to subdirectory
-                if os.path.exists(f"{self.work_dir}/{self.run}/config.json"):
-                    raise FileExistsError(f"Config file {self.work_dir}/{self.run}/config.json already exists. Overwriting not allowed!")
-                if self.work_dir is not None:
-                    os.makedirs(os.path.dirname(f"{self.work_dir}/{self.run}/"), exist_ok=True)
-                    self.set_logger(f'{self.work_dir}/{self.run}/run.log')
-                logger.info(f"Saving the new configuration to {self.work_dir}/{self.run}/config.json")
+                if self.local_rank == 0:
+                    if os.path.exists(f"{self.work_dir}/{self.run}/config.json"):
+                        raise FileExistsError(f"Config file {self.work_dir}/{self.run}/config.json already exists. Overwriting not allowed!")
+                    if self.work_dir is not None:
+                        os.makedirs(os.path.dirname(f"{self.work_dir}/{self.run}/"), exist_ok=True)
+                        self.set_logger(f'{self.work_dir}/{self.run}/run.log')
+                    logger.info(f"Saving the new configuration to {self.work_dir}/{self.run}/config.json")
                 
-                config_file = os.path.join(f"{self.work_dir}/{self.run}/", 'config.json')
-                try:
-                    with open(config_file, 'w') as f:
-                        f.write(json.dumps(self.config, indent=4))
-                except Exception as e:
-                    logger.error(f"Error saving configuration file: {e}")
+                    config_file = os.path.join(f"{self.work_dir}/{self.run}/", 'config.json')
+                    try:
+                        with open(config_file, 'w') as f:
+                            f.write(json.dumps(self.config, indent=4))
+                    except Exception as e:
+                        logger.error(f"Error saving configuration file: {e}")
+                else:
+                    if not os.path.exists(f"{self.work_dir}/{self.run}/config.json"):
+                        logger.warning(f"Config file {self.work_dir}/{self.run}/config.json not found, which means that the local_rank 0 did not save the configuration file")
 
         # Getting % usage of virtual_memory ( 3rd field)
         logger.info(f'Prior to fit: RAM memory % used: {psutil.virtual_memory()[2]}, RAM Used (GB):, {psutil.virtual_memory()[3]/1000000000}, process RAM usage (GB): {psutil.Process(os.getpid()).memory_info().rss / 1024 ** 3}')
         best_loss = self.model.fit(self.train_loader, self.val_loader, trial=trial)   
         logger.info(f'After fit: RAM memory % used: {psutil.virtual_memory()[2]}, RAM Used (GB):, {psutil.virtual_memory()[3]/1000000000}, process RAM usage (GB): {psutil.Process(os.getpid()).memory_info().rss / 1024 ** 3}')
-
-        if self.work_dir is not None:
-            logger.info(f"Saving the model weights and loss history to {self.work_dir}/{self.run}/")
-            os.makedirs(os.path.dirname(f"{self.work_dir}/{self.run}/"), exist_ok=True)
-            model_path = f"{self.work_dir}/{self.run}/model.pth"
-            torch.save(self.model.state_dict(), model_path)
-            loss_path = f"{self.work_dir}/{self.run}/loss_dict.pkl"
-            with open(loss_path, 'wb') as f:
-                pickle.dump( {'train_loss': self.model.train_loss_,'val_loss': self.model.val_loss_}, f)
+        if self.local_rank == 0:
+            if self.work_dir is not None:
+                logger.info(f"Saving the model weights and loss history to {self.work_dir}/{self.run}/")
+                os.makedirs(os.path.dirname(f"{self.work_dir}/{self.run}/"), exist_ok=True)
+                model_path = f"{self.work_dir}/{self.run}/model.pth"
+                torch.save(self.model.state_dict(), model_path)
+                loss_path = f"{self.work_dir}/{self.run}/loss_dict.pkl"
+                with open(loss_path, 'wb') as f:
+                    pickle.dump( {'train_loss': self.model.train_loss_,'val_loss': self.model.val_loss_}, f)
        
         return best_loss
 
@@ -332,3 +387,40 @@ class Trainer:
 
         return dev
 
+def main():
+
+    # Training settings
+    parser = argparse.ArgumentParser(description='Work Directory')
+    parser.add_argument('--work_dir', type=str, default='./',
+                        help='Name of the work directory, default to the same directory')
+    args = parser.parse_args()
+    
+    world_size = int(os.environ["WORLD_SIZE"])
+    rank = int(os.environ["SLURM_PROCID"])
+    gpus_per_node = int(os.environ["SLURM_GPUS_ON_NODE"])
+    assert gpus_per_node == torch.cuda.device_count()
+    print(f"Hello from rank {rank} of {world_size} on {gethostname()} where there are" \
+          f" {gpus_per_node} allocated GPUs per node.", flush=True)
+
+    dist.init_process_group("nccl", rank=rank, world_size=world_size) # initialize the process group
+
+    if rank == 0: print(f"Group initialized? {dist.is_initialized()}", flush=True)
+
+    local_rank = rank - gpus_per_node * (rank // gpus_per_node)
+    torch.cuda.set_device(local_rank)
+    num_workers=int(os.environ["SLURM_CPUS_PER_TASK"])
+    print(f"host: {gethostname()}, rank: {rank}, local_rank: {local_rank}, \
+                gpus_per_node: {gpus_per_node}, num_workers: {num_workers}")
+    
+    print(f"Creating Trainer object with {args.work_dir = }")
+    trainer = Trainer(work_dir=args.work_dir, world_size=world_size, rank=rank, gpus_per_node=gpus_per_node, 
+                      local_rank=local_rank, num_workers=num_workers)
+    config = copy.deepcopy(trainer.config)
+    config['run'] = '0'
+    #logger = logging.getLogger('trainer')
+    trainer.fit(config=config)
+
+    dist.destroy_process_group()
+
+if __name__ == '__main__':
+    main()
