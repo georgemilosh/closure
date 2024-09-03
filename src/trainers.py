@@ -15,8 +15,8 @@ import psutil
 import argparse
 import copy
 import os
+import shutil
 import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
 import json
 from socket import gethostname
 
@@ -30,14 +30,19 @@ logging.captureWarnings(True)
 logger = logging.getLogger(__name__)
 
 class CustomFilter(logging.Filter):
-    def __init__(self, rank, local_rank):
+    """
+    A custom filter class for logging that will be used to prepend the rank, local_rank and nodename to the log messages.
+    """
+    def __init__(self, rank, local_rank, nodename):
         super().__init__()
         self.rank = rank
         self.local_rank = local_rank
+        self.nodename = nodename
 
     def filter(self, record):
         record.rank = self.rank
         record.local_rank = self.local_rank
+        record.nodename = self.nodename
         return True
     
 
@@ -80,7 +85,7 @@ class Trainer:
 
     """
     def __init__(self, dataset_kwargs=None, load_data_kwargs=None, model_kwargs=None, 
-                 device=None, work_dir=None, log_name=None, log_level=None,
+                 device=None, work_dir=None, log_name=None, log_level=None, force=False,
                  world_size=None, rank=None, gpus_per_node=None, local_rank=None, num_workers=None):
         """
         Initialize a Trainer object.
@@ -108,6 +113,7 @@ class Trainer:
         self.gpus_per_node = gpus_per_node
         self.local_rank = local_rank
         self.num_workers = num_workers
+        self.force = force
         
         # === Deal with the configuration file === #
         if work_dir is not None:
@@ -175,11 +181,11 @@ class Trainer:
             f_handler = logging.FileHandler(log_dir)
             f_handler.setLevel(self.log_level)
             warnings_logger = logging.getLogger("py.warnings")
-            f_format = logging.Formatter('@rank: %(rank)s - @local: %(local_rank)s at %(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            f_format = logging.Formatter('%(nodename)s | @rank: %(rank)s - @local: %(local_rank)s at %(asctime)s - %(name)s - %(levelname)s | %(message)s')
             f_handler.setFormatter(f_format)
 
             # Add the custom filter to the handler
-            custom_filter = CustomFilter(self.rank, self.local_rank)
+            custom_filter = CustomFilter(self.rank, self.local_rank, os.uname().nodename)
             f_handler.addFilter(custom_filter)
 
             logger.addHandler(f_handler)
@@ -237,6 +243,7 @@ class Trainer:
         Returns:
             None
         """
+        logger.info("Comprehending the configuration settings") # it is called once during creation of the Trainer object and once during the fit method
         # === Deal with the model === #
         config = copy.deepcopy(self.config)
         #dataset_kwargs = config['dataset_kwargs']
@@ -253,7 +260,7 @@ class Trainer:
             
             self.model = models.PyNet(**model_kwargs, rank=self.rank, local_rank=self.local_rank) 
             #logger.info(f"Successfully parsed the {model_name} class")
-            logger.info(f"Creating object: {self.model}")
+            logger.info(f"Creating object: {self.model} which contains {self.model.model} as the model")
         else: # if model is already instantiated
             logger.info(f"Model provided as an input {model_kwargs =}")
             self.model = model_kwargs
@@ -300,7 +307,7 @@ class Trainer:
             model_file = f"{self.config['work_dir']}/{run}/model.pth"    # < ======= TODO: Add multiple models here
             loss_file = f"{self.config['work_dir']}/{run}/loss_dict.pkl"
             logger.info(f"Loading model weights from {model_file}")
-            self.model.load_state_dict(torch.load(model_file, map_location=self.device))
+            self.model.model.load_state_dict(torch.load(model_file, map_location=self.device))
             with open(loss_file, 'rb') as f:
                 logger.info(f"Loading loss dictionary from {loss_file}")
                 loss_dict = pickle.load(f)
@@ -342,7 +349,11 @@ class Trainer:
             if self.run != '': # if we are running a trial, we need to save config to subdirectory
                 if self.local_rank == 0:
                     if os.path.exists(f"{self.work_dir}/{self.run}/config.json"):
-                        raise FileExistsError(f"Config file {self.work_dir}/{self.run}/config.json already exists. Overwriting not allowed!")
+                        if self.force:
+                            logger.warning(f"Config file {self.work_dir}/{self.run}/config.json already exists. Overwriting due to --force!")
+                            shutil.rmtree(f"{self.work_dir}/{self.run}/")
+                        else:
+                            raise FileExistsError(f"Config file {self.work_dir}/{self.run}/config.json already exists. Overwriting not allowed!")
                     if self.work_dir is not None:
                         os.makedirs(os.path.dirname(f"{self.work_dir}/{self.run}/"), exist_ok=True)
                         self.set_logger(f'{self.work_dir}/{self.run}/run.log')
@@ -367,7 +378,7 @@ class Trainer:
                 logger.info(f"Saving the model weights and loss history to {self.work_dir}/{self.run}/")
                 os.makedirs(os.path.dirname(f"{self.work_dir}/{self.run}/"), exist_ok=True)
                 model_path = f"{self.work_dir}/{self.run}/model.pth"
-                torch.save(self.model.state_dict(), model_path)
+                torch.save(self.model.model.state_dict(), model_path)
                 loss_path = f"{self.work_dir}/{self.run}/loss_dict.pkl"
                 with open(loss_path, 'wb') as f:
                     pickle.dump( {'train_loss': self.model.train_loss_,'val_loss': self.model.val_loss_}, f)
@@ -393,6 +404,10 @@ def main():
     parser = argparse.ArgumentParser(description='Work Directory')
     parser.add_argument('--work_dir', type=str, default='./',
                         help='Name of the work directory, default to the same directory')
+    parser.add_argument('--force', action=argparse.BooleanOptionalAction,
+                        help='Force the training to start even if the run exists')
+    parser.add_argument('--run', type=str, default=None,
+                        help='Name of the run directory, default to None which means that run directory will be used rather than subdirectory')
     args = parser.parse_args()
     
     world_size = int(os.environ["WORLD_SIZE"])
@@ -414,11 +429,14 @@ def main():
     
     print(f"Creating Trainer object with {args.work_dir = }")
     trainer = Trainer(work_dir=args.work_dir, world_size=world_size, rank=rank, gpus_per_node=gpus_per_node, 
-                      local_rank=local_rank, num_workers=num_workers)
-    config = copy.deepcopy(trainer.config)
-    config['run'] = '0'
-    #logger = logging.getLogger('trainer')
-    trainer.fit(config=config)
+                      local_rank=local_rank, num_workers=num_workers, force=args.force)
+    
+    if args.run is not None:
+        config = copy.deepcopy(trainer.config)
+        config['run'] = str(args.run)
+        trainer.fit(config=config)
+    else:
+        trainer.fit()
 
     dist.destroy_process_group()
 

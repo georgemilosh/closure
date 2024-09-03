@@ -113,23 +113,29 @@ class DistributedSampler(Sampler[T_co]):
         self.total_size = self.num_samples * self.num_replicas
         self.shuffle = shuffle
         self.seed = seed
+        logger.info(f"Using DistributedSampler with {self.num_replicas = }, {self.rank = }, {self.num_samples = }, {self.total_size = }, {len(self.indices) = }")
 
     def __iter__(self) -> Iterator[T_co]:
         if self.shuffle:
             # deterministically shuffle based on epoch and seed
             g = torch.Generator()
             g.manual_seed(self.seed + self.epoch)
-            indices_out = torch.randperm(len(self.indices), generator=g).tolist()  # type: ignore[arg-type]
+            indices_out = list(self.indices[torch.randperm(len(self.indices), generator=g).tolist()])  # type: ignore[arg-type]
         else:
-            indices_out = list(range(len(self.indices)))  # type: ignore[arg-type]
+            indices_out = list(self.indices) #self.indices[list(range(len(self.indices)))]  # type: ignore[arg-type]
 
         if not self.drop_last:
             # add extra samples to make it evenly divisible
             padding_size = self.total_size - len(indices_out)
-            if padding_size <= len(indices_out):
-                indices_out += indices_out[:padding_size]
-            else:
-                indices_out += (indices_out * math.ceil(padding_size / len(indices_out)))[:padding_size]
+            try:
+                if padding_size <= len(indices_out):
+                    indices_out += indices_out[:padding_size]
+                else:
+                    indices_out += (indices_out * math.ceil(padding_size / len(indices_out)))[:padding_size]
+            except Exception as e:
+                logger.error(f"{len(indices_out) = }, {padding_size = }, {len(indices_out[:padding_size]) = }, {len(indices_out * math.ceil(padding_size / len(indices_out))) = }")
+                #logger.error(f"{indices_out = }")
+                raise e
         else:
             # remove tail of data to make it evenly divisible.
             indices_out = indices_out[:self.total_size]
@@ -285,9 +291,7 @@ class ChannelDataLoader(DataLoader):
         logger.info(f"{len(self.subset) = } samples after subsampling")
         
         if sampler_type == 'distributed':
-            self.sampler = torch.utils.data.distributed.DistributedSampler(self.subset,
-                                                                    num_replicas=self.world_size,
-                                                                    rank=self.rank)
+            self.sampler = DistributedSampler(self.subset, num_replicas=self.world_size, rank=self.rank)
         elif sampler_type == 'serial':
             self.sampler = SubSampler(self.subset, seed=seed, shuffle=shuffle)
         else:

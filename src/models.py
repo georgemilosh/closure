@@ -43,10 +43,11 @@ class PyNet:
                 rank=None, local_rank=None, **kwargs): 
         model_class =  globals() [model] #getattr(__name__, model)
         self.local_rank = local_rank
+        self.rank = rank
         logger.info(f"{torch.cuda.is_available() = }")
-        self.model = model_class(**kwargs).to(local_rank)
-        logger.info(f"Initializing model {self.model}")
-        self.dpp_model = DDP(self.model, device_ids=[self.local_rank])
+        self.model_ = model_class(**kwargs).to(local_rank)
+        logger.info(f"Initializing model {self.model_}")
+        self.model = DDP(self.model_, device_ids=[self.local_rank])
         if optimizer_kwargs is None:
             self.optimizer_kwargs = {}
         else:
@@ -114,13 +115,13 @@ class PyNet:
         """
         Get the device of the model.
         """
-        return next(self.parameters()).device
+        return next(self.model.parameters()).device
     @property
     def total_parameters(self):
         """
         Get the parameters of the model.
         """
-        return sum(p.numel() for p in self.parameters())
+        return sum(p.numel() for p in self.model.parameters())
     
     def predict(self, features):
         """
@@ -130,7 +131,7 @@ class PyNet:
         Returns:
             torch.Tensor: The predicted output tensor.
         """
-        self.eval()
+        self.model.eval()
         predictions = []
         loader = DataLoader(features, batch_size=32)
         for features in loader:
@@ -249,38 +250,43 @@ class PyNet:
                     self.train_loss_[key] = []
                     self.val_loss_[key] = []
                 self.train_loss_[key].append(tr_loss[key])
-                self.val_loss_[key].append(val_loss[key])
+                if self.rank == 0:
+                    self.val_loss_[key].append(val_loss[key])
             
             epoch_time = time.time() - epoch_start_time
             
-            if val_loss["criterion"] < best_loss:
-                best_loss= val_loss["criterion"]
-                #torch.save(self.model.state_dict(), self.work_dir) # this saves every epoch if improvement
-                best_weights = copy.deepcopy(self.state_dict())
-                epoch_best = epoch
-            self._logging(tr_loss, val_loss, epoch+1,self.epochs, epoch_time, **self.logger_kwargs)
-            if self.scheduler is not None:
-                try:
-                    self.lr.append(self.scheduler.get_last_lr())
-                except AttributeError: # Compatability with an earlier version of Pytorch
-                    self.lr.append(self.scheduler._last_lr)
-            # ---- early stopping ----
-            if self.early_stopping is not None:
-                if epoch - epoch_best > self.early_stopping:
-                    logger.warning(f"Early stopping engaged at epoch {epoch}")
-                    break
-            
-            # ---- handle optuna ----
-            if trial is not None:
-                trial.report(val_loss['criterion'], epoch)
-                # Handle pruning based on the intermediate value.
-                if trial.should_prune():
-                    logger.info("Raising TrialPruned exception.")
-                    raise optuna.exceptions.TrialPruned()
+            if self.rank == 0:
+                if val_loss["criterion"] < best_loss:
+                    best_loss= val_loss["criterion"]
+                    #torch.save(self.model.state_dict(), self.work_dir) # this saves every epoch if improvement
+                    best_weights = copy.deepcopy(self.model.state_dict())
+                    epoch_best = epoch
+                self._logging(tr_loss, val_loss, epoch+1,self.epochs, epoch_time, **self.logger_kwargs)
+                if self.scheduler is not None:
+                    try:
+                        self.lr.append(self.scheduler.get_last_lr())
+                    except AttributeError: # Compatability with an earlier version of Pytorch
+                        self.lr.append(self.scheduler._last_lr)
+                # ---- early stopping ----
+                if self.early_stopping is not None:
+                    if epoch - epoch_best > self.early_stopping:
+                        logger.warning(f"Early stopping engaged at epoch {epoch}")
+                        break
                 
-        # restore model and return best accuracy
-        logger.info(f"Best loss: {best_loss} at epoch {epoch_best+1}, restoring the corresponding weights...")
-        self.load_state_dict(best_weights)
+                # ---- handle optuna ----
+                if trial is not None:
+                    trial.report(val_loss['criterion'], epoch)
+                    # Handle pruning based on the intermediate value.
+                    if trial.should_prune():
+                        logger.info("Raising TrialPruned exception.")
+                        raise optuna.exceptions.TrialPruned()
+            else:
+                self._logging(tr_loss, None, epoch+1,self.epochs, epoch_time, **self.logger_kwargs)
+                
+        if self.rank == 0:
+            # restore model and return best accuracy
+            logger.info(f"Best loss: {best_loss} at epoch {epoch_best+1}, restoring the corresponding weights...")
+            self.model.load_state_dict(best_weights)
 
         total_time = time.time() - total_start_time
 
