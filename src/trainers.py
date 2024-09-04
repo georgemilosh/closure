@@ -19,6 +19,7 @@ import shutil
 import torch.distributed as dist
 import json
 from socket import gethostname
+import csv
 
 from . import datasets
 from . import models
@@ -33,13 +34,15 @@ class CustomFilter(logging.Filter):
     """
     A custom filter class for logging that will be used to prepend the rank, local_rank and nodename to the log messages.
     """
-    def __init__(self, rank, local_rank, nodename):
+    def __init__(self, job_id, rank, local_rank, nodename):
         super().__init__()
+        self.job_id = job_id
         self.rank = rank
         self.local_rank = local_rank
         self.nodename = nodename
 
     def filter(self, record):
+        record.job_id = self.job_id
         record.rank = self.rank
         record.local_rank = self.local_rank
         record.nodename = self.nodename
@@ -85,7 +88,7 @@ class Trainer:
 
     """
     def __init__(self, dataset_kwargs=None, load_data_kwargs=None, model_kwargs=None, 
-                 device=None, work_dir=None, log_name=None, log_level=None, force=False,
+                 device=None, work_dir=None, log_name=None, log_level=None, force=False, timing_name=None,
                  world_size=None, rank=None, gpus_per_node=None, local_rank=None, num_workers=None):
         """
         Initialize a Trainer object.
@@ -114,6 +117,7 @@ class Trainer:
         self.local_rank = local_rank
         self.num_workers = num_workers
         self.force = force
+        self.timing_name = timing_name
         
         # === Deal with the configuration file === #
         if work_dir is not None:
@@ -176,16 +180,24 @@ class Trainer:
         
         self.comprehend_config()
 
+    def create_empty_csv(file_path):
+        with open(file_path, 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(['Host', 'Rank', 'Local Rank', 'Time'])
+
     def set_logger(self, log_dir=None):
         if log_dir is not None:
             f_handler = logging.FileHandler(log_dir)
             f_handler.setLevel(self.log_level)
             warnings_logger = logging.getLogger("py.warnings")
-            f_format = logging.Formatter('%(nodename)s | @rank: %(rank)s - @local: %(local_rank)s at %(asctime)s - %(name)s - %(levelname)s | %(message)s')
+            job_id = ""
+            if "SLURM_JOB_ID" in os.environ:
+                job_id = f'job:{os.environ["SLURM_JOB_ID"]}'
+            f_format = logging.Formatter('%(job_id)s | %(nodename)s | @rank: %(rank)s | @local: %(local_rank)s at %(asctime)s | %(levelname)s | %(name)s  | \t %(message)s')
             f_handler.setFormatter(f_format)
 
             # Add the custom filter to the handler
-            custom_filter = CustomFilter(self.rank, self.local_rank, os.uname().nodename)
+            custom_filter = CustomFilter(job_id, self.rank, self.local_rank, os.uname().nodename)
             f_handler.addFilter(custom_filter)
 
             logger.addHandler(f_handler)
@@ -347,19 +359,18 @@ class Trainer:
             self.config = new_config
             self.comprehend_config()
             if self.run != '': # if we are running a trial, we need to save config to subdirectory
-                if self.local_rank == 0:
+                if self.rank == 0:  #self.local_rank == 0:
+                    config_dir = os.path.join(self.work_dir, self.run)
+                    config_file = os.path.join(config_dir, 'config.json')
                     if os.path.exists(f"{self.work_dir}/{self.run}/config.json"):
                         if self.force:
                             logger.warning(f"Config file {self.work_dir}/{self.run}/config.json already exists. Overwriting due to --force!")
                             shutil.rmtree(f"{self.work_dir}/{self.run}/")
                         else:
                             raise FileExistsError(f"Config file {self.work_dir}/{self.run}/config.json already exists. Overwriting not allowed!")
-                    if self.work_dir is not None:
-                        os.makedirs(os.path.dirname(f"{self.work_dir}/{self.run}/"), exist_ok=True)
-                        self.set_logger(f'{self.work_dir}/{self.run}/run.log')
-                    logger.info(f"Saving the new configuration to {self.work_dir}/{self.run}/config.json")
-                
-                    config_file = os.path.join(f"{self.work_dir}/{self.run}/", 'config.json')
+                    # Ensure the directory exists before writing the config file
+                    os.makedirs(config_dir, exist_ok=True)
+                    logger.info(f"Saving the new configuration to {config_file}")
                     try:
                         with open(config_file, 'w') as f:
                             f.write(json.dumps(self.config, indent=4))
@@ -367,7 +378,10 @@ class Trainer:
                         logger.error(f"Error saving configuration file: {e}")
                 else:
                     if not os.path.exists(f"{self.work_dir}/{self.run}/config.json"):
-                        logger.warning(f"Config file {self.work_dir}/{self.run}/config.json not found, which means that the local_rank 0 did not save the configuration file")
+                        logger.warning(f"Config file {self.work_dir}/{self.run}/config.json not found, which means that the rank=0 did not yet save the configuration file")
+                if self.work_dir is not None:
+                        os.makedirs(os.path.dirname(f"{self.work_dir}/{self.run}/"), exist_ok=True)
+                        self.set_logger(f'{self.work_dir}/{self.run}/run.log')
 
         # Getting % usage of virtual_memory ( 3rd field)
         logger.info(f'Prior to fit: RAM memory % used: {psutil.virtual_memory()[2]}, RAM Used (GB):, {psutil.virtual_memory()[3]/1000000000}, process RAM usage (GB): {psutil.Process(os.getpid()).memory_info().rss / 1024 ** 3}')
@@ -381,7 +395,7 @@ class Trainer:
                 torch.save(self.model.model.state_dict(), model_path)
                 loss_path = f"{self.work_dir}/{self.run}/loss_dict.pkl"
                 with open(loss_path, 'wb') as f:
-                    pickle.dump( {'train_loss': self.model.train_loss_,'val_loss': self.model.val_loss_}, f)
+                    pickle.dump( {'train_loss': self.model.train_loss_,'val_loss': self.model.val_loss_,'time': self.model.total_time}, f)
        
         return best_loss
 
@@ -399,7 +413,6 @@ class Trainer:
         return dev
 
 def main():
-
     # Training settings
     parser = argparse.ArgumentParser(description='Work Directory')
     parser.add_argument('--work_dir', type=str, default='./',
@@ -408,6 +421,8 @@ def main():
                         help='Force the training to start even if the run exists')
     parser.add_argument('--run', type=str, default=None,
                         help='Name of the run directory, default to None which means that run directory will be used rather than subdirectory')
+    parser.add_argument('--timing_name', type=str, default=False,
+                        help='Name of the timing CSV file. If not provided no timing file will be created')
     args = parser.parse_args()
     
     world_size = int(os.environ["WORLD_SIZE"])
@@ -429,7 +444,7 @@ def main():
     
     print(f"Creating Trainer object with {args.work_dir = }")
     trainer = Trainer(work_dir=args.work_dir, world_size=world_size, rank=rank, gpus_per_node=gpus_per_node, 
-                      local_rank=local_rank, num_workers=num_workers, force=args.force)
+                      local_rank=local_rank, num_workers=num_workers, force=args.force, timing_name=args.timing_name)
     
     if args.run is not None:
         config = copy.deepcopy(trainer.config)

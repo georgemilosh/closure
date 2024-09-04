@@ -181,8 +181,6 @@ class PyNet:
         else:
             self.model.eval()
         num_batches = len(loader)
-        logger.info(f"Forward pass has {num_batches} batches.")
-
         if self.metrics is not None:
             running_metrics = {metric._get_name(): 0.0 for metric in self.metrics}
         else:
@@ -205,7 +203,6 @@ class PyNet:
             if self.metrics is not None:
                 for metric in self.metrics:
                     running_metrics[metric._get_name()] += self._compute_loss(out, targets, metric).item()
-        
 
         for key in running_metrics:
             running_metrics[key] /= num_batches
@@ -236,6 +233,7 @@ class PyNet:
         best_loss = torch.inf  # track best loss
         epoch_best = 0
         self.lr = []
+        num_batches_train = len(train_loader)
         # ---- train process ----
         for epoch in range(self.epochs):
             epoch_start_time = time.time() # track epoch time
@@ -289,7 +287,9 @@ class PyNet:
             self.model.load_state_dict(best_weights)
 
         total_time = time.time() - total_start_time
-
+        self.total_time = total_time
+        logger.info(f"Each forward pass had {num_batches_train} train batches.")
+        logger.info(f"Number of samples per batch: {len(next(iter(train_loader))[0]) = }")
         # final message
         logger.info(f"""End of training on | {self.rank = }, {self.device = }. Total time: {round(total_time, 5)} seconds""")
         return best_loss

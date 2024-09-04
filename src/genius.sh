@@ -2,17 +2,16 @@
 #SBATCH --account=lp_cmpa
 #SBATCH --clusters=genius
 #SBATCH --partition=gpu_p100
-#SBATCH --job-name=job1-2-8-     # create a short name for your job
-#SBATCH --nodes=1               # node count 
-#SBATCH --gres=gpu:2             # number of allocated gpus per node ### Note: --gres=gpu:x should equal to ntasks-per-node
-#SBATCH --ntasks-per-node=2      # total number of tasks per node
-#SBATCH --cpus-per-task=8        # cpu-cores per task (>1 if multi-threaded tasks)
-#SBATCH --mem=32G                # total memory per node (4 GB per cpu-core is default)
-#SBATCH --time=00:15:00          # total run time limit (HH:MM:SS)
+#SBATCH --mem=32G                      # total memory per node (4 GB per cpu-core is default)
+#SBATCH --time=00:30:00                # total run time limit (HH:MM:SS)
 #SBATCH --output=%x%j.out
 #SBATCH --error=%x%j.err
 
-OUTPUT_DIR="/lustre1/project/stg_00032/georgem/closure/models/dev/dev21/"
+
+#### Call using sbatch --export=NODES=1,GPUS=1,CPUS=8 genius.sh
+
+OUTPUT_DIR=$(pwd)/
+REPO_DIR="/lustre1/project/stg_00032/georgem/closure/"
 
 ### change 5-digit MASTER_PORT as you wish, slurm will raise Error if duplicated with others
 ### change WORLD_SIZE as gpus/node * num_nodes
@@ -29,7 +28,13 @@ echo "MASTER_ADDR="$MASTER_ADDR
 #module load cluster/genius/gpu_p100
 #module load PyTorch/2.1.2-foss-2023a-CUDA-12.1.1
 
+# Log the job script path
+echo "The script you are running has:" >> ~/job_logs/job_${SLURM_JOB_ID}.log
+echo "basename: [$(basename "$0")]"  >> ~/job_logs/job_${SLURM_JOB_ID}.log
+echo "dirname : [$(dirname "$0")]" >> ~/job_logs/job_${SLURM_JOB_ID}.log
+echo "pwd     : [$(pwd)]" >> ~/job_logs/job_${SLURM_JOB_ID}.log
+
 source ~/.bashrc
 mamba activate huggingface_hub
-
-srun python -m src.trainers --work_dir "$OUTPUT_DIR"
+cd $REPO_DIR
+srun python -m src.trainers --work_dir "$OUTPUT_DIR" --force --run "$SLURM_NNODES-$SLURM_NTASKS-$SLURM_CPUS_PER_TASK"
