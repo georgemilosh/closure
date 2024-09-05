@@ -45,7 +45,7 @@ class PyNet:
         self.local_rank = local_rank
         self.rank = rank
         logger.info(f"{torch.cuda.is_available() = }")
-        self.model_ = model_class(**kwargs).to(local_rank)
+        self.model_ = model_class(**kwargs).to(self.local_rank)
         logger.info(f"Initializing model {self.model_}")
         self.model = DDP(self.model_, device_ids=[self.local_rank])
         if optimizer_kwargs is None:
@@ -187,7 +187,7 @@ class PyNet:
             running_metrics = {}
         running_metrics['criterion'] = 0.0
         for features, targets in loader:
-            features, targets = self._to_device(features, targets, self.device)
+            features, targets = self._to_device(features, targets, self.local_rank)
             self.optimizer.zero_grad() # zero the parameter gradients
             with torch.set_grad_enabled(phase == 'train'): # track gradients only if in train
                 out = self.model(features)
