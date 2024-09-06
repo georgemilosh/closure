@@ -58,6 +58,7 @@ class PyNet:
             self.scheduler_kwargs = scheduler_kwargs
         self.early_stopping = self.scheduler_kwargs.pop('early_stopping', None)
         self.epochs = self.scheduler_kwargs.pop('epochs')
+        self.save_every = self.scheduler_kwargs.pop('save_every', None)
         self.logger_kwargs = logger_kwargs
         
 
@@ -186,7 +187,7 @@ class PyNet:
         else:
             running_metrics = {}
         running_metrics['criterion'] = 0.0
-        for features, targets in loader:
+        for batch_idx, (features, targets) in enumerate(loader):
             features, targets = self._to_device(features, targets, self.local_rank)
             self.optimizer.zero_grad() # zero the parameter gradients
             with torch.set_grad_enabled(phase == 'train'): # track gradients only if in train
@@ -203,6 +204,10 @@ class PyNet:
             if self.metrics is not None:
                 for metric in self.metrics:
                     running_metrics[metric._get_name()] += self._compute_loss(out, targets, metric).item()
+        if phase == 'train':
+            self.train_batch_idx = batch_idx
+        else:
+            self.val_batch_idx = batch_idx
 
         for key in running_metrics:
             running_metrics[key] /= num_batches
@@ -234,32 +239,38 @@ class PyNet:
         epoch_best = 0
         self.lr = []
         num_batches_train = len(train_loader)
+        logger.info(f"Each forward pass had {num_batches_train} train batches.")
+        logger.info(f"Number of samples per batch: {len(next(iter(train_loader))[0]) = }")
         # ---- train process ----
         for epoch in range(self.epochs):
             epoch_start_time = time.time() # track epoch time
             tr_loss = self._forward_pass(train_loader, phase='train')
-            if self.rank == 0:
-                val_loss = self._forward_pass(val_loader, phase='val')
+            epoch_time_train = time.time() - epoch_start_time
+
+            #if self.rank == 0:
+            val_loss = self._forward_pass(val_loader, phase='val')
             if self.scheduler is not None:
                 self.scheduler.step(val_loss['criterion'])
-                
+
             for key in tr_loss:
                 if key not in self.train_loss_:
                     self.train_loss_[key] = []
                     self.val_loss_[key] = []
                 self.train_loss_[key].append(tr_loss[key])
-                if self.rank == 0:
-                    self.val_loss_[key].append(val_loss[key])
+                #if self.rank == 0:
+                self.val_loss_[key].append(val_loss[key])
             
             epoch_time = time.time() - epoch_start_time
             
             if self.rank == 0:
                 if val_loss["criterion"] < best_loss:
-                    best_loss= val_loss["criterion"]
+                    if self.save_every == 'best' or (isinstance(self.save_every, int) and epoch % self.save_every == 0):
+                        best_loss = val_loss["criterion"]
+                        best_weights = copy.deepcopy(self.model.state_dict())
+                        epoch_best = epoch
                     #torch.save(self.model.state_dict(), self.work_dir) # this saves every epoch if improvement
-                    best_weights = copy.deepcopy(self.model.state_dict())
-                    epoch_best = epoch
-                self._logging(tr_loss, val_loss, epoch+1,self.epochs, epoch_time, **self.logger_kwargs)
+                self._logging(tr_loss, val_loss, epoch+1,self.epochs, epoch_time, epoch_time_train, **self.logger_kwargs)
+
                 if self.scheduler is not None:
                     try:
                         self.lr.append(self.scheduler.get_last_lr())
@@ -279,16 +290,17 @@ class PyNet:
                         logger.info("Raising TrialPruned exception.")
                         raise optuna.exceptions.TrialPruned()
             else:
-                self._logging(tr_loss, None, epoch+1,self.epochs, epoch_time, **self.logger_kwargs)
+                self._logging(tr_loss, None, epoch+1,self.epochs, epoch_time, epoch_time_train, **self.logger_kwargs)
                 
         if self.rank == 0:
-            # restore model and return best accuracy
-            logger.info(f"Best loss: {best_loss} at epoch {epoch_best+1}, restoring the corresponding weights...")
-            self.model.load_state_dict(best_weights)
+            if self.save_every is not None:
+                # restore model and return best accuracy
+                logger.info(f"Best loss: {best_loss} at epoch {epoch_best+1}, restoring the corresponding weights...")
+                self.model.load_state_dict(best_weights)
 
         total_time = time.time() - total_start_time
         self.total_time = total_time
-        logger.info(f"Each forward pass had {num_batches_train} train batches.")
+        logger.info(f"Each forward pass had {num_batches_train} train batches and forward pass had final {self.train_batch_idx = }.")
         logger.info(f"Number of samples per batch: {len(next(iter(train_loader))[0]) = }")
         # final message
         logger.info(f"""End of training on | {self.rank = }, {self.device = }. Total time: {round(total_time, 5)} seconds""")
@@ -301,24 +313,25 @@ class PyNet:
         """
         return features.to(device), targets.to(device)
     
-    def _logging(self, tr_loss, val_loss, epoch, epochs, epoch_time, show=True, update_step=20):
+    def _logging(self, tr_loss, val_loss, epoch, epochs, epoch_time, epoch_time_train, show=True, update_step=20):
         """
         Log the training progress. 
         """
         if show:
             if epoch % update_step == 0 or epoch == 1:
                 # to satisfy pep8 common limit of characters
-                msg = f"Epoch {epoch}/{epochs} | Train loss: {tr_loss}" 
-                msg = f"{msg} | Validation loss: {val_loss}"
-                msg = f"{msg} | Time/epoch: {round(epoch_time, 5)} seconds"
+                msg = f"Epoch {epoch}/{epochs} | Train loss: {tr_loss['criterion']:.4e}" 
+                if val_loss is not None and 'criterion' in val_loss and val_loss['criterion'] is not None:
+                    msg = f"{msg} | Val loss: {val_loss['criterion']:.4e}"
+                msg = f"{msg} | Time/epoch: {round(epoch_time, 3)} s"
+                msg = f"{msg} | Time/epoch_train: {round(epoch_time_train, 3)} s"
                 if self.scheduler is not None:
                     try:
-                        msg = f"{msg} | Learning rate: {self.scheduler.get_last_lr()}"
+                        msg = f"{msg} | Learn rate: {self.scheduler.get_last_lr():.4e}"
                     except AttributeError: # Compatability with an earlier version of Pytorch
-                        msg = f"{msg} | Learning rate: {self.scheduler._last_lr}"
+                        msg = f"{msg} | Learn rate: {self.scheduler._last_lr:.4e}"
 
                 logger.info(msg)
-
 
 class CNet(torch.nn.Module):
     def __init__(self, **kwargs):
