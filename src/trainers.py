@@ -294,10 +294,24 @@ class Trainer:
         Returns:
             None
         """
-        self.train_loader = datasets.ChannelDataLoader(self.train_dataset, sampler_type='distributed', world_size = self.world_size, 
+        if 'num_workers' in load_data_kwargs['train_loader_kwargs']:
+            logger.info("Config file contains num_workers in train_loader_kwargs so ignoring the number of actual cpus")
+            self.train_loader = datasets.ChannelDataLoader(self.train_dataset, sampler_type='distributed', world_size = self.world_size, 
                                                        rank = self.rank, gpus_per_node = self.gpus_per_node, local_rank = self.local_rank,
-                                                        num_workers=self.num_workers, pin_memory=True, **load_data_kwargs['train_loader_kwargs'])
-        self.val_loader = datasets.ChannelDataLoader(self.val_dataset, sampler_type='serial', **load_data_kwargs['val_loader_kwargs'])
+                                                       **load_data_kwargs['train_loader_kwargs'])
+        else:
+            self.train_loader = datasets.ChannelDataLoader(self.train_dataset, sampler_type='distributed', world_size = self.world_size, 
+                                                       rank = self.rank, gpus_per_node = self.gpus_per_node, local_rank = self.local_rank,
+                                                       num_workers=self.num_workers, **load_data_kwargs['train_loader_kwargs'])
+        if 'num_workers' in load_data_kwargs['val_loader_kwargs']:
+            logger.info("Config file contains num_workers in train_loader_kwargs so ignoring the number of actual cpus")
+            self.val_loader = datasets.ChannelDataLoader(self.val_dataset,sampler_type='distributed', world_size = self.world_size, 
+                                                       rank = self.rank, gpus_per_node = self.gpus_per_node, local_rank = self.local_rank,
+                                                       **load_data_kwargs['val_loader_kwargs'])
+        else:
+            self.val_loader = datasets.ChannelDataLoader(self.val_dataset,sampler_type='distributed', world_size = self.world_size, 
+                                                       rank = self.rank, gpus_per_node = self.gpus_per_node, local_rank = self.local_rank,
+                                                        num_workers=self.num_workers, **load_data_kwargs['val_loader_kwargs'])
 
     def load_run(self, run):
         """
