@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from . import read_pic as rp
 import os
+import pickle
 
 def species_to_list(input_list):
     """
@@ -23,6 +24,24 @@ def species_to_list(input_list):
     """
     return [item.split('_') if '_' in item else item for item in input_list]
 
+
+def load_and_compute_difference(file_path):
+    """
+    Load a pickle file containing the training information from the given file path and compute the difference between 'train+val' and 'train' times.
+    Parameters:
+    file_path (str): The path to the pickle file.
+    Returns:
+    dict: A dictionary containing the loaded data with the computed difference between 'train+val' and 'train' times stored in 'val' key.
+    """
+    
+    with open(file_path, 'rb') as file:
+        loss_dict = pickle.load(file)
+    
+    loss_dict['time']['val'] = []
+    for train, train_val in zip(loss_dict['time']['train'], loss_dict['time']['train+val']):
+        loss_dict['time']['val'].append(train_val - train)
+    
+    return loss_dict
 
 def append_index_to_duplicates(lst):
     """

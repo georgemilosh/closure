@@ -261,10 +261,11 @@ class ChannelDataLoader(DataLoader):
         
         self.subsample_rate = subsample_rate
         self.subsample_seed = subsample_seed
-        if self.subsample_rate is not None:
-            assert kwargs['batch_size'] <= self.subsample_rate*len(dataset), "Batch size must be less than the number of samples in the dataset times subsample rate (ideally several times). Try increasing the latter"
-        else:
-            assert kwargs['batch_size'] <= len(dataset), "Batch size must be less than the number of samples in the dataset"
+        if kwargs['batch_size'] is not None:
+            if self.subsample_rate is not None:
+                assert kwargs['batch_size'] <= self.subsample_rate*len(dataset), "Batch size must be less than the number of samples in the dataset times subsample rate (ideally several times). Try increasing the latter"
+            else:
+                assert kwargs['batch_size'] <= len(dataset), "Batch size must be less than the number of samples in the dataset"
         if self.subsample_seed is not None:
             np.random.seed(self.subsample_seed)
         
@@ -313,16 +314,44 @@ class ChannelDataLoader(DataLoader):
 
             if self.patch_dim is not None:
                 # Generate random start points for patches
-                x_starts = np.random.randint(0, features.shape[2] - self.patch_dim[0], size=features.shape[0])
-                y_starts = np.random.randint(0, features.shape[3] - self.patch_dim[1], size=features.shape[0])
-                patched_features = torch.empty((features.shape[0], features.shape[1], self.patch_dim[0], self.patch_dim[1]))
-                patched_targets = torch.empty((targets.shape[0], targets.shape[1], self.patch_dim[0], self.patch_dim[1]))
+                if len(features.shape) == 4:
+                    x_starts = np.random.randint(0, features.shape[-2] - self.patch_dim[0], size=features.shape[0])
+                    y_starts = np.random.randint(0, features.shape[-1] - self.patch_dim[1], size=features.shape[0])
+                elif len(features.shape) == 3:
+                    x_starts = np.random.randint(0, features.shape[-2] - self.patch_dim[0])
+                    y_starts = np.random.randint(0, features.shape[-1] - self.patch_dim[1])
+                else:
+                    raise ValueError(f"Features and targets must have either 3 or 4 dimensions, but got {features.shape = }, {targets.shape = }")
+                features_shape = list(features.shape)  # TODO: move this to the constructor of the class
+                features_shape[-2] = self.patch_dim[0]
+                features_shape[-1] = self.patch_dim[1]
+                features_shape = tuple(features_shape)
+                targerts_shape = list(targets.shape)
+                targerts_shape[-2] = self.patch_dim[0]
+                targerts_shape[-1] = self.patch_dim[1]
+                targerts_shape = tuple(targerts_shape)
+                patched_features = torch.empty(features_shape)
+                patched_targets = torch.empty(targerts_shape)
                 
                 # Extract patches using advanced indexing
-                for i, (x, y) in enumerate(zip(x_starts, y_starts)):
-                    patched_features[i] = features[i, :, x:x+self.patch_dim[0], y:y+self.patch_dim[1]]
-                    patched_targets[i] = targets[i, :, x:x+self.patch_dim[0], y:y+self.patch_dim[1]]
-            
+                if len(features.shape) == 4:
+                    for i, (x, y) in enumerate(zip(x_starts, y_starts)):
+                        patched_features[i] = features[i, ..., x:x+self.patch_dim[0], y:y+self.patch_dim[1]]
+                        patched_targets[i] = targets[i, ..., x:x+self.patch_dim[0], y:y+self.patch_dim[1]]
+                elif len(features.shape) == 3:
+                    try:
+                        patched_features = features[..., x_starts:x_starts+self.patch_dim[0], y_starts:y_starts+self.patch_dim[1]]
+                        patched_targets = targets[..., x_starts:x_starts+self.patch_dim[0], y_starts:y_starts+self.patch_dim[1]]
+                    except Exception as e:
+                        logger.error(f"{features.shape = }, {x_starts = }, {y_starts = }, {self.patch_dim = }")
+                        raise e
+                else:
+                    raise ValueError(f"Features and targets must have either 3 or 4 dimensions, but got {features.shape = }, {targets.shape = }")
+            if len(patched_features.shape) == 3:
+                patched_features = patched_features.unsqueeze(0)
+            if len(patched_targets.shape) == 3:
+                patched_targets = patched_targets.unsqueeze(0)
+
             yield patched_features, patched_targets
 
 class DataFrameDataset(torch.utils.data.Dataset):

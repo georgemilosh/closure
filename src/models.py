@@ -241,12 +241,13 @@ class PyNet:
         num_batches_train = len(train_loader)
         logger.info(f"Each forward pass had {num_batches_train} train batches.")
         logger.info(f"Number of samples per batch: {len(next(iter(train_loader))[0]) = }")
+        self.total_time = {"total": None, "train+val" : [], "train" : []}
         # ---- train process ----
         for epoch in range(self.epochs):
             epoch_start_time = time.time() # track epoch time
             tr_loss = self._forward_pass(train_loader, phase='train')
             epoch_time_train = time.time() - epoch_start_time
-
+            self.total_time["train"].append(epoch_time_train)
             #if self.rank == 0:
             val_loss = self._forward_pass(val_loader, phase='val')
             if self.scheduler is not None:
@@ -261,12 +262,12 @@ class PyNet:
                 self.val_loss_[key].append(val_loss[key])
             
             epoch_time = time.time() - epoch_start_time
-            
+            self.total_time["train+val"].append(epoch_time)
             if self.rank == 0:
                 if val_loss["criterion"] < best_loss:
                     if self.save_every == 'best' or (isinstance(self.save_every, int) and epoch % self.save_every == 0):
                         best_loss = val_loss["criterion"]
-                        best_weights = copy.deepcopy(self.model.state_dict())
+                        best_weights = copy.deepcopy(self.model.state_dict()) # note that this operation may take some time
                         epoch_best = epoch
                     #torch.save(self.model.state_dict(), self.work_dir) # this saves every epoch if improvement
                 self._logging(tr_loss, val_loss, epoch+1,self.epochs, epoch_time, epoch_time_train, **self.logger_kwargs)
@@ -299,7 +300,7 @@ class PyNet:
                 self.model.load_state_dict(best_weights)
 
         total_time = time.time() - total_start_time
-        self.total_time = total_time
+        self.total_time["total"] = total_time
         logger.info(f"Each forward pass had {num_batches_train} train batches and forward pass had final {self.train_batch_idx = }.")
         logger.info(f"Number of samples per batch: {len(next(iter(train_loader))[0]) = }")
         # final message
