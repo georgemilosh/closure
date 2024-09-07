@@ -1,0 +1,12 @@
+pytorch
+torchvision
+torchaudio
+pytorch-cuda=12.1
+ipykernel
+pandas
+joblib
+scipy
+h5py
+optuna
+torchmetrics
+matplotlib
