@@ -3,7 +3,7 @@ This script collects dictionaries from specified input folders, processes the da
 It can optionally filter the data based on the number of GPUs and CPUs and save a plot of the data.
 
 Usage:
-    python timing.py <input_folders> [--include-subfolders] [--plot] [--gpus <gpus>] [--cpus <cpus>]
+    python timing.py <input_folders> [--include-subfolders] [--gpus <gpus>] [--cpus <cpus>]
 
 Arguments:
     input_folders: List of input folders containing loss_dict.pkl files (supports wildcards).
@@ -54,7 +54,7 @@ def find_all_pkl_files(root_folder):
                 pkl_files.append(os.path.join(dirpath, filename))
     return pkl_files
 
-def main(input_folders, include_subfolders, plot, gpus, cpus):
+def main(input_folders, include_subfolders, gpus, cpus):
     data = []
     expanded_folders = []
     for pattern in input_folders:
@@ -114,4 +114,4 @@ if __name__ == "__main__":
     parser.add_argument('--gpus', type=str, help='Number of GPUs to filter for plotting')
     parser.add_argument('--cpus', type=str, help='Number of CPUs to filter for plotting')
     args = parser.parse_args()
-    main(args.input_folders, args.include_subfolders, args.plot, args.gpus, args.cpus)
+    main(args.input_folders, args.include_subfolders, args.gpus, args.cpus)
