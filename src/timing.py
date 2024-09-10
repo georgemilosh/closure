@@ -38,6 +38,8 @@ import argparse
 import os
 import glob
 import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.rcParams.update({'font.size': 22})
 
 def load_dict_from_pkl(file_path):
     with open(file_path, 'rb') as file:
@@ -87,25 +89,49 @@ def main(input_folders, include_subfolders, gpus, cpus):
     # Reorder columns to place 'val' between 'total' and 'train'
     columns_order = ['nodes', 'gpus', 'cpus', 'total', 'val', 'train'] + [col for col in df.columns if col not in ['nodes', 'gpus', 'cpus', 'total', 'val', 'train']]
     df = df[columns_order]
+    if gpus is not None:
+        df = df[df['gpus'] == gpus]
+    
+    if cpus is not None:
+        df = df[df['cpus'] == cpus]
+
+
+    df['nodes'] = df['nodes'].astype(int)
+    df['gpus'] = df['gpus'].astype(int)
+    df['cpus'] = df['cpus'].astype(int)
+
+
+
+    # Compute efficiency based on total by treating number of processes as `nodes`*`gpus`
+    print(df['total'][(df['gpus'] == 1) & (df['nodes'] == 1)].iloc[0])
+    df['speedup'] = df['total'][(df['gpus'] == 1) & (df['nodes'] == 1)].iloc[0] / df['total']
+    df['efficiency'] =  df['speedup'] / (df['nodes'] * df['gpus'])
 
     df.to_csv('timing.csv', index=False)
     print("DataFrame saved to timing.csv")
     print(df)
 
-    if gpus is not None and cpus is not None:
+    plt.figure(figsize=(10, 6))
         # Filter rows where gpus and cpus match the specified values
-        filtered_df = df[(df['gpus'] == gpus) & (df['cpus'] == cpus)]
-        plt.figure(figsize=(10, 6))
-        plt.plot(filtered_df['nodes'], filtered_df['total'], label='Total')
-        plt.plot(filtered_df['nodes'], filtered_df['val'], label='Val')
-        plt.plot(filtered_df['nodes'], filtered_df['train'], label='Train')
+    if gpus is not None and cpus is not None:
+        plt.plot(df['nodes'], df['total'], 'o-',label='Total')
+        plt.plot(df['nodes'], df['val'],'o-', label='Val')
+        plt.plot(df['nodes'], df['train'],'o-', label='Train')
         plt.xlabel('Nodes')
-        plt.ylabel('Time')
+    else:
+        plt.plot(df['nodes']*df['gpus'], df['total'], 'o-',label='Total')
+        plt.plot(df['nodes']*df['gpus'], df['val'],'o-', label='Val')
+        plt.plot(df['nodes']*df['gpus'], df['train'],'o-', label='Train')
+        plt.xlabel('total GPUs')
+    plt.ylabel('Time')
+    if gpus is not None and cpus is not None:
         plt.title(f'Time vs Nodes (GPUs: {gpus}, CPUs: {cpus})')
-        plt.legend()
-        plt.grid(True)
-        plt.savefig(f'time_vs_nodes_gpus_{gpus}_cpus_{cpus}.png')
-        plt.close()
+    else:
+        plt.title('Time vs total GPUs')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(f'scaling.png')
+    plt.close()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Collect dictionaries from input folders and create a DataFrame.")
