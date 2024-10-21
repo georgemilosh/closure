@@ -83,8 +83,14 @@ def build_XY(files_path,choose_x=None, choose_y=None, choose_z=None):
     y=np.linspace(0,Ly,nyc+1)
     z=np.linspace(0,Lz,nzc+1)
     
+    if choose_x is None:
+        choose_x = [0,nxc]
+    if choose_y is None:
+        choose_y = [0,nyc]
+    if choose_z is None:
+        choose_z = [0,nzc]       
     if isinstance(choose_x[0],list):
-        if not isinstance(choose_y[0],list):
+        if isinstance(choose_y[0],list):
             raise ValueError("choose_x and choose_y must be of the same type")
         X = []
         Y = []
@@ -111,6 +117,7 @@ def build_XY(files_path,choose_x=None, choose_y=None, choose_z=None):
             X, Y, Z = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], z[choose_z[0]:choose_z[1]], indexing='ij')
         else:
             X, Y = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], indexing='ij')
+    
     if nzc > 1:
         return X, Y, Z
     else:
@@ -168,7 +175,7 @@ def read_features_targets(files_path, filenames, fields_to_read=None, request_fe
         if "Time step" in n:
             dt=float(re.split("=",re.sub(" |\n","",n))[1])
 
-    if isinstance(choose_x[0],list):
+    if choose_x is not None and isinstance(choose_x[0],list):
         if not isinstance(choose_y[0],list):
             raise ValueError("choose_x and choose_y must be of the same type")
         features = []
