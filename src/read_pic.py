@@ -44,7 +44,7 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=None, choose_y=None, 
                     choose_z = [0,field[-1].shape[0]-1]
         except Exception as e:
             if verbose:
-                logger.error(f"Failed to read {fieldname} from {filename} using path {files_path}")
+                logger.warning(f"Failed to read {fieldname} from {filename} using path {files_path}")
             raise e
     a = np.transpose(np.array(field))[choose_x[0]:choose_x[1],choose_y[0]:choose_y[1],choose_z[0]:choose_z[1],:]
     if a.shape[1] <= 2:
