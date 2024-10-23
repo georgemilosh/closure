@@ -8,7 +8,7 @@ date: 2024
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import optuna
+#import optuna
 import time
 from torch.utils.data import DataLoader
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -19,8 +19,8 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logging.captureWarnings(True)
 logger = logging.getLogger(__name__)
-optuna.logging.get_logger(__name__).addHandler(logging.StreamHandler(sys.stdout))
-optuna.logging.enable_propagation()  # Propagate logs to the root logger.
+#optuna.logging.get_logger(__name__).addHandler(logging.StreamHandler(sys.stdout))
+#optuna.logging.enable_propagation()  # Propagate logs to the root logger.
 
 class PyNet:
     """
@@ -289,7 +289,7 @@ class PyNet:
                     # Handle pruning based on the intermediate value.
                     if trial.should_prune():
                         logger.info("Raising TrialPruned exception.")
-                        raise optuna.exceptions.TrialPruned()
+                        #raise optuna.exceptions.TrialPruned()
             else:
                 self._logging(tr_loss, None, epoch+1,self.epochs, epoch_time, epoch_time_train, **self.logger_kwargs)
                 

@@ -2,7 +2,7 @@ import subprocess
 from . import trainers as tr
 import pandas as pd
 import torch
-import torchmetrics
+#import torchmetrics
 import matplotlib.pyplot as plt
 import numpy as np
 from . import read_pic as rp
@@ -113,7 +113,7 @@ def parse_score(score):
     if score in ['MSE', 'L1Loss']:
         return getattr(torch.nn, score)()
     elif score == 'r2':
-        return torchmetrics.functional.r2_score
+        return None #torchmetrics.functional.r2_score
 
 def compare_runs(work_dirs=['./'], runs=['./0'], metric=None, rescale=True, renorm=True, verbose=True, **kwargs):
     """
