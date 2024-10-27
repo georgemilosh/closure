@@ -184,6 +184,50 @@ def compare_metrics(work_dirs=['./'], runs=['./0'], metric=None):
 
     return loss_df
 
+def transform_features(trainer, rescale=True, renorm=True, verbose=True):
+    """
+    Transforms the features based on the trainer's configuration.
+    Args:
+        trainer: The trainer object containing the model, test dataset, and train dataset.
+        rescale (bool): Whether to rescale the features.
+        renorm (bool): Whether to renormalize the features.
+        verbose (bool): Whether to print the loss values.
+    Returns:
+        features_scaled: The scaled features.
+    """
+    
+    ground_truth = trainer.test_dataset.features[:,trainer.val_loader.feature_channels].squeeze()
+    pred_shape = [1 for _ in ground_truth.cpu().numpy().shape]
+    pred_shape[1] = -1
+    pred_shape = tuple(pred_shape)
+
+    if trainer.train_loader.feature_channels is None: 
+        list_of_feature_indices = range(len(trainer.dataset_kwargs['read_features_targets_kwargs']['request_features']))
+    else:
+        list_of_feature_indices = trainer.train_loader.feature_channels
+
+    if renorm:
+        ground_truth_scaled = (ground_truth*trainer.test_dataset.features_std[list_of_feature_indices].reshape(pred_shape)+
+                                trainer.test_dataset.features_mean[list_of_feature_indices].reshape(pred_shape))
+    if rescale:
+        for channel, _ in enumerate(trainer.train_dataset.request_features):
+            if trainer.train_loader.feature_channels is None:
+                list_of_feature_indices = range(len(trainer.dataset_kwargs['read_features_targets_kwargs']['request_features']))
+            else:
+                list_of_feature_indices = trainer.train_loader.feature_channels
+            if trainer.train_dataset.prescaler_features is not None:
+                func = [trainer.train_dataset.prescaler_features[i] for i in list_of_feature_indices][channel]
+                if func == None:
+                    invfunc = lambda a: a
+                elif func.__name__ == 'log':
+                    invfunc = torch.exp
+                elif func.__name__ == 'arcsinh':
+                    invfunc = torch.sinh
+                if verbose:
+                    print(f"{invfunc = }")
+                ground_truth_scaled[:,channel] = invfunc(ground_truth_scaled[:,channel])
+    return ground_truth_scaled
+
 def transform_targets(trainer, rescale=True, renorm=True, verbose=True):
     """
     Transforms the predicted and ground truth targets based on the trainer's configuration.
