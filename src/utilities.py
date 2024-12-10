@@ -466,7 +466,7 @@ def pred_ground_targets(trainer, verbose=True):
     return prediction, ground_truth, list_of_target_indices
 
 def plot_pred_targets(trainer, target_name: str, prediction=None, ground_truth=None, 
-                      list_of_target_indices=None):
+                      list_of_target_indices=None, plot_indices=None, **kwargs):
     """
     This function takes a trainer object and a channel index and plots the predicted and ground truth targets along with the errors.
     Each panel is saved as a figure to a file
@@ -505,12 +505,15 @@ def plot_pred_targets(trainer, target_name: str, prediction=None, ground_truth=N
     ground_truth_reshaped = invfunc((ground_truth.cpu().numpy()*trainer.test_dataset.targets_std[list_of_target_indices].reshape(pred_shape)+
                          trainer.test_dataset.targets_mean[list_of_target_indices].reshape(pred_shape))[:,channel]).reshape(trainer.test_dataset.targets_shape[:-1]+(1,))
     # Create a figure and subplots
-    fig, axs = plt.subplots(3, 3, figsize=(12, 6))
+    if plot_indices is None:
+        plot_indices = range(prediction.shape[-1])
+    figsize = kwargs.pop('figsize', (12, 2*len(plot_indices)))
+    fig, axs = plt.subplots(len(plot_indices), 3, figsize=figsize)
     if not os.path.exists('img'):
         # Create the directory
         os.makedirs('img')
     # Iterate over the panels
-    for i in range(3):
+    for figindex, i in enumerate(plot_indices):
         error = (ground_truth_reshaped[i,...,0] - prediction_reshaped[i,...,0])/(ground_truth_reshaped[i,...,0].max())
         vmax = ground_truth_reshaped[i,...,0].max()
         vmax = [vmax, vmax, .5]
@@ -524,9 +527,9 @@ def plot_pred_targets(trainer, target_name: str, prediction=None, ground_truth=N
         
         for j, (data,label) in enumerate(zip([ground_truth_reshaped[i,...,0], prediction_reshaped[i,...,0], error],
                                             ['real', 'predict', 'error'])):
-            f, ax = plt.subplots(1, 1, figsize=(6, 3))
-            for axes in [ax, axs[i,j]]:
-                im = axes.pcolormesh(X, Y, data, vmax=vmax[j], vmin=vmin[j], cmap=cmaps[j])
+            f, ax = plt.subplots(1, 1, figsize=(figsize[0]/2, figsize[1]/2)) # we are also saving the individual plots
+            for axes in [ax, axs[figindex,j]]:
+                im = axes.pcolormesh(X, Y, data, vmax=vmax[j], vmin=vmin[j], cmap=cmaps[j], **kwargs)
                 axes.set_title(f"{label} {target_name} @ {trainer.test_dataset.dataframe['filenames'].iloc[i].rsplit('_')[-1].rsplit('.')[0]}")
                 axes.set_xlabel('X')
                 axes.set_ylabel('Y')
