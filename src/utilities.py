@@ -6,6 +6,7 @@ import torchmetrics
 import matplotlib.pyplot as plt
 import numpy as np
 from . import read_pic as rp
+import re
 import os
 
 def species_to_list(input_list):
@@ -183,6 +184,79 @@ def compare_metrics(work_dirs=['./'], runs=['./0'], metric=None):
         loss_df.loc[len(loss_df)] = loss_dict
 
     return loss_df
+
+def conserved_quantities(folder, verbose=True):
+    """
+    Reads ConservedQuantities.txt genereated by ECsim containing conserved quantities from a specified folder, extracts variable names from comments,
+    and returns the data as a pandas DataFrame.
+    Args:
+        folder (str): The path to the folder containing the CSV file.
+        verbose (bool, optional): If True, prints the list of variable names. Defaults to True.
+    Returns:
+        pandas.DataFrame: A DataFrame containing the data from the CSV file, with columns named from '2' to '24'.
+    Raises:
+        FileNotFoundError: If the specified file does not exist.
+        IOError: If there is an error reading the file.
+    Notes:
+        - The CSV file is expected to have a specific format with a separator line starting with '#'.
+        - Variable names are extracted from lines starting with '#' and are expected to be between characters 6 and 30.
+        - The first column of the data is dropped before returning the DataFrame.
+    Usage:
+        >>> 
+            conserved_quantities("path/to/folder")
+            import matplotlib.pyplot as plt
+
+            # Create subplots with 3 rows and 3 columns, and adjust the figsize parameter
+            fig, axs = plt.subplots(3, 3, figsize=(12, 6))
+
+            # Iterate over the axes and plot the data
+            for i, ax in enumerate(axs.flatten()):
+                data.iloc[:, i].plot(ax=ax)
+                ax.set_ylabel(f'{variables[i+1]}')
+                ax.set_xlabel('cycles')
+
+            # Adjust the layout of the subplots
+            plt.tight_layout()
+
+            # Show the plot
+            plt.show()
+        >>>
+
+    """
+    file_path = f"{folder}/ConservedQuantities.txt"
+
+    # Read the file line by line until the separator is found
+    with open(file_path, 'r') as file:
+        for i, line in enumerate(file):
+            if line.strip() == "#----------------------------------------------------------------------------------------------------------------------------------------------------------------------":
+                break
+    # Open the file
+    with open(file_path, 'r') as file:
+        # Read the lines of the file
+        lines = file.readlines()
+
+    # Initialize an empty list to store the variable names
+    variables = []
+
+    # Iterate over each line
+    for line in lines:
+        # Use a regular expression to find lines that start with a '#'
+        if re.match(r'^#', line):
+            # Extract characters from index 2 to 15
+            substring = line[6:30]
+            # Add the substring to the list
+            variables.append(substring)
+
+    # Print the list of variable names
+    if verbose:
+        print(variables[1:])
+    # Define column names
+    column_names = [str(i) for i in range(1, 25)]
+
+    # Read the data from the file starting from the line after the separator
+    data = pd.read_csv(file_path, skiprows=i+1, sep="\s+", names=column_names)
+    data = data.drop(columns=['1'])
+    return data, variables
 
 def transform_features(trainer, rescale=True, renorm=True, verbose=True):
     """
