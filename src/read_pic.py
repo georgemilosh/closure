@@ -352,28 +352,43 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                        
         if fields_to_read["PI"]:
             for species in data[f'PI{component_1}{component_2}']:
-                data['PIyx'][species] = data['PIxy'][species]
-                data['PIzx'][species] = data['PIxz'][species]
-                data['PIzy'][species] = data['PIyz'][species]
+                if species in data['PIxy']:
+                    data['PIyx'][species] = data['PIxy'][species]
+                if species in data['PIxz']:
+                    data['PIzx'][species] = data['PIxz'][species]
+                if species in data['PIyz']:
+                    data['PIzy'][species] = data['PIyz'][species]
         if fields_to_read["P"]:
             data['Ppar'], data['Pperp'] = {}, {}
             for species in data[f'P{component_1}{component_2}']:
-                data['Pyx'][species] = data['Pxy'][species]
-                data['Pzx'][species] = data['Pxz'][species]
-                data['Pzy'][species] = data['Pyz'][species]
+                if species in data['Pxy']:
+                    data['Pyx'][species] = data['Pxy'][species]
+                if species in data['Pxz']:
+                    data['Pzx'][species] = data['Pxz'][species]
+                if species in data['Pyz']:
+                    data['Pzy'][species] = data['Pyz'][species]
                 if verbose:
                     logger.info(f"loading Ppar and Pperp")
-                data['Ppar'][species] = (data['Pxx'][species]*data['Bx']**2 + data['Pyy'][species]*data['By']**2  + data['Pzz'][species]*data['Bz']**2 + \
+                try:
+                    data['Ppar'][species] = (data['Pxx'][species]*data['Bx']**2 + data['Pyy'][species]*data['By']**2  + data['Pzz'][species]*data['Bz']**2 + \
                                         2*data['Pxy'][species]*data['Bx']*data['By']+2*data['Pxz'][species]*data['Bx']*data['Bz'] + \
                                             2*data['Pyz'][species]*data['By']*data['Bz'])/(data['By']**2+data['Bx']**2+data['Bz']**2)
-                data['Pperp'][species] = (data['Pxx'][species] + data['Pyy'][species] + data['Pzz'][species] - data['Ppar'][species])/2
+                except Exception as e:
+                    logger.warning(f"Failed to calculate Ppar for {species} likely due to missing fields, see: {e}")
+                try:
+                    data['Pperp'][species] = (data['Pxx'][species] + data['Pyy'][species] + data['Pzz'][species] - data['Ppar'][species])/2
+                except Exception as e:
+                    logger.warning(f"Failed to calculate Pperp for {species} likely due to missing fields, see: {e}")
             if "gyro_radius" in fields_to_read and fields_to_read["gyro_radius"]:
-                for species in data[f'P{component_1}{component_2}']:
-                    data['gyro_radius'] = {}
-                    i = choose_species.index(species)
-                    p = data['Pxx'][species]+data['Pyy'][species]+data['Pzz'][species]
-                    vth=np.sqrt(np.abs(p/(data['rho'][species]+small)*qom[i]))
-                    data['gyro_radius'][species] = np.abs(vth/(qom[i]*data['Bmagn']))
+                try:
+                    for species in data[f'P{component_1}{component_2}']:
+                        data['gyro_radius'] = {}
+                        i = choose_species.index(species)
+                        p = data['Pxx'][species]+data['Pyy'][species]+data['Pzz'][species]
+                        vth=np.sqrt(np.abs(p/(data['rho'][species]+small)*qom[i]))
+                        data['gyro_radius'][species] = np.abs(vth/(qom[i]*data['Bmagn']))
+                except Exception as e:
+                    logger.warning(f"Failed to calculate gyro_radius, see: {e}")
 
     # The heat flux is calculated (to do so you need to read rho, J and P first).
     if fields_to_read["Heat_flux"]:
@@ -388,14 +403,17 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                     else:
                         data[f'EF{component}'][species] = read_fieldname(files_path,filenames,f'EF{component}_{i}',choose_x,choose_y,choose_z,verbose=verbose)
             #logger.info(f"{data[f'EF{component}'].keys() = }")
-            data[f'q{component}'] = {}
-            for species in data[f'EF{component}'].keys():
-                i = choose_species.index(species)
-                data[f'q{component}'][species] =  data[f'EF{component}'][species] - \
-                    (data['Jx'][species]**2+data['Jy'][species]**2+data['Jz'][species]**2)*data[f'J{component}'][species]/(2*qom[i]*data[f'rho'][species]**2+small) - \
-                    (data['Pxx'][species] + data[f'Pyy'][species] + data[f'Pzz'][species])*data[f'J{component}'][species]/(2*data['rho'][species]+small) - \
-                    (data['Jx'][species]*data[f'Px{component}'][species] + data['Jy'][species]*data[f'Py{component}'][species] + data['Jz'][species]*data[f'Pz{component}'][species])/(data['rho'][species]+small)
-            #logger.info(f"{data[f'q{component}'].keys() = }")
+            try:
+                data[f'q{component}'] = {}
+                for species in data[f'EF{component}'].keys():
+                    i = choose_species.index(species)
+                    data[f'q{component}'][species] =  data[f'EF{component}'][species] - \
+                        (data['Jx'][species]**2+data['Jy'][species]**2+data['Jz'][species]**2)*data[f'J{component}'][species]/(2*qom[i]*data[f'rho'][species]**2+small) - \
+                        (data['Pxx'][species] + data[f'Pyy'][species] + data[f'Pzz'][species])*data[f'J{component}'][species]/(2*data['rho'][species]+small) - \
+                        (data['Jx'][species]*data[f'Px{component}'][species] + data['Jy'][species]*data[f'Py{component}'][species] + data['Jz'][species]*data[f'Pz{component}'][species])/(data['rho'][species]+small)
+            except Exception as e:
+                logger.warning(f"Failed to calculate q{component} see: {e}")
+                #logger.info(f"{data[f'q{component}'].keys() = }")
             if 'EF' not in fields_to_read or not fields_to_read['EF']:
                 del data[f'EF{component}']
     return data
