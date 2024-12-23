@@ -539,3 +539,85 @@ def plot_pred_targets(trainer, target_name: str, prediction=None, ground_truth=N
     # Adjust the layout of the subplots
     plt.tight_layout()
     plt.show()
+
+
+# Peppe Arrò
+# This script calculates the 1D power spectrum for both scalar and vector functions in 2D.
+
+def scalar_spectrum_2D(field, X, Y):
+    """
+    Author: Peppe Arrò
+    This script calculates the 1D power spectrum for scalar functions
+    """
+    Lx = X[-1,0]
+    Ly = Y[0,-1]
+    x = X[:,0]
+    y = Y[0,:]
+    t = np.arange(field.shape[-1])
+    nxc=len(X)-1
+    nyc=len(Y)-1
+    print(f"{field.shape = }, {nxc = }, {nyc = }, {x.shape = }, {y.shape = }, {t.shape = }, {x[:2] = }, {y[:2] = }")
+    # Repeated boundaries must be excluded according to the definition of the FFT.
+    field_ft=np.fft.rfft2(field[0:-1,0:-1,:],axes=(0,1))
+    print(f"{field_ft.shape = }")
+    # 2D power spectrum.
+    spec_2D=(abs(field_ft)**2)/((nxc*nyc)**2)
+    spec_2D[:,1:-1,:]*=2 # Some modes are doubled to take into account the redundant ones removed by numpy's rfft.
+    kx=np.fft.fftfreq(nxc-1,x[1])*2*np.pi
+    ky=np.fft.rfftfreq(nyc-1,y[1])*2*np.pi
+    print(f"{len(kx) = }, {len(ky) = }")
+
+    # The 1D magnetic field energy spectrum is calculated.
+    spec_1D=np.zeros((nxc//2+1,len(t)))
+
+    for iy in range(len(ky)):
+        for ix in range(len(kx)):
+            try:
+                index=round( np.sqrt( (Lx*kx[ix]/(2*np.pi))**2+(Ly*ky[iy]/(2*np.pi))**2 ) )
+                if index<=(nxc//2):
+                    spec_1D[index,:]+=spec_2D[ix,iy,:]
+            except Exception as e:
+                print(f"{index = }, {ix = }, {iy = }, {spec_2D.shape = }, {spec_1D.shape = }")
+                raise e
+
+    return ky,spec_1D[:-1]
+
+def vector_spectrum_2D(field_x,field_y,field_z, X, Y):
+    """
+    Author: Peppe Arrò
+    This script calculates the 1D power spectrum for vector functions
+    """
+    Lx = X[-1,0]
+    Ly = Y[0,-1]
+    x = X[:,0]
+    y = Y[0,:]
+    t = np.arange(field.shape[-1])
+    nxc=len(X)-1
+    nyc=len(Y)-1
+    # Repeated boundaries must be excluded according to the definition of the FFT.
+    field_x_ft=np.fft.rfft2(field_x[0:-1,0:-1,0,:],axes=(0,1))
+    field_y_ft=np.fft.rfft2(field_y[0:-1,0:-1,0,:],axes=(0,1))
+    field_z_ft=np.fft.rfft2(field_z[0:-1,0:-1,0,:],axes=(0,1))
+
+    # 2D power spectrum.
+    spec_2D=(abs(field_x_ft)**2+abs(field_y_ft)**2+abs(field_z_ft)**2)/((nxc*nyc)**2)
+    spec_2D[:,1:-1,:]*=2 # Some modes are doubled to take into account the redundant ones removed by numpy's rfft.
+    kx=np.fft.fftfreq(nxc-1,x[1])*2*np.pi
+    ky=np.fft.rfftfreq(nyc-1,y[1])*2*np.pi
+
+    # The 1D magnetic field energy spectrum is calculated.
+    spec_1D=np.zeros((nxc//2+1,len(t)))
+
+    for iy in range(len(ky)):
+        for ix in range(len(kx)):
+            try:
+                index=round( np.sqrt( (Lx*kx[ix]/(2*np.pi))**2+(Ly*ky[iy]/(2*np.pi))**2 ) )
+                if index<=(nxc//2):
+                    spec_1D[index,:]+=spec_2D[ix,iy,:]
+            except Exception as e:
+                print(f"{index = }, {ix = }, {iy = }, {spec_2D.shape = }, {spec_1D.shape = }")
+                raise e
+
+    return ky,spec_1D[:-1]
+
+
