@@ -541,8 +541,7 @@ def plot_pred_targets(trainer, target_name: str, prediction=None, ground_truth=N
     plt.show()
 
 
-# Peppe Arrò
-# This script calculates the 1D power spectrum for both scalar and vector functions in 2D.
+# The scripts below are adapted from G. Arrò
 
 def scalar_spectrum_2D(field, X, Y):
     """
@@ -591,13 +590,13 @@ def vector_spectrum_2D(field_x,field_y,field_z, X, Y):
     Ly = Y[0,-1]
     x = X[:,0]
     y = Y[0,:]
-    t = np.arange(field.shape[-1])
+    t = np.arange(field_x.shape[-1])
     nxc=len(X)-1
     nyc=len(Y)-1
     # Repeated boundaries must be excluded according to the definition of the FFT.
-    field_x_ft=np.fft.rfft2(field_x[0:-1,0:-1,0,:],axes=(0,1))
-    field_y_ft=np.fft.rfft2(field_y[0:-1,0:-1,0,:],axes=(0,1))
-    field_z_ft=np.fft.rfft2(field_z[0:-1,0:-1,0,:],axes=(0,1))
+    field_x_ft=np.fft.rfft2(field_x[0:-1,0:-1,:],axes=(0,1))
+    field_y_ft=np.fft.rfft2(field_y[0:-1,0:-1,:],axes=(0,1))
+    field_z_ft=np.fft.rfft2(field_z[0:-1,0:-1,:],axes=(0,1))
 
     # 2D power spectrum.
     spec_2D=(abs(field_x_ft)**2+abs(field_y_ft)**2+abs(field_z_ft)**2)/((nxc*nyc)**2)
@@ -618,6 +617,183 @@ def vector_spectrum_2D(field_x,field_y,field_z, X, Y):
                 print(f"{index = }, {ix = }, {iy = }, {spec_2D.shape = }, {spec_1D.shape = }")
                 raise e
 
-    return ky,spec_1D[:-1]
+    return ky,spec_1D #[:-1]
+
+
+def get_spectral_index(k,spec,N):
+	"""
+        Calculate the spectral index by fitting a line to the log-log plot of the given spectrum.
+        Parameters:
+        k (array-like): The wavenumber array.
+        spec (array-like): The spectrum array corresponding to the wavenumbers.
+        N (int): The number of points to use in each segment for fitting.
+        Returns:
+        tuple: A tuple containing:
+            - k_red (numpy.ndarray): The reduced wavenumber array, averaged over each segment.
+            - slopes (numpy.ndarray): The slopes of the fitted lines, representing the spectral index for each segment.
+        """
+	from scipy.optimize import curve_fit
+	
+	def line(x,a,b):
+		return a*x+b
+	
+	X=np.log10(k[1:])
+	Y=np.log10(spec[1:])
+	
+	k_red=[]
+	slopes=[]
+	#print(k.shape,len(k)//N)
+	for i in range(len(k)//N):
+		#if i == 0:
+		#	print(X[i*N:(i+1)*N].shape, Y[i*N:(i+1)*N].shape)
+		p,_=curve_fit(line,X[i*N:(i+1)*N],Y[i*N:(i+1)*N],sigma=Y[i*N:(i+1)*N])
+		k_red.append(np.mean(k[i*N+1:(i+1)*N+1]))
+		slopes.append(p[0])
+	
+	return np.array(k_red), np.array(slopes)
+
+
+def do_dot(fx,fy,fz,gx,gy,gz):
+	return fx*gx+fy*gy+fz*gz
+	
+def do_cross(fx,fy,fz,gx,gy,gz):
+	return fy*gz-fz*gy, fz*gx-fx*gz, fx*gy-fy*gx	
+
+def get_PS_2D(data):
+	"""
+	Get the pressure-strain term and theta
+	"""
+	for experiment in data.keys():
+		data[experiment]['QJ'] = {}
+		data[experiment]['Qomega'] = {}
+		data[experiment]['QD'] = {}
+		data[experiment]['PiD'] = {}
+		data[experiment]['Ptheta'] = {}
+		data[experiment]['PS'] = {}
+		data[experiment]['theta'] = {}
+		data[experiment]['Dxx'] = {}
+		data[experiment]['Dyy'] = {}
+		data[experiment]['Dzz'] = {}
+		data[experiment]['Dxy'] = {}
+		data[experiment]['Dxz'] = {}
+		data[experiment]['Dyz'] = {}
+		data[experiment]['P'] = {}
+
+
+		for species in data[experiment]['rho'].keys():
+			uxx = np.gradient(data[experiment]['Vx'][species],X[:,0], axis=0, edge_order=2)
+			uxy = np.gradient(data[experiment]['Vx'][species],Y[0,:], axis=1, edge_order=2)
+			uyx = np.gradient(data[experiment]['Vy'][species],X[:,0], axis=0, edge_order=2)
+			uyy = np.gradient(data[experiment]['Vy'][species],Y[0,:], axis=1, edge_order=2)
+			uzx = np.gradient(data[experiment]['Vz'][species],X[:,0], axis=0, edge_order=2)
+			uzy = np.gradient(data[experiment]['Vz'][species],Y[0,:], axis=1, edge_order=2)
+			omega2 = (uzy)**2 + (-uzx)**2 + (uyx-uxy)**2
+			data[experiment]['Qomega'][species] = 0.25*omega2/np.mean(omega2, axis=(0,1))
+			J2 = data[experiment]['Jx'][species]**2 + data[experiment]['Jy'][species]**2 + data[experiment]['Jz'][species]**2
+			data[experiment]['QJ'][species] = 0.25*J2/np.mean(J2, axis=(0,1))
+			data[experiment]['P'][species]=(data[experiment]['Pxx'][species]+\
+									data[experiment]['Pyy'][species]+\
+										data[experiment]['Pzz'][species])/3
+			data[experiment]['theta'][species]=uxx+uyy
+			data[experiment]['PS'][species]=-data[experiment]['Pxx'][species]*uxx-\
+				data[experiment]['Pxy'][species]*uxy-data[experiment]['Pxy'][species]*uyx-\
+					data[experiment]['Pyy'][species]*uyy-data[experiment]['Pxz'][species]*uzx-\
+						data[experiment]['Pyz'][species]*uzy
+			data[experiment]['Ptheta'][species]=data[experiment]['P'][species]*data[experiment]['theta'][species]
+			data[experiment]['Dxx'][species] = uxx - data[experiment]['theta'][species]/3
+			data[experiment]['Dyy'][species] = uyy - data[experiment]['theta'][species]/3
+			data[experiment]['Dzz'][species] = -data[experiment]['theta'][species]/3
+			data[experiment]['Dxy'][species] = (uxy + uyx)/2
+			data[experiment]['Dxz'][species] = uzx/2
+			data[experiment]['Dyz'][species] = uzy/2
+			Dsum = data[experiment]['Dxx'][species]**2 + data[experiment]['Dyy'][species]**2 + data[experiment]['Dzz'][species]**2 +\
+				2*(data[experiment]['Dxy'][species]**2 + data[experiment]['Dxz'][species]**2 + data[experiment]['Dyz'][species]**2) 
+			data[experiment]['QD'][species] = 0.25*Dsum/np.mean(Dsum, axis=(0,1))
+
+			data[experiment]['PiD'][species]=-(data[experiment]['Pxx'][species]-data[experiment]['P'][species])*\
+				(uxx-data[experiment]['theta'][species]/3)-\
+					(data[experiment]['Pyy'][species]-data[experiment]['P'][species])*\
+						(uyy-data[experiment]['theta'][species]/3)-\
+							(data[experiment]['Pzz'][species]-data[experiment]['P'][species])*\
+								(-data[experiment]['theta'][species]/3)-\
+									data[experiment]['Pxy'][species]*(uyx+uxy)-\
+										data[experiment]['Pxz'][species]*(uzx)-\
+											data[experiment]['Pyz'][species]*(uzy)
+
+
+
+def get_T(data):
+	"""
+	Get T, T_perp, T_par
+	"""
+	for experiment in data.keys():
+		data[experiment]['T'] = {}
+		data[experiment]['T_par'] = {}
+		data[experiment]['T_perp'] = {}
+		for species in data[experiment]['rho'].keys():
+			bx=data[experiment]['Bx']/np.sqrt(data[experiment]['Bx']**2+data[experiment]['By']**2+data[experiment]['Bz']**2)
+			by=data[experiment]['By']/np.sqrt(data[experiment]['Bx']**2+data[experiment]['By']**2+data[experiment]['Bz']**2)
+			bz=data[experiment]['Bz']/np.sqrt(data[experiment]['Bx']**2+data[experiment]['By']**2+data[experiment]['Bz']**2)
+			data[experiment]['T'][species]=(data[experiment]['Pxx'][species]+\
+									data[experiment]['Pyy'][species]+\
+										data[experiment]['Pzz'][species])/3
+			data[experiment]['T_par'][species]=(data[experiment]['Pxx'][species]*bx**2+\
+				data[experiment]['Pyy'][species]*by**2+data[experiment]['Pzz'][species]*bz**2+\
+					2*(data[experiment]['Pxy'][species]*bx*by+data[experiment]['Pxz'][species]*bx*bz+\
+						data[experiment]['Pyz'][species]*by*bz))/data[experiment]['rho'][species]
+			data[experiment]['T_perp'][species]=(3*data[experiment]['T'][species]-data[experiment]['T_par'][species])/2
+
+def get_agyrotropy(data):
+	for experiment in data.keys():
+		data[experiment]['agyrotropy'] = {}
+		for species in data[experiment]['rho'].keys():
+			bx=data[experiment]['Bx']/np.sqrt(data[experiment]['Bx']**2+data[experiment]['By']**2+data[experiment]['Bz']**2)
+			by=data[experiment]['By']/np.sqrt(data[experiment]['Bx']**2+data[experiment]['By']**2+data[experiment]['Bz']**2)
+			bz=data[experiment]['Bz']/np.sqrt(data[experiment]['Bx']**2+data[experiment]['By']**2+data[experiment]['Bz']**2)
+			I1=data[experiment]['Pxx'][species]+data[experiment]['Pyy'][species]+data[experiment]['Pzz'][species]
+			I2=data[experiment]['Pxx'][species]*data[experiment]['Pyy'][species]+\
+				data[experiment]['Pxx'][species]*data[experiment]['Pzz'][species]+\
+					data[experiment]['Pyy'][species]*data[experiment]['Pzz'][species]-\
+						(data[experiment]['Pxy'][species]**2+data[experiment]['Pxz'][species]**2+\
+	   data[experiment]['Pyz'][species]**2)
+			P_par=data[experiment]['Pxx'][species]*bx**2+data[experiment]['Pyy'][species]*by**2+\
+				data[experiment]['Pzz'][species]*bz**2+2*(data[experiment]['Pxy'][species]*bx*by+\
+											  data[experiment]['Pxz'][species]*bx*bz+\
+												data[experiment]['Pyz'][species]*by*bz)
+			data[experiment]['agyrotropy'][species]=1-4*I2/((I1-P_par)*(I1+3*P_par))
+
+
+
+def get_ExB(data):
+	"""
+	ExB/B^2
+	"""
+	for experiment in data.keys():
+		data[experiment]['ExB'] = {}
+		for species in data[experiment]['rho'].keys():
+			data[experiment]['ExB'][species] = do_cross(data[experiment]['Ex'],data[experiment]['Ey'],data[experiment]['Ez'],\
+						data[experiment]['Bx'],data[experiment]['By'],data[experiment]['Bz'])/\
+						(data[experiment]['Bx']**2+data[experiment]['By']**2+data[experiment]['Bz']**2)
+
+
+def get_W(data):
+	"""
+	Get W
+	"""
+	for experiment in data.keys():
+		data[experiment]['W'] = {}
+		for species in data[experiment]['rho'].keys():
+			data[experiment]['W'][species] = do_dot(data[experiment]['Ex'],data[experiment]['Ey'],data[experiment]['Ez'],\
+						data[experiment]['Jx'][species],data[experiment]['Jy'][species],data[experiment]['Jz'][species])
+
+def get_D(data):
+	"""
+	Get D
+	"""
+	for experiment in data.keys():
+		data[experiment]['D'] = {}
+		for species in data[experiment]['rho'].keys():
+			data[experiment]['D'][species] = do_dot(data[experiment]['Jx'][species],data[experiment]['Jy'][species],data[experiment]['Jz'][species],\
+						data[experiment]['Jx'][species],data[experiment]['Jy'][species],data[experiment]['Jz'][species])
 
 

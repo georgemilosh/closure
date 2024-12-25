@@ -418,7 +418,7 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                 del data[f'EF{component}']
     return data
 
-def get_experiments(experiments, files_path, fields_to_read, choose_species=None, choose_times=None,choose_x=None, choose_y=None, choose_z=None, verbose=False):
+def get_exp_times(experiments, files_path, fields_to_read, choose_species=None, choose_times=None,choose_x=None, choose_y=None, choose_z=None, verbose=False):
     """
     Retrieves data from experiments and returns the data structure stored as a dictionary along with the corresponding meshgrid.
 
@@ -440,6 +440,9 @@ def get_experiments(experiments, files_path, fields_to_read, choose_species=None
     - data (dict): A dictionary containing the retrieved data for each experiment.
     - X (ndarray): The meshgrid of x values.
     - Y (ndarray): The meshgrid of y values.
+    - (optional) Z (ndarray): The meshgrid of z values.
+    - qom (list): A list of charge-to-mass ratios for each species.
+    - times (list): A list of times corresponding to the data.
     
     Example:
     >>>
@@ -498,11 +501,11 @@ def get_experiments(experiments, files_path, fields_to_read, choose_species=None
         data[experiment] = read_data(f"{files_path}{experiment}/",selected_filenames,fields_to_read,qom,
                                      choose_species=choose_species,choose_x=choose_x,choose_y=choose_y,choose_z=choose_z,verbose=verbose)
         if choose_x is None:
-            choose_x = [0,x.shape[0]]
+            choose_x = [0,x.shape[0]-1]
         if choose_y is None:
-            choose_y = [0,y.shape[0]]
+            choose_y = [0,y.shape[0]-1]
         if choose_z is None:
-            choose_z = [0,z.shape[0]]
+            choose_z = [0,z.shape[0]-1]
         if verbose:
             logger.info(f"{choose_x = }, {choose_y = }, {choose_z = }")
         if nzc == 1:
@@ -510,6 +513,14 @@ def get_experiments(experiments, files_path, fields_to_read, choose_species=None
         else:
             X, Y, Z = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], z[choose_z[0]:choose_z[1]], indexing='ij')
     if nzc == 1:
-        return data, X, Y, qom
+        return data, X, Y, qom, times
     else:
-        return data, X, Y, Z, qom
+        return data, X, Y, Z, qom, times
+    
+def get_experiments(*args, **kwargs):
+    """
+    A wrapper function for get_exp_times that does not return times for backward compatibility.
+    """
+    return get_exp_times(*args, **kwargs)[:-1]
+
+    
