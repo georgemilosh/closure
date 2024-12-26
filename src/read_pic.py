@@ -429,8 +429,8 @@ def get_exp_times(experiments, files_path, fields_to_read, choose_species=None, 
                 field names to read from the files. 
     - qom (array of floats): The charge-to-mass ratio in the PIC units for each species.
     - choose_species (list): A list of species indices to choose.  # the ones which have directive None will be ignored, the ones which have same name will be summed over
-    - choose_times (list): A list of time indices to choose. If None is given, all times are chosen. If list specific timeshots are chosen, 
-                i.e. [0, 1, 5], otherwise choose_times = None means take all times
+    - choose_times (list): A list of time indices to choose. If None is given, all times are chosen. If an integer is given, all times before that one are ignored.
+         list specific timeshots are chosen,  i.e. [0, 1, 5], otherwise choose_times = None means take all times
     - choose_x (list): A list specifying the range of x indices to choose. If None is given, the whole range is chosen.
     - choose_y (list): A list specifying the range of y indices to choose. If None is given, the whole range is chosen.
     - choose_z (list): A list specifying the range of z indices to choose. If None is given, the whole range is chosen.
@@ -483,19 +483,21 @@ def get_exp_times(experiments, files_path, fields_to_read, choose_species=None, 
     for experiment in experiments:
         # sorted(os.listdir()) creates a sorted list containing the .h5 filenames, os.listdir() alone would put them in random order.
         filenames=sorted([n for n in os.listdir(f"{files_path}{experiment}") if "-Fields_" in n and n.endswith(".h5")])
-        if choose_times is not None:
+        if choose_times is None:
+            selected_filenames = filenames
+        elif isinstance(choose_times, int):
+            selected_filenames = filenames[choose_times:]
+        else:
             try:
                 selected_filenames = [filenames[i] for i in choose_times]
             except Exception as e:
                 logger.info(f"Inconsistent size: {len(filenames) = }  {len(choose_times) = }")
                 raise e
-        else:
-            selected_filenames = filenames
         try:
-            times=[int(n[-9:-3])*dt for n in filenames]  # the last 6 characters of the filename are the time in units of dt.
+            times=[int(n[-9:-3])*dt for n in selected_filenames]  # the last 6 characters of the filename are the time in units of dt.
         except Exception as e:
             logger.info(f"Failed to extract times from {n = }")
-            logger.info(f"{filenames=}")
+            logger.info(f"{selected_filenames=}")
             raise e
         #logger.info(times)
         data[experiment] = read_data(f"{files_path}{experiment}/",selected_filenames,fields_to_read,qom,
@@ -521,6 +523,5 @@ def get_experiments(*args, **kwargs):
     """
     A wrapper function for get_exp_times that does not return times for backward compatibility.
     """
+    logger.warning("get_experiments is deprecated, use get_exp_times instead")
     return get_exp_times(*args, **kwargs)[:-1]
-
-    
