@@ -277,7 +277,7 @@ class DataFrameDataset(torch.utils.data.Dataset):
             self.filter_features = None
         self.filter_targets_kwargs = None
         if filter_targets is not None:
-            filter_targets_copy = filter_targets.copy()
+            filter_targets_copy = filter_targets.copy() # to avoid overwriting filters for later use
             logger.info("Filtering targets")
             if not isinstance(filter_targets, dict):
                 self.filter_targets = getattr(nd, filter_targets_copy)

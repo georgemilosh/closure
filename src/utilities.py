@@ -652,7 +652,7 @@ def do_dot(fx,fy,fz,gx,gy,gz):
 def do_cross(fx,fy,fz,gx,gy,gz):
 	return fy*gz-fz*gy, fz*gx-fx*gz, fx*gy-fy*gx	
 
-def get_PS_2D(data):
+def get_PS_2D(data, x, y):
 	"""
 	Get the pressure-strain term and theta
 	"""
@@ -671,19 +671,20 @@ def get_PS_2D(data):
 		data[experiment]['Dxz'] = {}
 		data[experiment]['Dyz'] = {}
 		data[experiment]['P'] = {}
-
-
+		data[experiment]['Jtotx'] = np.sum([data[experiment]['Jx'][species] for species in data[experiment]['Jx'].keys()], axis=0)
+		data[experiment]['Jtoty'] = np.sum([data[experiment]['Jy'][species] for species in data[experiment]['Jy'].keys()], axis=0)
+		data[experiment]['Jtotz'] = np.sum([data[experiment]['Jz'][species] for species in data[experiment]['Jz'].keys()], axis=0)
+		J2 = data[experiment]['Jtotx']**2 + data[experiment]['Jtoty']**2 + data[experiment]['Jtotz']**2
+		data[experiment]['QJ'] = 0.25*J2/np.mean(J2, axis=(0,1))
 		for species in data[experiment]['rho'].keys():
-			uxx = np.gradient(data[experiment]['Vx'][species],X[:,0], axis=0, edge_order=2)
-			uxy = np.gradient(data[experiment]['Vx'][species],Y[0,:], axis=1, edge_order=2)
-			uyx = np.gradient(data[experiment]['Vy'][species],X[:,0], axis=0, edge_order=2)
-			uyy = np.gradient(data[experiment]['Vy'][species],Y[0,:], axis=1, edge_order=2)
-			uzx = np.gradient(data[experiment]['Vz'][species],X[:,0], axis=0, edge_order=2)
-			uzy = np.gradient(data[experiment]['Vz'][species],Y[0,:], axis=1, edge_order=2)
+			uxx = np.gradient(data[experiment]['Vx'][species],x, axis=0, edge_order=2)
+			uxy = np.gradient(data[experiment]['Vx'][species],y, axis=1, edge_order=2)
+			uyx = np.gradient(data[experiment]['Vy'][species],x, axis=0, edge_order=2)
+			uyy = np.gradient(data[experiment]['Vy'][species],y, axis=1, edge_order=2)
+			uzx = np.gradient(data[experiment]['Vz'][species],x, axis=0, edge_order=2)
+			uzy = np.gradient(data[experiment]['Vz'][species],y, axis=1, edge_order=2)
 			omega2 = (uzy)**2 + (-uzx)**2 + (uyx-uxy)**2
 			data[experiment]['Qomega'][species] = 0.25*omega2/np.mean(omega2, axis=(0,1))
-			J2 = data[experiment]['Jx'][species]**2 + data[experiment]['Jy'][species]**2 + data[experiment]['Jz'][species]**2
-			data[experiment]['QJ'][species] = 0.25*J2/np.mean(J2, axis=(0,1))
 			data[experiment]['P'][species]=(data[experiment]['Pxx'][species]+\
 									data[experiment]['Pyy'][species]+\
 										data[experiment]['Pzz'][species])/3
