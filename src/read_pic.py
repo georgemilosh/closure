@@ -547,9 +547,9 @@ def get_exp_times(experiments, files_path, fields_to_read, choose_species=None, 
         if verbose:
             logger.info(f"{choose_x = }, {choose_y = }, {choose_z = }")
         if nzc == 1:
-            X, Y = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], indexing=kwargs.get('indexing'))
+            X, Y = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], indexing=kwargs.get('indexing',DEFAULT_INDEXING))
         else:
-            X, Y, Z = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], z[choose_z[0]:choose_z[1]], indexing=kwargs.get('indexing'))
+            X, Y, Z = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], z[choose_z[0]:choose_z[1]], indexing=kwargs.get('indexing',DEFAULT_INDEXING))
     if nzc == 1:
         return data, X, Y, qom, times
     else:
