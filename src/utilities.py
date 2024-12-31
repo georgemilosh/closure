@@ -653,66 +653,72 @@ def do_cross(fx,fy,fz,gx,gy,gz):
 	return fy*gz-fz*gy, fz*gx-fx*gz, fx*gy-fy*gx	
 
 def get_PS_2D(data, x, y):
-	"""
-	Get the pressure-strain term and theta
-	"""
-	for experiment in data.keys():
-		data[experiment]['QJ'] = {}
-		data[experiment]['Qomega'] = {}
-		data[experiment]['QD'] = {}
-		data[experiment]['PiD'] = {}
-		data[experiment]['Ptheta'] = {}
-		data[experiment]['PS'] = {}
-		data[experiment]['theta'] = {}
-		data[experiment]['Dxx'] = {}
-		data[experiment]['Dyy'] = {}
-		data[experiment]['Dzz'] = {}
-		data[experiment]['Dxy'] = {}
-		data[experiment]['Dxz'] = {}
-		data[experiment]['Dyz'] = {}
-		data[experiment]['P'] = {}
-		data[experiment]['Jtotx'] = np.sum([data[experiment]['Jx'][species] for species in data[experiment]['Jx'].keys()], axis=0)
-		data[experiment]['Jtoty'] = np.sum([data[experiment]['Jy'][species] for species in data[experiment]['Jy'].keys()], axis=0)
-		data[experiment]['Jtotz'] = np.sum([data[experiment]['Jz'][species] for species in data[experiment]['Jz'].keys()], axis=0)
-		J2 = data[experiment]['Jtotx']**2 + data[experiment]['Jtoty']**2 + data[experiment]['Jtotz']**2
-		data[experiment]['QJ'] = 0.25*J2/np.mean(J2, axis=(0,1))
-		for species in data[experiment]['rho'].keys():
-			uxx = np.gradient(data[experiment]['Vx'][species],x, axis=0, edge_order=2)
-			uxy = np.gradient(data[experiment]['Vx'][species],y, axis=1, edge_order=2)
-			uyx = np.gradient(data[experiment]['Vy'][species],x, axis=0, edge_order=2)
-			uyy = np.gradient(data[experiment]['Vy'][species],y, axis=1, edge_order=2)
-			uzx = np.gradient(data[experiment]['Vz'][species],x, axis=0, edge_order=2)
-			uzy = np.gradient(data[experiment]['Vz'][species],y, axis=1, edge_order=2)
-			omega2 = (uzy)**2 + (-uzx)**2 + (uyx-uxy)**2
-			data[experiment]['Qomega'][species] = 0.25*omega2/np.mean(omega2, axis=(0,1))
-			data[experiment]['P'][species]=(data[experiment]['Pxx'][species]+\
-									data[experiment]['Pyy'][species]+\
-										data[experiment]['Pzz'][species])/3
-			data[experiment]['theta'][species]=uxx+uyy
-			data[experiment]['PS'][species]=-data[experiment]['Pxx'][species]*uxx-\
-				data[experiment]['Pxy'][species]*uxy-data[experiment]['Pxy'][species]*uyx-\
-					data[experiment]['Pyy'][species]*uyy-data[experiment]['Pxz'][species]*uzx-\
-						data[experiment]['Pyz'][species]*uzy
-			data[experiment]['Ptheta'][species]=data[experiment]['P'][species]*data[experiment]['theta'][species]
-			data[experiment]['Dxx'][species] = uxx - data[experiment]['theta'][species]/3
-			data[experiment]['Dyy'][species] = uyy - data[experiment]['theta'][species]/3
-			data[experiment]['Dzz'][species] = -data[experiment]['theta'][species]/3
-			data[experiment]['Dxy'][species] = (uxy + uyx)/2
-			data[experiment]['Dxz'][species] = uzx/2
-			data[experiment]['Dyz'][species] = uzy/2
-			Dsum = data[experiment]['Dxx'][species]**2 + data[experiment]['Dyy'][species]**2 + data[experiment]['Dzz'][species]**2 +\
-				2*(data[experiment]['Dxy'][species]**2 + data[experiment]['Dxz'][species]**2 + data[experiment]['Dyz'][species]**2) 
-			data[experiment]['QD'][species] = 0.25*Dsum/np.mean(Dsum, axis=(0,1))
+    """
+    Get the pressure-strain term and theta
+    """
+    for experiment in data.keys():
+        data[experiment]['QJ'] = {}
+        data[experiment]['Qomega'] = {}
+        data[experiment]['QD'] = {}
+        data[experiment]['PiD'] = {}
+        data[experiment]['Ptheta'] = {}
+        data[experiment]['PS'] = {}
+        data[experiment]['theta'] = {}
+        data[experiment]['Dxx'] = {}
+        data[experiment]['Dyy'] = {}
+        data[experiment]['Dzz'] = {}
+        data[experiment]['Dxy'] = {}
+        data[experiment]['Dxz'] = {}
+        data[experiment]['Dyz'] = {}
+        data[experiment]['P'] = {}
+        data[experiment]['J*(E+VxB)'] = {}
+        data[experiment]['Jtotx'] = np.sum([data[experiment]['Jx'][species] for species in data[experiment]['Jx'].keys()], axis=0)
+        data[experiment]['Jtoty'] = np.sum([data[experiment]['Jy'][species] for species in data[experiment]['Jy'].keys()], axis=0)
+        data[experiment]['Jtotz'] = np.sum([data[experiment]['Jz'][species] for species in data[experiment]['Jz'].keys()], axis=0)
+        E = np.array([data[experiment]['Ex'], data[experiment]['Ey'], data[experiment]['Ez']]).transpose(1,2,3,0)
+        B = np.array([data[experiment]['Bx'], data[experiment]['By'], data[experiment]['Bz']]).transpose(1,2,3,0)
+        J2 = data[experiment]['Jtotx']**2 + data[experiment]['Jtoty']**2 + data[experiment]['Jtotz']**2
+        data[experiment]['QJ'] = 0.25*J2/np.mean(J2, axis=(0,1))
+        for species in data[experiment]['rho'].keys():
+            J = np.array([data[experiment]['Jx'][species], data[experiment]['Jy'][species], data[experiment]['Jz'][species]]).transpose(1,2,3,0)
+            V = np.array([data[experiment]['Vx'][species], data[experiment]['Vy'][species], data[experiment]['Vz'][species]]).transpose(1,2,3,0)
+            data[experiment]['J*(E+VxB)'][species] = np.sum(J*(E + np.cross(V, B)),axis=-1)
+            uxx = np.gradient(data[experiment]['Vx'][species],x, axis=0, edge_order=2)
+            uxy = np.gradient(data[experiment]['Vx'][species],y, axis=1, edge_order=2)
+            uyx = np.gradient(data[experiment]['Vy'][species],x, axis=0, edge_order=2)
+            uyy = np.gradient(data[experiment]['Vy'][species],y, axis=1, edge_order=2)
+            uzx = np.gradient(data[experiment]['Vz'][species],x, axis=0, edge_order=2)
+            uzy = np.gradient(data[experiment]['Vz'][species],y, axis=1, edge_order=2)
+            omega2 = (uzy)**2 + (-uzx)**2 + (uyx-uxy)**2
+            data[experiment]['Qomega'][species] = 0.25*omega2/np.mean(omega2, axis=(0,1))
+            data[experiment]['P'][species]=(data[experiment]['Pxx'][species]+\
+                                    data[experiment]['Pyy'][species]+\
+                                        data[experiment]['Pzz'][species])/3
+            data[experiment]['theta'][species]=uxx+uyy
+            data[experiment]['PS'][species]=-data[experiment]['Pxx'][species]*uxx-\
+                data[experiment]['Pxy'][species]*uxy-data[experiment]['Pxy'][species]*uyx-\
+                    data[experiment]['Pyy'][species]*uyy-data[experiment]['Pxz'][species]*uzx-\
+                        data[experiment]['Pyz'][species]*uzy
+            data[experiment]['Ptheta'][species]=data[experiment]['P'][species]*data[experiment]['theta'][species]
+            data[experiment]['Dxx'][species] = uxx - data[experiment]['theta'][species]/3
+            data[experiment]['Dyy'][species] = uyy - data[experiment]['theta'][species]/3
+            data[experiment]['Dzz'][species] = -data[experiment]['theta'][species]/3
+            data[experiment]['Dxy'][species] = (uxy + uyx)/2
+            data[experiment]['Dxz'][species] = uzx/2
+            data[experiment]['Dyz'][species] = uzy/2
+            Dsum = data[experiment]['Dxx'][species]**2 + data[experiment]['Dyy'][species]**2 + data[experiment]['Dzz'][species]**2 +\
+                2*(data[experiment]['Dxy'][species]**2 + data[experiment]['Dxz'][species]**2 + data[experiment]['Dyz'][species]**2) 
+            data[experiment]['QD'][species] = 0.25*Dsum/np.mean(Dsum, axis=(0,1))
 
-			data[experiment]['PiD'][species]=-(data[experiment]['Pxx'][species]-data[experiment]['P'][species])*\
-				(uxx-data[experiment]['theta'][species]/3)-\
-					(data[experiment]['Pyy'][species]-data[experiment]['P'][species])*\
-						(uyy-data[experiment]['theta'][species]/3)-\
-							(data[experiment]['Pzz'][species]-data[experiment]['P'][species])*\
-								(-data[experiment]['theta'][species]/3)-\
-									data[experiment]['Pxy'][species]*(uyx+uxy)-\
-										data[experiment]['Pxz'][species]*(uzx)-\
-											data[experiment]['Pyz'][species]*(uzy)
+            data[experiment]['PiD'][species]=-(data[experiment]['Pxx'][species]-data[experiment]['P'][species])*\
+                (uxx-data[experiment]['theta'][species]/3)-\
+                    (data[experiment]['Pyy'][species]-data[experiment]['P'][species])*\
+                        (uyy-data[experiment]['theta'][species]/3)-\
+                            (data[experiment]['Pzz'][species]-data[experiment]['P'][species])*\
+                                (-data[experiment]['theta'][species]/3)-\
+                                    data[experiment]['Pxy'][species]*(uyx+uxy)-\
+                                        data[experiment]['Pxz'][species]*(uzx)-\
+                                            data[experiment]['Pyz'][species]*(uzy)
 
 
 
