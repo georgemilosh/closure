@@ -337,7 +337,8 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
 
     if fields_to_read["J"]:
         data['Jx'], data['Jy'], data['Jz'] = {}, {}, {}
-        data['Vx'], data['Vy'], data['Vz'] = {}, {}, {}
+        if fields_to_read['rho']:
+            data['Vx'], data['Vy'], data['Vz'] = {}, {}, {}
         if verbose:
             logger.info(f"loading J")
         for component in ['x','y','z']:
@@ -347,13 +348,17 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                         data[f'J{component}'][species] += read_fieldname(files_path,filenames,f'J{component}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
                     else:
                         data[f'J{component}'][species] = read_fieldname(files_path,filenames,f'J{component}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
-            for species in data[f'J{component}'].keys():
-                data[f'V{component}'][species] = data[f'J{component}'][species]/(data['rho'][species]+small)
-        data['Jmagn'], data['Vmagn'] = {}, {}
+            if fields_to_read['rho']:
+                for species in data[f'J{component}'].keys():
+                    data[f'V{component}'][species] = data[f'J{component}'][species]/(data['rho'][species]+small)
+        data['Jmagn'] = {}
+        if 'Vx' in data.keys():
+            data['Vmagn'] = {}
         for species in data[f'J{component}'].keys():
             if species is not None:
                 data['Jmagn'][species] = np.sqrt(data['Jx'][species]**2 + data['Jy'][species]**2 + data['Jz'][species]**2)
-                data['Vmagn'][species] = np.sqrt(data['Vx'][species]**2 + data['Vy'][species]**2 + data['Vz'][species]**2)
+                if 'Vx' in data.keys():
+                    data['Vmagn'][species] = np.sqrt(data['Vx'][species]**2 + data['Vy'][species]**2 + data['Vz'][species]**2)
                 
 
     # The diagonal and offdiagonal part of the pressure is calculated (to do so you need to read rho and J first).
@@ -545,7 +550,7 @@ def get_exp_times(experiments, files_path, fields_to_read, choose_species=None, 
         if choose_z is None:
             choose_z = [0,z.shape[0]-1]
         if verbose:
-            logger.info(f"{choose_x = }, {choose_y = }, {choose_z = }")
+            logger.info(f"{choose_x = }, {choose_y = }, {choose_z = }, {choose_times =}")
         if nzc == 1:
             X, Y = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], indexing=kwargs.get('indexing',DEFAULT_INDEXING))
         else:
