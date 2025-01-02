@@ -7,6 +7,8 @@ import os
 import src.utilities as ut
 import numpy as np
 import pickle
+import time
+start_time = time.time()
 # Fields to read.
 fields_to_read={"B":True,"B_ext":False,"divB":True,"E":True,"E_ext":False,"rho":True,"J":True,
                 "P":True,"PI":False,"Heat_flux":False,"N":False,"Qrem":False}
@@ -22,7 +24,7 @@ data, X, Y, qom, times = rp.get_exp_times(experiments, files_path, fields_to_rea
                                           choose_species=['e','i'], verbose=True, 
                                           choose_times=1, indexing='ij',
                                            filters = None) 
-print(f"{data[experiment]['Bx'].keys() = }")
+print(f"{data[experiment]['Bx'].shape = }")
 filtered = {}
 xs = [2048, 1376, 928, 608, 416, 288, 192, 128, 96, 64, 32, 20, 16, 12, 10, 8, 6, 4, 3, 2, 1]
 
@@ -51,4 +53,5 @@ for quantity in ['Em_bar']:
         pickle.dump(filtered, f)
 
 
-
+end_time = time.time()
+print(f"Execution time: {end_time - start_time} seconds")
