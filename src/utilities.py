@@ -710,7 +710,7 @@ def get_PS_2D(data, x, y):
             Dsum = data[experiment]['Dxx'][species]**2 + data[experiment]['Dyy'][species]**2 + data[experiment]['Dzz'][species]**2 +\
                 2*(data[experiment]['Dxy'][species]**2 + data[experiment]['Dxz'][species]**2 + data[experiment]['Dyz'][species]**2) 
             data[experiment]['QD'][species] = 0.25*Dsum/np.mean(Dsum, axis=(0,1))
-
+            # Using PiD = - (Pij - Pdelta_ij)Dij
             data[experiment]['PiD'][species]=-(data[experiment]['Pxx'][species]-data[experiment]['P'][species])*\
                 (uxx-data[experiment]['theta'][species]/3)-\
                     (data[experiment]['Pyy'][species]-data[experiment]['P'][species])*\
@@ -753,6 +753,7 @@ def apply_filter(field, density=None, filters = {'name': 'uniform_filter', 'size
             filter_kwargs['axes'] = tuple(filter_kwargs['axes'])
         if filter_kwargs['axes'] is None or filter_kwargs['axes'] != (0,1):
             print("Filtering targets should be aplied to only spatial dimensions")
+    #print(filter_kwargs)
     if density is not None:
         if field.shape == density.shape:
             return filters_object(field*density, **filter_kwargs)/ filters_object(density, **filter_kwargs)
@@ -783,12 +784,13 @@ def scale_filtering(data, x, y, qom, verbose=False,
     for fields in ['Vx', 'Vy', 'Vz', 'Bx', 'By', 'Bz', 'Ex','Ey', 'Ez']:
         auxiliary[f"{fields}_favre"] = {}
         
-    data['Em_bar'] = 0.5*(auxiliary['Bx_bar']**2 + auxiliary['By_bar']**2 + auxiliary['Bz_bar']**2 + auxiliary['Ex_bar']**2 + auxiliary['Ey_bar']**2 + auxiliary['Ez_bar']**2)
+    data['Em_bar'] = (auxiliary['Bx_bar']**2 + auxiliary['By_bar']**2 + auxiliary['Bz_bar']**2 + auxiliary['Ex_bar']**2 + auxiliary['Ey_bar']**2 + auxiliary['Ez_bar']**2)/(8*np.pi)
     data['Ef_favre'] = {}
-    data['Piuu'] = {}
-    data['Pibb'] = {}
-    data['PhiuT'] = {}
-    data['Lub'] = {}
+    data['PIuu'] = {}
+    data['PIbb'] = {}
+    data['PS'] = {}
+    data['-Ptheta'] = {}
+    data['JdotE'] = {}
     auxiliary['rho_bar'] = {}
     B = np.array([data['Bx'], data['By'], data['Bz']]).transpose(1,2,3,0)
     E_bar = np.array([auxiliary['Ex_bar'], auxiliary['Ey_bar'], auxiliary['Ez_bar']]).transpose(1,2,3,0)
@@ -797,16 +799,16 @@ def scale_filtering(data, x, y, qom, verbose=False,
             auxiliary[f"{fields}_favre"][species] = apply_filter(data[fields][species], density=data['rho'][species], filters = filters)
         for fields in ['Bx', 'By', 'Bz', 'Ex','Ey', 'Ez']:
             auxiliary[f"{fields}_favre"][species] = apply_filter(data[fields], density=data['rho'][species], filters = filters)
-        auxiliary['rho_bar'][species] = apply_filter(data['rho'][species], filters = filters)
-        data['Ef_favre'][species] = 0.5*auxiliary['rho_bar'][species]*(auxiliary['Vx_favre'][species]**2 + auxiliary['Vy_favre'][species]**2 + auxiliary['Vz_favre'][species]**2)
+        auxiliary['rho_bar'][species] = apply_filter(data['rho'][species], filters = filters) # charge density
+        data['Ef_favre'][species] = 0.5*auxiliary['rho_bar'][species]*(auxiliary['Vx_favre'][species]**2 + auxiliary['Vy_favre'][species]**2 + auxiliary['Vz_favre'][species]**2)/qom[i]
         B_favre = np.array([auxiliary['Bx_favre'][species], auxiliary['By_favre'][species], auxiliary['Bz_favre'][species]]).transpose(1,2,3,0)
         E_favre = np.array([auxiliary['Ex_favre'][species], auxiliary['Ey_favre'][species], auxiliary['Ez_favre'][species]]).transpose(1,2,3,0)
         tau_e = E_favre - E_bar
         if verbose:
             print(f"{species = }")
         V_favre = np.array([auxiliary['Vx_favre'][species], auxiliary['Vy_favre'][species], auxiliary['Vz_favre'][species]]).transpose(1,2,3,0)
-        data['Pibb'][species] = -qom[i]*data['rho'][species]*np.sum(tau_e*V_favre, axis=-1)
-        data['Lub'][species] = -qom[i]*data['rho'][species]*np.sum(E_favre*V_favre, axis=-1)
+        data['PIbb'][species] = -auxiliary['rho_bar'][species]*np.sum(tau_e*V_favre, axis=-1)
+        data['JdotE'][species] = +auxiliary['rho_bar'][species]*np.sum(E_favre*V_favre, axis=-1)
 
         V = np.array([data['Vx'][species], data['Vy'][species], data['Vz'][species]]).transpose(1,2,3,0)
         tau_b = apply_filter(np.cross(V, B), density=data['rho'][species], filters = filters) - np.cross(V_favre, B_favre)
@@ -814,21 +816,25 @@ def scale_filtering(data, x, y, qom, verbose=False,
         for component in ['x', 'y', 'z']:
             dV_favre[f"{component}x"] = np.gradient(auxiliary[f'V{component}_favre'][species],x, axis=0, edge_order=2)
             dV_favre[f"{component}y"] = np.gradient(auxiliary[f'V{component}_favre'][species],y, axis=1, edge_order=2)
-        data['Piuu'][species] = 0 # equation (21) of Matthaeus, W. H.; Yang, Y.; Wan, M.; Parashar, T. N.; Bandyopadhyay, R.; Chasapis, A.; Pezzi, O.; Valentini, F. Pathways to Dissipation in Weakly Collisional Plasmas. ApJ 2020, 891 (1), 101. https://doi.org/10.3847/1538-4357/ab6d6a. See also Yang, Y.; Matthaeus, W. H.; Roy, S.; Roytershteyn, V.; Parashar, T. N.; Bandyopadhyay, R.; Wan, M. Pressure–Strain Interaction as the Energy Dissipation Estimate in Collisionless Plasma. ApJ 2022, 929 (2), 142. https://doi.org/10.3847/1538-4357/ac5d3e.
-        data['PhiuT'][species] = 0
+        data['-Ptheta'][species] = 0
+        for component in ['x', 'y', 'z']: #calculating trace
+            data['-Ptheta'][species] += apply_filter(data[f'P{component}{component}'][species], filters = filters)
+        data['-Ptheta'][species] *= -(dV_favre['xx']+dV_favre['yy'])/3 # divergence of velocity times pressure trace
+        data['PIuu'][species] = 0 # equation (21) of Matthaeus, W. H.; Yang, Y.; Wan, M.; Parashar, T. N.; Bandyopadhyay, R.; Chasapis, A.; Pezzi, O.; Valentini, F. Pathways to Dissipation in Weakly Collisional Plasmas. ApJ 2020, 891 (1), 101. https://doi.org/10.3847/1538-4357/ab6d6a. See also Yang, Y.; Matthaeus, W. H.; Roy, S.; Roytershteyn, V.; Parashar, T. N.; Bandyopadhyay, R.; Wan, M. Pressure–Strain Interaction as the Energy Dissipation Estimate in Collisionless Plasma. ApJ 2022, 929 (2), 142. https://doi.org/10.3847/1538-4357/ac5d3e.
+        data['PS'][species] = 0
         for component1, component2 in zip(['x', 'x', 'y' ,'y', 'z', 'z'], ['x', 'y', 'x', 'y', 'x', 'y']):
             Pbar = apply_filter(data[f'P{component1}{component2}'][species], filters = filters)
             if verbose:
                 print(f"adding: Pbar{component1}{component2} * nabla dVfavre_{component1}d{component2}")
-            data['PhiuT'][species] += - Pbar*dV_favre[f"{component1}{component2}"]
+            data['PS'][species] += - Pbar*dV_favre[f"{component1}{component2}"]
 
             tauu = apply_filter(data[f'V{component1}'][species]*data[f'V{component2}'][species], \
                             density=data['rho'][species], filters = filters) - \
                             auxiliary[f'V{component1}_favre'][species]*auxiliary[f'V{component2}_favre'][species]
 
-            data['Piuu'][species] += - data['rho'][species]*tauu*dV_favre[f"{component1}{component2}"]
+            data['PIuu'][species] += - auxiliary['rho_bar'][species]*tauu*dV_favre[f"{component1}{component2}"]/qom[i]
             
-        data['Piuu'][species] += - qom[i]*data['rho'][species]*np.sum(tau_b*V_favre, axis=-1)
+        data['PIuu'][species] += - auxiliary['rho_bar'][species]*np.sum(tau_b*V_favre, axis=-1)
 
 
 def get_T(data):
