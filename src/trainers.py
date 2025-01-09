@@ -324,6 +324,12 @@ class Trainer:
         Get the device to use for training.
         """
         if device is None:
+            if torch.cuda.is_available():
+                logger.info(f"Number of GPUs: {torch.cuda.device_count()}")
+                for i in range(torch.cuda.device_count()):
+                    logger.info(f"GPU {i}: {torch.cuda.get_device_name(i)}")
+            else:
+                logger.info("No CUDA GPU available. Using CPU.")
             dev = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
             msg = f"Device was automatically selected: {dev}"
             warnings.warn(msg)
