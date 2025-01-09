@@ -580,10 +580,18 @@ def vector_spectrum_2D(field_x,field_y,field_z, X, Y):
     Author: Peppe Arrò
     This script calculates the 1D power spectrum for vector functions
     """
-    Lx = X[-1,0]
-    Ly = Y[0,-1]
-    x = X[:,0]
-    y = Y[0,:]
+    if len(X.shape) == 1:
+        Lx = X[-1] - X[0]
+        Ly = Y[-1] - Y[0]
+        x = X
+        y = Y
+    elif len(X.shape) == 2:
+        Lx = X[-1,0] - X[0,0]
+        Ly = Y[0,-1] - Y[0,0]
+        x = X[:,0]
+        y = Y[0,:]
+    else:
+        raise ValueError("X and Y must be 1D or 2D arrays")
     t = np.arange(field_x.shape[-1])
     nxc=len(X)-1
     nyc=len(Y)-1
@@ -653,73 +661,79 @@ def do_dot(fx,fy,fz,gx,gy,gz):
 def do_cross(fx,fy,fz,gx,gy,gz):
 	return fy*gz-fz*gy, fz*gx-fx*gz, fx*gy-fy*gx	
 
+def get_PS_2D_field(data, x, y):
+    """
+    Get the pressure-strain term and theta
+    """
+    data['QJ'] = {}
+    data['Qomega'] = {}
+    data['QD'] = {}
+    data['PiD'] = {}
+    data['Ptheta'] = {}
+    data['PS'] = {}
+    data['theta'] = {}
+    data['Dxx'] = {}
+    data['Dyy'] = {}
+    data['Dzz'] = {}
+    data['Dxy'] = {}
+    data['Dxz'] = {}
+    data['Dyz'] = {}
+    data['P'] = {}
+    data['J*(E+VxB)'] = {}
+    data['Jtotx'] = np.sum([data['Jx'][species] for species in data['Jx'].keys()], axis=0)
+    data['Jtoty'] = np.sum([data['Jy'][species] for species in data['Jy'].keys()], axis=0)
+    data['Jtotz'] = np.sum([data['Jz'][species] for species in data['Jz'].keys()], axis=0)
+    E = np.array([data['Ex'], data['Ey'], data['Ez']]).transpose(1,2,3,0)
+    B = np.array([data['Bx'], data['By'], data['Bz']]).transpose(1,2,3,0)
+    J2 = data['Jtotx']**2 + data['Jtoty']**2 + data['Jtotz']**2
+    data['QJ'] = 0.25*J2/np.mean(J2, axis=(0,1))
+    for species in data['rho'].keys():
+        J = np.array([data['Jx'][species], data['Jy'][species], data['Jz'][species]]).transpose(1,2,3,0)
+        V = np.array([data['Vx'][species], data['Vy'][species], data['Vz'][species]]).transpose(1,2,3,0)
+        data['J*(E+VxB)'][species] = np.sum(J*(E + np.cross(V, B)),axis=-1)
+        uxx = np.gradient(data['Vx'][species],x, axis=0, edge_order=2)
+        uxy = np.gradient(data['Vx'][species],y, axis=1, edge_order=2)
+        uyx = np.gradient(data['Vy'][species],x, axis=0, edge_order=2)
+        uyy = np.gradient(data['Vy'][species],y, axis=1, edge_order=2)
+        uzx = np.gradient(data['Vz'][species],x, axis=0, edge_order=2)
+        uzy = np.gradient(data['Vz'][species],y, axis=1, edge_order=2)
+        omega2 = (uzy)**2 + (-uzx)**2 + (uyx-uxy)**2
+        data['Qomega'][species] = 0.25*omega2/np.mean(omega2, axis=(0,1))
+        data['P'][species]=(data['Pxx'][species]+\
+                                data['Pyy'][species]+\
+                                    data['Pzz'][species])/3
+        data['theta'][species]=uxx+uyy
+        data['PS'][species]=-data['Pxx'][species]*uxx-\
+            data['Pxy'][species]*uxy-data['Pxy'][species]*uyx-\
+                data['Pyy'][species]*uyy-data['Pxz'][species]*uzx-\
+                    data['Pyz'][species]*uzy
+        data['Ptheta'][species]=data['P'][species]*data['theta'][species]
+        data['Dxx'][species] = uxx - data['theta'][species]/3
+        data['Dyy'][species] = uyy - data['theta'][species]/3
+        data['Dzz'][species] = -data['theta'][species]/3
+        data['Dxy'][species] = (uxy + uyx)/2
+        data['Dxz'][species] = uzx/2
+        data['Dyz'][species] = uzy/2
+        Dsum = data['Dxx'][species]**2 + data['Dyy'][species]**2 + data['Dzz'][species]**2 +\
+            2*(data['Dxy'][species]**2 + data['Dxz'][species]**2 + data['Dyz'][species]**2) 
+        data['QD'][species] = 0.25*Dsum/np.mean(Dsum, axis=(0,1))
+        # Using PiD = - (Pij - Pdelta_ij)Dij
+        data['PiD'][species]=-(data['Pxx'][species]-data['P'][species])*\
+            (uxx-data['theta'][species]/3)-\
+                (data['Pyy'][species]-data['P'][species])*\
+                    (uyy-data['theta'][species]/3)-\
+                        (data['Pzz'][species]-data['P'][species])*\
+                            (-data['theta'][species]/3)-\
+                                data['Pxy'][species]*(uyx+uxy)-\
+                                    data['Pxz'][species]*(uzx)-\
+                                        data['Pyz'][species]*(uzy)
+
 def get_PS_2D(data, x, y):
     """
     Get the pressure-strain term and theta
     """
     for experiment in data.keys():
-        data[experiment]['QJ'] = {}
-        data[experiment]['Qomega'] = {}
-        data[experiment]['QD'] = {}
-        data[experiment]['PiD'] = {}
-        data[experiment]['Ptheta'] = {}
-        data[experiment]['PS'] = {}
-        data[experiment]['theta'] = {}
-        data[experiment]['Dxx'] = {}
-        data[experiment]['Dyy'] = {}
-        data[experiment]['Dzz'] = {}
-        data[experiment]['Dxy'] = {}
-        data[experiment]['Dxz'] = {}
-        data[experiment]['Dyz'] = {}
-        data[experiment]['P'] = {}
-        data[experiment]['J*(E+VxB)'] = {}
-        data[experiment]['Jtotx'] = np.sum([data[experiment]['Jx'][species] for species in data[experiment]['Jx'].keys()], axis=0)
-        data[experiment]['Jtoty'] = np.sum([data[experiment]['Jy'][species] for species in data[experiment]['Jy'].keys()], axis=0)
-        data[experiment]['Jtotz'] = np.sum([data[experiment]['Jz'][species] for species in data[experiment]['Jz'].keys()], axis=0)
-        E = np.array([data[experiment]['Ex'], data[experiment]['Ey'], data[experiment]['Ez']]).transpose(1,2,3,0)
-        B = np.array([data[experiment]['Bx'], data[experiment]['By'], data[experiment]['Bz']]).transpose(1,2,3,0)
-        J2 = data[experiment]['Jtotx']**2 + data[experiment]['Jtoty']**2 + data[experiment]['Jtotz']**2
-        data[experiment]['QJ'] = 0.25*J2/np.mean(J2, axis=(0,1))
-        for species in data[experiment]['rho'].keys():
-            J = np.array([data[experiment]['Jx'][species], data[experiment]['Jy'][species], data[experiment]['Jz'][species]]).transpose(1,2,3,0)
-            V = np.array([data[experiment]['Vx'][species], data[experiment]['Vy'][species], data[experiment]['Vz'][species]]).transpose(1,2,3,0)
-            data[experiment]['J*(E+VxB)'][species] = np.sum(J*(E + np.cross(V, B)),axis=-1)
-            uxx = np.gradient(data[experiment]['Vx'][species],x, axis=0, edge_order=2)
-            uxy = np.gradient(data[experiment]['Vx'][species],y, axis=1, edge_order=2)
-            uyx = np.gradient(data[experiment]['Vy'][species],x, axis=0, edge_order=2)
-            uyy = np.gradient(data[experiment]['Vy'][species],y, axis=1, edge_order=2)
-            uzx = np.gradient(data[experiment]['Vz'][species],x, axis=0, edge_order=2)
-            uzy = np.gradient(data[experiment]['Vz'][species],y, axis=1, edge_order=2)
-            omega2 = (uzy)**2 + (-uzx)**2 + (uyx-uxy)**2
-            data[experiment]['Qomega'][species] = 0.25*omega2/np.mean(omega2, axis=(0,1))
-            data[experiment]['P'][species]=(data[experiment]['Pxx'][species]+\
-                                    data[experiment]['Pyy'][species]+\
-                                        data[experiment]['Pzz'][species])/3
-            data[experiment]['theta'][species]=uxx+uyy
-            data[experiment]['PS'][species]=-data[experiment]['Pxx'][species]*uxx-\
-                data[experiment]['Pxy'][species]*uxy-data[experiment]['Pxy'][species]*uyx-\
-                    data[experiment]['Pyy'][species]*uyy-data[experiment]['Pxz'][species]*uzx-\
-                        data[experiment]['Pyz'][species]*uzy
-            data[experiment]['Ptheta'][species]=data[experiment]['P'][species]*data[experiment]['theta'][species]
-            data[experiment]['Dxx'][species] = uxx - data[experiment]['theta'][species]/3
-            data[experiment]['Dyy'][species] = uyy - data[experiment]['theta'][species]/3
-            data[experiment]['Dzz'][species] = -data[experiment]['theta'][species]/3
-            data[experiment]['Dxy'][species] = (uxy + uyx)/2
-            data[experiment]['Dxz'][species] = uzx/2
-            data[experiment]['Dyz'][species] = uzy/2
-            Dsum = data[experiment]['Dxx'][species]**2 + data[experiment]['Dyy'][species]**2 + data[experiment]['Dzz'][species]**2 +\
-                2*(data[experiment]['Dxy'][species]**2 + data[experiment]['Dxz'][species]**2 + data[experiment]['Dyz'][species]**2) 
-            data[experiment]['QD'][species] = 0.25*Dsum/np.mean(Dsum, axis=(0,1))
-            # Using PiD = - (Pij - Pdelta_ij)Dij
-            data[experiment]['PiD'][species]=-(data[experiment]['Pxx'][species]-data[experiment]['P'][species])*\
-                (uxx-data[experiment]['theta'][species]/3)-\
-                    (data[experiment]['Pyy'][species]-data[experiment]['P'][species])*\
-                        (uyy-data[experiment]['theta'][species]/3)-\
-                            (data[experiment]['Pzz'][species]-data[experiment]['P'][species])*\
-                                (-data[experiment]['theta'][species]/3)-\
-                                    data[experiment]['Pxy'][species]*(uyx+uxy)-\
-                                        data[experiment]['Pxz'][species]*(uzx)-\
-                                            data[experiment]['Pyz'][species]*(uzy)
+        get_PS_2D_field(data[experiment], x, y)
 
 def apply_filter(field, density=None, filters = {'name': 'uniform_filter', 'size': 3, 'mode' : 'wrap', 'axes': (0,1)}):
     """
