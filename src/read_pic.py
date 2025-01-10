@@ -5,6 +5,7 @@ import re
 from . import utilities as ut
 import logging
 import scipy.ndimage as nd
+import pickle
 #logger = logging.getLogger('trainers')
 logging.basicConfig(level=logging.INFO)
 logging.captureWarnings(True)
@@ -36,6 +37,8 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
     - verbose (bool, optional): A flag indicating whether to logger.info debug information.
     - filters (dict, optional): A dictionary containing the name of the filter to apply and the arguments to pass to the filter.
         Usage: filters = {'name': 'gaussian_filter', 'sigma': 1, 'axes': (1,2)}
+                filters = [{'name': 'gaussian_filter', 'sigma': 1, 'axes': (1,2)},
+                           {'name': 'zoom', 'zoom': (0.25, 0.25), 'mode' : 'grid-wrap'}]
 
     Returns:
     - numpy.ndarray: A subset of the field, with the z-dimension removed.
@@ -46,17 +49,22 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
         filenames = [filenames]
     for filename in filenames:
         try:
-            with h5py.File(files_path+filename,"r") as n:
-                field.append(np.array(n[f"/Step#0/Block/{fieldname}/0"]))
-                if choose_x is None:
-                    choose_x = [0,field[-1].shape[2]-1]
-                if choose_y is None:
-                    choose_y = [0,field[-1].shape[1]-1]
-                if choose_z is None:
-                    choose_z = [0,field[-1].shape[0]-1]
+            if filename.endswith(".h5"):
+                with h5py.File(files_path + filename, "r") as n:
+                    field.append(np.array(n[f"/Step#0/Block/{fieldname}/0"]))
+            elif filename.endswith(".h5.pkl"):
+                with open(files_path + filename, "rb") as n:
+                    field.append(pickle.load(n)[fieldname])
+            else:
+                raise FileNotFoundError(f"Neither {filename} nor {filename}.pkl found in {files_path}")
+            if choose_x is None:
+                choose_x = [0,field[-1].shape[2]-1]
+            if choose_y is None:
+                choose_y = [0,field[-1].shape[1]-1]
+            if choose_z is None:
+                choose_z = [0,field[-1].shape[0]]
         except Exception as e:
-            if verbose:
-                logger.warning(f"Failed to read {fieldname} from {filename} using path {files_path}")
+            logger.warning(f"Failed to read {fieldname} from {filename} using path {files_path}")
             raise e
     if indexing == 'ij': 
         a = np.transpose(np.array(field), (3, 2, 1, 0))[choose_x[0]:choose_x[1],choose_y[0]:choose_y[1],choose_z[0]:choose_z[1],:]
@@ -64,25 +72,27 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
         a = np.transpose(np.array(field), (2, 3, 1, 0))[choose_y[0]:choose_y[1],choose_x[0]:choose_x[1],choose_z[0]:choose_z[1],:]
     else:
         a = np.array(field)[choose_x[0]:choose_x[1],choose_y[0]:choose_y[1],choose_z[0]:choose_z[1],:]
-    if a.shape[1] <= 2: #  if z axis has length 2 or less it should be dropped
-        a = np.squeeze(a[:,0,:])
+    if a.shape[2] <= 2: #  if z axis has length 2 or less it should be dropped
+        a = np.squeeze(a[...,0,:])
     else:
         a = np.squeeze(a) # transposing means swapping x and y and remove z
+    #logger.info(f"{filename}, {fieldname}, {a.shape = }")
     if filters is not None:
-        filters_copy = filters.copy() # to avoid overwriting filters for later use
-        if verbose:
-            logger.info(f"Filtering {fieldname} from {filename}")
-        if not isinstance(filters_copy, dict):
-            filters_object = getattr(nd, filters_copy)
-        else:
+        if not isinstance(filters, list):
+            filters = [filters]
+        for filteri in filters: # apply all filters in succession
+            if verbose:
+                logger.info(f"Filtering {fieldname} from {filename} with {filteri['name']}")
+            filters_copy = filteri.copy()
             filters_name = filters_copy.pop("name", None)
             filters_object = getattr(nd, filters_name)
             filter_kwargs = filters_copy
-            if isinstance(filter_kwargs['axes'], list):
-                filter_kwargs['axes'] = tuple(filter_kwargs['axes'])
-            if filter_kwargs['axes'] is None or filter_kwargs['axes'] != (1,2):
-                logger.warning("Filtering targets should be aplied to only spatial dimensions")
-        a = filters_object(a, **filter_kwargs)
+            for _, kwarg in filter_kwargs.items():
+                if  isinstance(kwarg, list):
+                    kwarg = tuple(kwarg)  #  configs usually provide lists, but we need tuples
+            a = filters_object(a, **filter_kwargs)
+            if verbose:
+                logger.info(f"Resulting shape {a.shape}")
     return a
 
 
@@ -523,7 +533,7 @@ def get_exp_times(experiments, files_path, fields_to_read, choose_species=None, 
     data = {}
     for experiment in experiments:
         # sorted(os.listdir()) creates a sorted list containing the .h5 filenames, os.listdir() alone would put them in random order.
-        filenames=sorted([n for n in os.listdir(f"{files_path}{experiment}") if "-Fields_" in n and n.endswith(".h5")])
+        filenames = sorted([n for n in os.listdir(f"{files_path}{experiment}") if "-Fields_" in n and (n.endswith(".pkl") or n.endswith(".h5"))])
         if choose_times is None:
             selected_filenames = filenames
         elif isinstance(choose_times, int):
@@ -535,7 +545,7 @@ def get_exp_times(experiments, files_path, fields_to_read, choose_species=None, 
                 logger.info(f"Inconsistent size: {len(filenames) = }  {len(choose_times) = }")
                 raise e
         try:
-            times=[int(n[-9:-3])*dt for n in selected_filenames]  # the last 6 characters of the filename are the time in units of dt.
+            times = [int(n[-13:-7] if n.endswith(".h5.pkl") else n[-9:-3]) * dt for n in selected_filenames]
         except Exception as e:
             logger.info(f"Failed to extract times from {n = }")
             logger.info(f"{selected_filenames=}")

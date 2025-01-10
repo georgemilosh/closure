@@ -309,9 +309,9 @@ def transform_targets(trainer, rescale=True, renorm=True, verbose=True):
         ground_truth_scaled: The scaled ground truth targets.
     """
 
-    prediction = trainer.model.predict(trainer.test_dataset.features)
+    prediction = trainer.model.predict(trainer.test_dataset.features).cpu()
     ground_truth = trainer.test_dataset.targets[:,trainer.val_loader.target_channels].squeeze()
-    pred_shape = [1 for _ in prediction.cpu().numpy().shape]
+    pred_shape = [1 for _ in prediction.shape]
     pred_shape[1] = -1
     pred_shape = tuple(pred_shape)
 
