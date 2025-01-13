@@ -64,7 +64,8 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
             if choose_z is None:
                 choose_z = [0,field[-1].shape[0]]
         except Exception as e:
-            logger.warning(f"Failed to read {fieldname} from {filename} using path {files_path}")
+            if verbose:
+                logger.warning(f"Failed to read {fieldname} from {filename} using path {files_path}")
             raise e
     if indexing == 'ij': 
         a = np.transpose(np.array(field), (3, 2, 1, 0))[choose_x[0]:choose_x[1],choose_y[0]:choose_y[1],choose_z[0]:choose_z[1],:]

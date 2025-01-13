@@ -467,6 +467,12 @@ def plot_pred_targets(trainer, target_name: str, prediction=None, ground_truth=N
 
     Args:
         trainer (Trainer): A Trainer object.
+        target_name (str): The name of the target variable to visualize.
+        prediction (torch.Tensor): The predicted values for the target variable.
+        ground_truth (torch.Tensor): The ground truth values for the target variable.
+        list_of_target_indices (list): A list of target indices.
+        plot_indices (list): A list of indices to plot, basically which times to plot.
+        **kwargs: Additional keyword arguments to be passed to the plotting functions: axes.pcolormesh
     """
     print("The function pred_ground_targets is deprecated. Use graph_pred_targets instead.")
     if prediction is None or ground_truth is None or list_of_target_indices is None:
@@ -798,7 +804,8 @@ def scale_filtering(data, x, y, qom, verbose=False,
     for fields in ['Vx', 'Vy', 'Vz', 'Bx', 'By', 'Bz', 'Ex','Ey', 'Ez']:
         auxiliary[f"{fields}_favre"] = {}
         
-    data['Em_bar'] = (auxiliary['Bx_bar']**2 + auxiliary['By_bar']**2 + auxiliary['Bz_bar']**2 + auxiliary['Ex_bar']**2 + auxiliary['Ey_bar']**2 + auxiliary['Ez_bar']**2)/(8*np.pi)
+    data['E2_bar'] = (auxiliary['Ex_bar']**2 + auxiliary['Ey_bar']**2 + auxiliary['Ez_bar']**2)/(8*np.pi)
+    data['B2_bar'] = (auxiliary['Bx_bar']**2 + auxiliary['By_bar']**2 + auxiliary['Bz_bar']**2)/(8*np.pi)
     data['Ef_favre'] = {}
     data['PIuu'] = {}
     data['PIbb'] = {}
@@ -851,45 +858,46 @@ def scale_filtering(data, x, y, qom, verbose=False,
         data['PIuu'][species] += - auxiliary['rho_bar'][species]*np.sum(tau_b*V_favre, axis=-1)
 
 
-def get_T(data):
-	"""
-	Get T, T_perp, T_par
-	"""
-	for experiment in data.keys():
-		data[experiment]['T'] = {}
-		data[experiment]['T_par'] = {}
-		data[experiment]['T_perp'] = {}
-		for species in data[experiment]['rho'].keys():
-			bx=data[experiment]['Bx']/np.sqrt(data[experiment]['Bx']**2+data[experiment]['By']**2+data[experiment]['Bz']**2)
-			by=data[experiment]['By']/np.sqrt(data[experiment]['Bx']**2+data[experiment]['By']**2+data[experiment]['Bz']**2)
-			bz=data[experiment]['Bz']/np.sqrt(data[experiment]['Bx']**2+data[experiment]['By']**2+data[experiment]['Bz']**2)
-			data[experiment]['T'][species]=(data[experiment]['Pxx'][species]+\
-									data[experiment]['Pyy'][species]+\
-										data[experiment]['Pzz'][species])/3
-			data[experiment]['T_par'][species]=(data[experiment]['Pxx'][species]*bx**2+\
-				data[experiment]['Pyy'][species]*by**2+data[experiment]['Pzz'][species]*bz**2+\
-					2*(data[experiment]['Pxy'][species]*bx*by+data[experiment]['Pxz'][species]*bx*bz+\
-						data[experiment]['Pyz'][species]*by*bz))/data[experiment]['rho'][species]
-			data[experiment]['T_perp'][species]=(3*data[experiment]['T'][species]-data[experiment]['T_par'][species])/2
+def get_T(data, qom):
+    """
+    Get T, T_perp, T_par
+    """
+    data['T'] = {}
+    data['T_par'] = {}
+    data['T_perp'] = {}
+    data['beta_par'] = {}
+    bx=data['Bx']/np.sqrt(data['Bx']**2+data['By']**2+data['Bz']**2)
+    by=data['By']/np.sqrt(data['Bx']**2+data['By']**2+data['Bz']**2)
+    bz=data['Bz']/np.sqrt(data['Bx']**2+data['By']**2+data['Bz']**2)
+    for i, species in enumerate(data['rho'].keys()):
+        data['T'][species]=(data['Pxx'][species]+\
+                                data['Pyy'][species]+\
+                                    data['Pzz'][species])/(3*data['rho'][species]*np.sign(qom[i]))
+        data['T_par'][species]=(data['Pxx'][species]*bx**2+\
+            data['Pyy'][species]*by**2+data['Pzz'][species]*bz**2+\
+                2*(data['Pxy'][species]*bx*by+data['Pxz'][species]*bx*bz+\
+                    data['Pyz'][species]*by*bz))/(data['rho'][species]*np.sign(qom[i]))
+        data['T_perp'][species]=(3*data['T'][species]-data['T_par'][species])/2
+        data['beta_par'][species] = 8*np.pi*data['T_par'][species]*(data['rho'][species]*np.sign(qom[i]))/(data['Bx']**2 + data['By']**2 + data['Bz']**2)
 
 def get_agyrotropy(data):
 	for experiment in data.keys():
-		data[experiment]['agyrotropy'] = {}
-		for species in data[experiment]['rho'].keys():
-			bx=data[experiment]['Bx']/np.sqrt(data[experiment]['Bx']**2+data[experiment]['By']**2+data[experiment]['Bz']**2)
-			by=data[experiment]['By']/np.sqrt(data[experiment]['Bx']**2+data[experiment]['By']**2+data[experiment]['Bz']**2)
-			bz=data[experiment]['Bz']/np.sqrt(data[experiment]['Bx']**2+data[experiment]['By']**2+data[experiment]['Bz']**2)
-			I1=data[experiment]['Pxx'][species]+data[experiment]['Pyy'][species]+data[experiment]['Pzz'][species]
-			I2=data[experiment]['Pxx'][species]*data[experiment]['Pyy'][species]+\
-				data[experiment]['Pxx'][species]*data[experiment]['Pzz'][species]+\
-					data[experiment]['Pyy'][species]*data[experiment]['Pzz'][species]-\
-						(data[experiment]['Pxy'][species]**2+data[experiment]['Pxz'][species]**2+\
-	   data[experiment]['Pyz'][species]**2)
-			P_par=data[experiment]['Pxx'][species]*bx**2+data[experiment]['Pyy'][species]*by**2+\
-				data[experiment]['Pzz'][species]*bz**2+2*(data[experiment]['Pxy'][species]*bx*by+\
-											  data[experiment]['Pxz'][species]*bx*bz+\
-												data[experiment]['Pyz'][species]*by*bz)
-			data[experiment]['agyrotropy'][species]=1-4*I2/((I1-P_par)*(I1+3*P_par))
+		data['agyrotropy'] = {}
+		for species in data['rho'].keys():
+			bx=data['Bx']/np.sqrt(data['Bx']**2+data['By']**2+data['Bz']**2)
+			by=data['By']/np.sqrt(data['Bx']**2+data['By']**2+data['Bz']**2)
+			bz=data['Bz']/np.sqrt(data['Bx']**2+data['By']**2+data['Bz']**2)
+			I1=data['Pxx'][species]+data['Pyy'][species]+data['Pzz'][species]
+			I2=data['Pxx'][species]*data['Pyy'][species]+\
+				data['Pxx'][species]*data['Pzz'][species]+\
+					data['Pyy'][species]*data['Pzz'][species]-\
+						(data['Pxy'][species]**2+data['Pxz'][species]**2+\
+	   data['Pyz'][species]**2)
+			P_par=data['Pxx'][species]*bx**2+data['Pyy'][species]*by**2+\
+				data['Pzz'][species]*bz**2+2*(data['Pxy'][species]*bx*by+\
+											  data['Pxz'][species]*bx*bz+\
+												data['Pyz'][species]*by*bz)
+			data['agyrotropy'][species]=1-4*I2/((I1-P_par)*(I1+3*P_par))
 
 
 
