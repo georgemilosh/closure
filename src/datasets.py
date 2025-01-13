@@ -225,8 +225,8 @@ class DataFrameDataset(torch.utils.data.Dataset):
                  norm_folder: str, # where to save the normalization parameters
                  feature_dtype = 'float32', # data type of the features when __getitem__ is called
                  target_dtype = 'float32', # data type of the targets when __getitem__ is called
-                 feature_dtype_numpy = 'float32', # data type of the features
-                 target_dtype_numpy = 'float32', # data type of the targets
+                 feature_dtype_numpy = 'float64', # data type of the features
+                 target_dtype_numpy = 'float64', # data type of the targets
                  samples_file = None,
                  prescaler_features: str = None,
                  prescaler_targets: str = None,
