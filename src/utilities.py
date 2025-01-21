@@ -454,7 +454,11 @@ def pred_ground_targets(trainer, verbose=True):
     else:
         list_of_target_indices = trainer.train_loader.target_channels
     for channel in list_of_target_indices:
-        loss = trainer.model._compute_loss(ground_truth[:,channel].flatten(),prediction[:,channel].flatten(),trainer.model.criterion)
+        try:
+            loss = trainer.model._compute_loss(ground_truth[:,channel].flatten(),prediction[:,channel].flatten(),trainer.model.criterion)
+        except Exception as e:
+            print(f"{ground_truth.shape = }, {prediction.shape = }, {channel = }, {trainer.model.criterion = }")
+            raise e
         if verbose:
             print(f'Loss for channel {channel}:  {trainer.train_dataset.request_targets[channel]}, loss = {loss}')
     return prediction, ground_truth, list_of_target_indices
@@ -901,16 +905,45 @@ def get_agyrotropy(data):
 
 
 
-def get_ExB(data):
-	"""
-	ExB/B^2
-	"""
-	for experiment in data.keys():
-		data[experiment]['ExB'] = {}
-		for species in data[experiment]['rho'].keys():
-			data[experiment]['ExB'][species] = do_cross(data[experiment]['Ex'],data[experiment]['Ey'],data[experiment]['Ez'],\
-						data[experiment]['Bx'],data[experiment]['By'],data[experiment]['Bz'])/\
-						(data[experiment]['Bx']**2+data[experiment]['By']**2+data[experiment]['Bz']**2)
+def get_Ohm(data,qom, x,y):
+    """
+    ExB/B^2
+
+    Notice that if electrons are massless qom = np.inf
+    """
+    B = np.array([data['Bx'], data['By'], data['Bz']]).transpose(1,2,3,0)
+    E = np.array([data['Ex'], data['Ey'], data['Ez']]).transpose(1,2,3,0)
+    data['ExB/B^2'] = np.cross(E,B)/(data['Bx']**2+data['By']**2+data['Bz']**2)[...,np.newaxis]
+    data['Jtotx'] = np.sum([data['Jx'][species] for species in data['Jx'].keys()], axis=0)
+    data['Jtoty'] = np.sum([data['Jy'][species] for species in data['Jy'].keys()], axis=0)
+    data['Jtotz'] = np.sum([data['Jz'][species] for species in data['Jz'].keys()], axis=0)
+    J = np.array([data['Jtotx'], data['Jtoty'], data['Jtotz']]).transpose(1,2,3,0)
+    data['EHall_x'], data['EHall_y'], data['EHall_z'] = - (np.cross(J,B)/(data['rho']['e'])[...,np.newaxis]).transpose(3,0,1,2)
+    norm = 0
+    for i, species in enumerate(data['rho'].keys()):
+        if 'uCMx' in data.keys():
+            data['uCMx'] += (data['rho'][species]/qom[i])*data['Vx'][species]
+            data['uCMy'] += (data['rho'][species]/qom[i])*data['Vy'][species]
+            data['uCMz'] += (data['rho'][species]/qom[i])*data['Vz'][species]
+        else:
+            data['uCMx'] = (data['rho'][species]/qom[i])*data['Vx'][species]
+            data['uCMy'] = (data['rho'][species]/qom[i])*data['Vy'][species]
+            data['uCMz'] = (data['rho'][species]/qom[i])*data['Vz'][species]
+        norm += data['rho'][species]/qom[i]
+    data['uCMx'] /= norm
+    uCM = np.array([data['uCMx'], data['uCMy'], data['uCMz']]).transpose(1,2,3,0)
+    data['EMHD_x'], data['EMHD_y'], data['EMHD_z'] = - np.cross(uCM,B).transpose(3,0,1,2)
+
+    data['EP_x'] = (np.gradient(data['Pxx']['e'],x,axis=0,edge_order=2)+np.gradient(data['Pxy']['e'],y,axis=1,edge_order=2))/data['rho']['e']
+    data['EP_y'] = (np.gradient(data['Pxy']['e'],x,axis=0,edge_order=2)+np.gradient(data['Pyy']['e'],y,axis=1,edge_order=2))/data['rho']['e']
+    data['EP_z'] = (np.gradient(data['Pxz']['e'],x,axis=0,edge_order=2)+np.gradient(data['Pyz']['e'],y,axis=1,edge_order=2))/data['rho']['e']
+
+
+
+
+
+    
+
 
 
 def get_W(data):
