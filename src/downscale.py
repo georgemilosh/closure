@@ -45,6 +45,17 @@ args = parser.parse_args()
 path = args.path
 read_folder = args.read_folder
 write_folder = args.write_folder
+
+
+if not os.path.exists(f'{path}{read_folder}'): # Check if read_folder exists
+    raise FileNotFoundError(f"The folder {path}{read_folder} does not exist.")
+
+if not os.path.exists(f'{path}{write_folder}'): # Check if write_folder exists, if not create it
+    os.makedirs(f'{path}{write_folder}')
+else:
+    if os.listdir(f'{path}{write_folder}'): # protect from overwriting existing files
+        raise FileExistsError(f"The folder {path}{write_folder} is not empty.")
+
 # Get all filenames in the read_folder
 all_filenames = glob.glob(f'{path}{read_folder}/*.h5')
 filenames_list = [os.path.basename(f) for f in all_filenames]
