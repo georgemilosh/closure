@@ -13,6 +13,8 @@ import pandas as pd
 import numpy as np
 import joblib
 import scipy.ndimage as nd
+from torchvision.transforms import v2
+
 
 from  . import read_pic as rp
 
@@ -23,6 +25,7 @@ logger = logging.getLogger(__name__)
 #logger = logging.getLogger('trainers')
 
 from torch.utils.data import DataLoader
+import copy
 
 class SubSampler(torch.utils.data.Sampler[int]):
     """
@@ -154,7 +157,7 @@ class ChannelDataLoader(DataLoader):
                 patched_features = features
                 patched_targets = targets
 
-            if self.patch_dim is not None:
+            if self.patch_dim is not None: # custom cropping
                 # Generate random start points for patches
                 x_starts = np.random.randint(0, features.shape[2] - self.patch_dim[0], size=features.shape[0])
                 y_starts = np.random.randint(0, features.shape[3] - self.patch_dim[1], size=features.shape[0])
@@ -213,6 +216,15 @@ class DataFrameDataset(torch.utils.data.Dataset):
         samples (int): The number of samples in the dataset.
         request_features (list or None): The requested features to load.
         request_targets (list or None): The requested targets to load.
+        filter_features (dictionary or None): The filter to apply to the features.
+        filter_targets (dictionary or None): The filter to apply to the targets.
+        transform (dictionary or None): The transform to apply to the features, only the train set.
+
+    Example:
+        transform = {
+            'RandomCrop': {'size': (16, 16)}
+        }
+
 
     Methods:
         load_original(): Loads the DataFrame from a CSV file and prepares the features and targets for further processing.
@@ -237,7 +249,8 @@ class DataFrameDataset(torch.utils.data.Dataset):
                  image_file_name_column='filenames',
                  read_features_targets_kwargs = None,
                  filter_features = None, # filter to apply to the features
-                filter_targets = None, # filter to apply to the targets
+                 filter_targets = None, # filter to apply to the targets
+                 transform = None, # transform to apply to the features and targets
                  ):
         self.features_mean = None  # TODO: check that this doesn't break something
         self.features_std = None
@@ -308,7 +321,17 @@ class DataFrameDataset(torch.utils.data.Dataset):
             self.read_features_targets_kwargs = {}
         else:
             self.read_features_targets_kwargs = read_features_targets_kwargs
-
+        
+        if transform is not None: 
+            transform_copy = copy.deepcopy(transform)
+            if self.datalabel in transform_copy.pop('apply', None): # if the transform is to be applied to this dataset (e.g. train)
+                logger.info(f"Transforms applied to {self.datalabel} set are {transform_copy.keys()}")
+                self.transform = v2.Compose([getattr(v2, name)(**params) for name, params in transform_copy.items()])
+            else:
+                logger.info(f"Transforms not applied to {self.datalabel} set")
+        else:
+            self.transform = None
+            
         self.logger = logger
 
         self.load_original()
@@ -446,8 +469,9 @@ class DataFrameDataset(torch.utils.data.Dataset):
         features, targets = self.features[idx], self.targets[idx]
         #features = torch.tensor(features, dtype=self.feature_dtype)
         #targets = torch.tensor(targets, dtype=self.target_dtype)
-        #if self.transform is not None:
-        #    features = self.transform(features)
-        #if self.target_transform is not None:
-        #    targets = self.target_transform(targets)
+        if self.transform is not None:
+            state = torch.get_rng_state()
+            features = self.transform(features)
+            torch.set_rng_state(state) # to make sure that the same transform is applied to both features and targets in case of randomness
+            targets = self.transform(targets)
         return features, targets

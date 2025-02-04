@@ -141,9 +141,9 @@ class PyNet(torch.nn.Module):
             logger.warning(f'Object ground_truth is not a tensor. Casting to tensor of {self.targets_dtype}.')
             ground_truth = torch.tensor(ground_truth, dtype=self.targets_dtype)
         try:
-            loss = criterion(prediction, ground_truth)
+            loss = criterion(prediction.to(self.device), ground_truth.to(self.device))
         except Exception as e:
-            logger.info(f"{ground_truth.shape =  }, {prediction.shape = }, {criterion = }")
+            logger.info(f"{ground_truth.shape =  }, {prediction.shape = }, {criterion = }, {prediction.dtype = }, {ground_truth.dtype = }")
             logger.error(f"Error in computing loss: {e}")
             raise e
 
