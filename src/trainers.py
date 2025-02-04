@@ -328,6 +328,8 @@ class Trainer:
                 logger.info(f"Number of GPUs: {torch.cuda.device_count()}")
                 for i in range(torch.cuda.device_count()):
                     logger.info(f"GPU {i}: {torch.cuda.get_device_name(i)}")
+                current_device = torch.cuda.current_device()
+                logger.info(f"Currently using GPU {current_device}: {torch.cuda.get_device_name(current_device)}")
             else:
                 logger.info("No CUDA GPU available. Using CPU.")
             dev = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
