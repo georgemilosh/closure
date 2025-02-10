@@ -501,38 +501,40 @@ def get_exp_times(experiments, files_path, fields_to_read, choose_species=None, 
         choose_species = ['e1',None,'e2',None] # the ones which have directive None will be ignored, the ones which have same name will be summed over
     """    
     # Read qom, Lx, Ly, Lz, nxc, nyc, nzc and dt from the SimulationData.txt file.
-    f=open(f"{files_path}/{experiments[0]}/SimulationData.txt","r")
-    content=f.readlines()
-    f.close()
-
-    qom=[]
-    for n in content:
-        if "QOM" in n:
-            qom.append(float(re.split("=",re.sub(" |\n","",n))[-1]))
-        if "x-Length" in n:
-            Lx=float(re.split("=",re.sub(" |\n","",n))[1])
-        if "y-Length" in n:
-            Ly=float(re.split("=",re.sub(" |\n","",n))[1])
-        if "z-Length" in n:
-            Lz=float(re.split("=",re.sub(" |\n","",n))[1])
-        if "Number of cells (x)" in n:
-            nxc=int(re.split("=",re.sub(" |\n","",n))[1])
-        if "Number of cells (y)" in n:
-            nyc=int(re.split("=",re.sub(" |\n","",n))[1])
-        if "Number of cells (z)" in n:
-            nzc=int(re.split("=",re.sub(" |\n","",n))[1])
-        if "Time step" in n:
-            dt=float(re.split("=",re.sub(" |\n","",n))[1])
-
-    # The x, y and z axes are set.
-    x=np.linspace(0,Lx,nxc+1)
-    y=np.linspace(0,Ly,nyc+1)
-    z=np.linspace(0,Lz,nzc+1)    
-    #compute dx and dy to be used for the gradients computation
-    #dx = Lx/nxc
-    #dy = Ly/nyc
+    
     data = {}
     for experiment in experiments:
+        logger.info(f" reading {files_path}/{experiment}/SimulationData.txt")
+        f=open(f"{files_path}/{experiment}/SimulationData.txt","r")
+        content=f.readlines()
+        f.close()
+
+        qom=[]
+        for n in content:
+            if "QOM" in n:
+                qom.append(float(re.split("=",re.sub(" |\n","",n))[-1]))
+            if "x-Length" in n:
+                Lx=float(re.split("=",re.sub(" |\n","",n))[1])
+            if "y-Length" in n:
+                Ly=float(re.split("=",re.sub(" |\n","",n))[1])
+            if "z-Length" in n:
+                Lz=float(re.split("=",re.sub(" |\n","",n))[1])
+            if "Number of cells (x)" in n:
+                nxc=int(re.split("=",re.sub(" |\n","",n))[1])
+            if "Number of cells (y)" in n:
+                nyc=int(re.split("=",re.sub(" |\n","",n))[1])
+            if "Number of cells (z)" in n:
+                nzc=int(re.split("=",re.sub(" |\n","",n))[1])
+            if "Time step" in n:
+                dt=float(re.split("=",re.sub(" |\n","",n))[1])
+        logger.info(f"{Lx = }, {Ly = }, {nxc = }, {nyc = }")
+        # The x, y and z axes are set.
+        x=np.linspace(0,Lx,nxc+1)
+        y=np.linspace(0,Ly,nyc+1)
+        z=np.linspace(0,Lz,nzc+1)    
+        #compute dx and dy to be used for the gradients computation
+        #dx = Lx/nxc
+        #dy = Ly/nyc
         # sorted(os.listdir()) creates a sorted list containing the .h5 filenames, os.listdir() alone would put them in random order.
         filenames = sorted([n for n in os.listdir(f"{files_path}{experiment}") if "-Fields_" in n and (n.endswith(".pkl") or n.endswith(".h5"))])
         if choose_times is None:
