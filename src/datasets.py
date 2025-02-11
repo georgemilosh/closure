@@ -295,9 +295,12 @@ class ChannelDataLoader(DataLoader):
             self.subset = self.subset % len(dataset.features)  # if subsample_rate > 1, then we want to loop over the dataset multiple times
             
         logger.info(f"{len(self.subset) = } samples after subsampling")
-        
         if sampler_type == 'distributed':
-            self.sampler = DistributedSampler(self.subset, num_replicas=self.world_size, rank=self.rank)
+            if self.world_size is not None and self.world_size > 1:
+                self.sampler = DistributedSampler(self.subset, num_replicas=self.world_size, rank=self.rank)
+            else:
+                logger.info(f"{self.world_size = }, so using regular sampler")
+                self.sampler = SubSampler(self.subset, seed=seed, shuffle=shuffle)
         elif sampler_type == 'serial':
             self.sampler = SubSampler(self.subset, seed=seed, shuffle=shuffle)
         else:

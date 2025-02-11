@@ -295,22 +295,27 @@ class Trainer:
         Returns:
             None
         """
+        if self.local_rank is None and self.rank is None:
+            sampler_type = 'serial'
+        else:
+            sampler_type = 'distributed'
+        logger.info(f"Creating data loaders with {sampler_type = }")
         if 'num_workers' in load_data_kwargs['train_loader_kwargs']:
             logger.info("Config file contains num_workers in train_loader_kwargs so ignoring the number of actual cpus")
-            self.train_loader = datasets.ChannelDataLoader(self.train_dataset, sampler_type='distributed', world_size = self.world_size, 
+            self.train_loader = datasets.ChannelDataLoader(self.train_dataset, sampler_type=sampler_type, world_size = self.world_size, 
                                                        rank = self.rank, gpus_per_node = self.gpus_per_node, local_rank = self.local_rank,
                                                        **load_data_kwargs['train_loader_kwargs'])
         else:
-            self.train_loader = datasets.ChannelDataLoader(self.train_dataset, sampler_type='distributed', world_size = self.world_size, 
+            self.train_loader = datasets.ChannelDataLoader(self.train_dataset, sampler_type=sampler_type, world_size = self.world_size, 
                                                        rank = self.rank, gpus_per_node = self.gpus_per_node, local_rank = self.local_rank,
                                                        num_workers=self.num_workers, **load_data_kwargs['train_loader_kwargs'])
         if 'num_workers' in load_data_kwargs['val_loader_kwargs']:
             logger.info("Config file contains num_workers in train_loader_kwargs so ignoring the number of actual cpus")
-            self.val_loader = datasets.ChannelDataLoader(self.val_dataset,sampler_type='distributed', world_size = self.world_size, 
+            self.val_loader = datasets.ChannelDataLoader(self.val_dataset,sampler_type=sampler_type, world_size = self.world_size, 
                                                        rank = self.rank, gpus_per_node = self.gpus_per_node, local_rank = self.local_rank,
                                                        **load_data_kwargs['val_loader_kwargs'])
         else:
-            self.val_loader = datasets.ChannelDataLoader(self.val_dataset,sampler_type='distributed', world_size = self.world_size, 
+            self.val_loader = datasets.ChannelDataLoader(self.val_dataset,sampler_type=sampler_type, world_size = self.world_size, 
                                                        rank = self.rank, gpus_per_node = self.gpus_per_node, local_rank = self.local_rank,
                                                         num_workers=self.num_workers, **load_data_kwargs['val_loader_kwargs'])
 
@@ -334,7 +339,19 @@ class Trainer:
             model_file = f"{self.config['work_dir']}/{run}/model.pth"    # < ======= TODO: Add multiple models here
             loss_file = f"{self.config['work_dir']}/{run}/loss_dict.pkl"
             logger.info(f"Loading model weights from {model_file}")
-            self.model.model.load_state_dict(torch.load(model_file, map_location=self.device))
+            try:
+                self.model.model.load_state_dict(torch.load(model_file, map_location=self.device))
+            except RuntimeError:
+                # torch.nn.parallel.DistributedDataParallel, which prefixes the keys with "module.".
+                # Load the state dictionary
+                state_dict = torch.load(model_file, map_location=self.device)
+                # Remove 'module.' prefix from keys
+                new_state_dict = {}
+                for k, v in state_dict.items():
+                    new_key = k.replace('module.', '')
+                    new_state_dict[new_key] = v
+                # Load the modified state dictionary
+                self.model.model.load_state_dict(new_state_dict)
             with open(loss_file, 'rb') as f:
                 logger.info(f"Loading loss dictionary from {loss_file}")
                 loss_dict = pickle.load(f)
