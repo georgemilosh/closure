@@ -47,7 +47,11 @@ class PyNet:
         logger.info(f"{torch.cuda.is_available() = }")
         self.model_ = model_class(**kwargs).to(self.local_rank)
         logger.info(f"Initializing model {self.model_}")
-        self.model = DDP(self.model_, device_ids=[self.local_rank])
+        try:
+            self.model = DDP(self.model_, device_ids=[self.local_rank])
+        except ValueError:
+            self.model = self.model_
+            logger.info(f"DDP not available, initializing model using single GPU {self.local_rank = }")
         if optimizer_kwargs is None:
             self.optimizer_kwargs = {}
         else:
@@ -330,7 +334,10 @@ class PyNet:
                     try:
                         msg = f"{msg} | Learn rate: {self.scheduler.get_last_lr():.4e}"
                     except AttributeError: # Compatability with an earlier version of Pytorch
-                        msg = f"{msg} | Learn rate: {self.scheduler._last_lr:.4e}"
+                        try:
+                            msg = f"{msg} | Learn rate: {self.scheduler._last_lr:.4e}"
+                        except TypeError: 
+                            msg = f"{msg} | Learn rate: {self.scheduler._last_lr}"
 
                 logger.info(msg)
 

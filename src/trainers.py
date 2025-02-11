@@ -128,7 +128,7 @@ class Trainer:
                 with open(config_file, 'r') as f:
                     config = json.load(f)
                 logger.warning(f"Config file {config_file} found -> loading configuration")
-                assert config['work_dir'] == self.work_dir, f"work_dir in the config file is different from the current work_dir: {config['work_dir']} != {self.work_dir}"
+                #assert config['work_dir'] == self.work_dir, f"work_dir in the config file is different from the current work_dir: {config['work_dir']} != {self.work_dir}"
                 # === Applying local changes to the configuration file === #
                 # === this is useful if we would like to load traner object with different parameters === #
                 # === and particularly useful when trainging and testing on different architectures === #
