@@ -4,15 +4,23 @@ import os
 import re
 from . import utilities as ut
 import logging
+import scipy.ndimage as nd
+import pickle
 #logger = logging.getLogger('trainers')
 logging.basicConfig(level=logging.INFO)
 logging.captureWarnings(True)
 logger = logging.getLogger(__name__)
 
+# Define global default values
+DEFAULT_CHOOSE_X = None
+DEFAULT_CHOOSE_Y = None
+DEFAULT_CHOOSE_Z = None
+DEFAULT_INDEXING = 'ij'
+DEFAULT_VERBOSE = False
 
 
-
-def read_fieldname(files_path,filenames,fieldname,choose_x=None, choose_y=None, choose_z=None, verbose=False):
+def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, 
+                   choose_z=DEFAULT_CHOOSE_Z, indexing=DEFAULT_INDEXING, verbose=DEFAULT_VERBOSE, filters=None):
     """
     Read a specific field from multiple files and return a subset of the field.
 
@@ -23,7 +31,14 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=None, choose_y=None, 
     - choose_x (list, optional): A list specifying the range of indices to select along the x-axis. Defaults to None.
     - choose_y (list, optional): A list specifying the range of indices to select along the y-axis. Defaults to None.
     - choose_z (list, optional): A list specifying the range of indices to select along the z-axis. Defaults to None.
+    - indexing (string, defaults to 'ij'): A flag indicating how to transpose the field. If 'ij', the field is 
+        transposed to have the x-axis as the first index, the y-axis as the second index, and the z-axis as the third index. 
+        If 'xy', the field is transposed to have the x-axis as the second index, the y-axis as the first index, and the z-axis as the third index.
     - verbose (bool, optional): A flag indicating whether to logger.info debug information.
+    - filters (dict, optional): A dictionary containing the name of the filter to apply and the arguments to pass to the filter.
+        Usage: filters = {'name': 'gaussian_filter', 'sigma': 1, 'axes': (1,2)}
+                filters = [{'name': 'gaussian_filter', 'sigma': 1, 'axes': (1,2)},
+                           {'name': 'zoom', 'zoom': (0.25, 0.25), 'mode' : 'grid-wrap'}]
 
     Returns:
     - numpy.ndarray: A subset of the field, with the z-dimension removed.
@@ -34,26 +49,55 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=None, choose_y=None, 
         filenames = [filenames]
     for filename in filenames:
         try:
-            with h5py.File(files_path+filename,"r") as n:
-                field.append(np.array(n[f"/Step#0/Block/{fieldname}/0"]))
-                if choose_x is None:
-                    choose_x = [0,field[-1].shape[2]-1]
-                if choose_y is None:
-                    choose_y = [0,field[-1].shape[1]-1]
-                if choose_z is None:
-                    choose_z = [0,field[-1].shape[0]-1]
+            if filename.endswith(".h5"):
+                with h5py.File(files_path + filename, "r") as n:
+                    field.append(np.array(n[f"/Step#0/Block/{fieldname}/0"]))
+            elif filename.endswith(".h5.pkl"):
+                with open(files_path + filename, "rb") as n:
+                    field.append(pickle.load(n)[fieldname])
+            else:
+                raise FileNotFoundError(f"Neither {filename} nor {filename}.pkl found in {files_path}")
+            if choose_x is None:
+                choose_x = [0,field[-1].shape[2]-1]
+            if choose_y is None:
+                choose_y = [0,field[-1].shape[1]-1]
+            if choose_z is None:
+                choose_z = [0,field[-1].shape[0]]
         except Exception as e:
             if verbose:
-                logger.error(f"Failed to read {fieldname} from {filename} using path {files_path}")
+                logger.warning(f"Failed to read {fieldname} from {filename} using path {files_path}")
             raise e
-    a = np.transpose(np.array(field))[choose_x[0]:choose_x[1],choose_y[0]:choose_y[1],choose_z[0]:choose_z[1],:]
-    if a.shape[1] <= 2:
-        return np.squeeze(a[:,0,:])
+    if indexing == 'ij': 
+        a = np.transpose(np.array(field), (3, 2, 1, 0))[choose_x[0]:choose_x[1],choose_y[0]:choose_y[1],choose_z[0]:choose_z[1],:]
+    elif indexing == 'xy':
+        a = np.transpose(np.array(field), (2, 3, 1, 0))[choose_y[0]:choose_y[1],choose_x[0]:choose_x[1],choose_z[0]:choose_z[1],:]
     else:
-        return np.squeeze(a) # transposing means swapping x and y and remove z
+        a = np.array(field)[choose_x[0]:choose_x[1],choose_y[0]:choose_y[1],choose_z[0]:choose_z[1],:]
+    if a.shape[2] <= 2: #  if z axis has length 2 or less it should be dropped
+        a = np.squeeze(a[...,0,:])
+    else:
+        a = np.squeeze(a) # transposing means swapping x and y and remove z
+    #logger.info(f"{filename}, {fieldname}, {a.shape = }")
+    if filters is not None:
+        if not isinstance(filters, list):
+            filters = [filters]
+        for filteri in filters: # apply all filters in succession
+            if verbose:
+                logger.info(f"Filtering {fieldname} from {filename} with {filteri['name']}")
+            filters_copy = filteri.copy()
+            filters_name = filters_copy.pop("name", None)
+            filters_object = getattr(nd, filters_name)
+            filter_kwargs = filters_copy
+            for _, kwarg in filter_kwargs.items():
+                if  isinstance(kwarg, list):
+                    kwarg = tuple(kwarg)  #  configs usually provide lists, but we need tuples
+            a = filters_object(a, **filter_kwargs)
+            if verbose:
+                logger.info(f"Resulting shape {a.shape}")
+    return a
 
 
-def build_XY(files_path,choose_x=None, choose_y=None, choose_z=None):
+def build_XY(files_path,choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, choose_z=DEFAULT_CHOOSE_Z, indexing=DEFAULT_INDEXING):
     # Read qom, Lx, Ly, Lz, nxc, nyc, nzc and dt from the SimulationData.txt file.
     f=open(files_path+"SimulationData.txt","r")
     content=f.readlines()
@@ -100,12 +144,12 @@ def build_XY(files_path,choose_x=None, choose_y=None, choose_z=None):
             assert len(choose_x) == len(choose_y), "choose_x and choose_y must have the same length"
             if nzc > 1:
                 assert len(choose_x) == len(choose_z), "choose_x and choose_y must have the same length"
-                X_i, Y_i, Z_i = np.meshgrid(x[choose_x[i][0]:choose_x[i][1]], y[choose_y[i][0]:choose_y[i][1]], z[choose_z[i][0]:choose_z[i][1]], indexing='ij')
+                X_i, Y_i, Z_i = np.meshgrid(x[choose_x[i][0]:choose_x[i][1]], y[choose_y[i][0]:choose_y[i][1]], z[choose_z[i][0]:choose_z[i][1]], indexing=indexing)
                 X.append(X_i)
                 Y.append(Y_i)
                 Z.append(Z_i)
             else:
-                X_i, Y_i = np.meshgrid(x[choose_x[i][0]:choose_x[i][1]], y[choose_y[i][0]:choose_y[i][1]], indexing='ij')
+                X_i, Y_i = np.meshgrid(x[choose_x[i][0]:choose_x[i][1]], y[choose_y[i][0]:choose_y[i][1]], indexing=indexing)
                 X.append(X_i)
                 Y.append(Y_i)
         X = np.concatenate(X,axis=1)
@@ -114,9 +158,9 @@ def build_XY(files_path,choose_x=None, choose_y=None, choose_z=None):
             Z = np.concatenate(Z,axis=1)
     else:
         if nzc > 1:
-            X, Y, Z = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], z[choose_z[0]:choose_z[1]], indexing='ij')
+            X, Y, Z = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], z[choose_z[0]:choose_z[1]], indexing=indexing)
         else:
-            X, Y = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], indexing='ij')
+            X, Y = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], indexing=indexing)
     
     if nzc > 1:
         return X, Y, Z
@@ -125,7 +169,7 @@ def build_XY(files_path,choose_x=None, choose_y=None, choose_z=None):
 
 
 def read_features_targets(files_path, filenames, fields_to_read=None, request_features = None, request_targets = None, 
-               choose_species=None,choose_x=None, choose_y=None, choose_z=None, feature_dtype = np.float32, target_dtype = np.float32,  verbose=False):
+               choose_species=None,choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, choose_z=DEFAULT_CHOOSE_Z, feature_dtype = np.float32, target_dtype = np.float32,  verbose=DEFAULT_VERBOSE):
     """
     Reads and extracts features and targets from simulation data files.
         # Read qom, Lx, Ly, Lz, nxc, nyc, nzc and dt from the SimulationData.txt file.
@@ -208,7 +252,8 @@ def read_features_targets(files_path, filenames, fields_to_read=None, request_fe
 
     return features, targets
 
-def read_files(files_path, filenames, fields_to_read, qom, dtype, extract_fields=None, choose_species=None, choose_x=None, choose_y=None, choose_z=None, verbose=False):
+def read_files(files_path, filenames, fields_to_read, qom, dtype, extract_fields=None, choose_species=None, choose_x=DEFAULT_CHOOSE_X, 
+               choose_y=DEFAULT_CHOOSE_Y, choose_z=DEFAULT_CHOOSE_Z, verbose=DEFAULT_VERBOSE):
     out2 = []
     for filename in filenames:
         out = []
@@ -230,7 +275,8 @@ def read_files(files_path, filenames, fields_to_read, qom, dtype, extract_fields
         out2.append(np.array(out))
     return np.array(out2, dtype=dtype).transpose(0,2,3,1)  # we want to have the time as the first index, then x, then y, then the field
 
-def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, choose_x=None, choose_y=None, choose_z=None, verbose=False):
+def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, 
+              choose_z=DEFAULT_CHOOSE_Z, verbose=DEFAULT_VERBOSE, small=1e-10, **kwargs):
     """
     Reads and processes data from files.
 
@@ -244,6 +290,7 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
     - choose_y (float): The y-coordinates to choose.
     - choose_z (float): The z-coordinates to choose.
     - verbose (bool): A flag indicating whether to logger.info debug information.
+    - small (float): A small number to avoid division by zero, e.g. Jx/rho
 
     Returns:
     - data (dict): A dictionary containing the processed data.
@@ -266,14 +313,13 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
     #choose_species_new = ut.append_index_to_duplicates(choose_species) 
     #dublicatespecies = ut.get_duplicate_indices(choose_species)
     data = {}
-    small = 1e-10
     # The magnetic and electric field is read.
     for fields in ['B', 'E']:
         if fields_to_read[fields]:
             if verbose:
                 logger.info(f"loading {fields}")
             for component in ['x','y','z']:
-                data[f'{fields}{component}'] = read_fieldname(files_path,filenames,f"{fields}{component}",choose_x,choose_y,choose_z,verbose=verbose)
+                data[f'{fields}{component}'] = read_fieldname(files_path,filenames,f"{fields}{component}",choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
             try:    
                 data[f'{fields}magn'] = np.sqrt(data[f'{fields}x']**2 + data[f'{fields}y']**2 + data[f'{fields}z']**2)
             except Exception as e:
@@ -281,12 +327,12 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                 raise e
         if fields_to_read[f"{fields}_ext"]:
             for component in ['x','y','z']:
-                data[f'B{component}_ext'] = read_fieldname(files_path,filenames,f"{fields}{component}_ext",choose_x,choose_y,choose_z,verbose=verbose)
+                data[f'B{component}_ext'] = read_fieldname(files_path,filenames,f"{fields}{component}_ext",choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
     # The divergence of B is read.
     if fields_to_read["divB"]:
         if verbose:
                 logger.info(f"loading divB")
-        data['divB'] = read_fieldname(files_path,filenames,'divB',verbose=verbose)
+        data['divB'] = read_fieldname(files_path,filenames,'divB',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
     for fields in ['rho', 'N', 'Qrem']:
         if fields_to_read[fields]:
             if verbose:
@@ -295,30 +341,35 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
             for i, species in enumerate(choose_species): # Care must be taken that these the only species and they are actually correctly labeled
                 if species is not None:
                     if species in data[fields]: # we sum over identical species
-                        data[fields][species] += read_fieldname(files_path,filenames,fields+f'_{i}',choose_x,choose_y,choose_z,verbose=verbose)
+                        data[fields][species] += read_fieldname(files_path,filenames,fields+f'_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
                     else:
-                        data[fields][species] = read_fieldname(files_path,filenames,f'{fields}_{i}',choose_x,choose_y,choose_z,verbose=verbose)
+                        data[fields][species] = read_fieldname(files_path,filenames,f'{fields}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
 
 
     if fields_to_read["J"]:
         data['Jx'], data['Jy'], data['Jz'] = {}, {}, {}
-        data['Vx'], data['Vy'], data['Vz'] = {}, {}, {}
+        if fields_to_read['rho']:
+            data['Vx'], data['Vy'], data['Vz'] = {}, {}, {}
         if verbose:
             logger.info(f"loading J")
         for component in ['x','y','z']:
             for i, species in enumerate(choose_species):
                 if species is not None:
                     if species in data[f'J{component}']: # we sum over identical species
-                        data[f'J{component}'][species] += read_fieldname(files_path,filenames,f'J{component}_{i}',choose_x,choose_y,choose_z,verbose=verbose)
+                        data[f'J{component}'][species] += read_fieldname(files_path,filenames,f'J{component}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
                     else:
-                        data[f'J{component}'][species] = read_fieldname(files_path,filenames,f'J{component}_{i}',choose_x,choose_y,choose_z,verbose=verbose)
-            for species in data[f'J{component}'].keys():
-                data[f'V{component}'][species] = data[f'J{component}'][species]/(data['rho'][species]+small)
-        data['Jmagn'], data['Vmagn'] = {}, {}
+                        data[f'J{component}'][species] = read_fieldname(files_path,filenames,f'J{component}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
+            if fields_to_read['rho']:
+                for species in data[f'J{component}'].keys():
+                    data[f'V{component}'][species] = data[f'J{component}'][species]/(data['rho'][species]+small)
+        data['Jmagn'] = {}
+        if 'Vx' in data.keys():
+            data['Vmagn'] = {}
         for species in data[f'J{component}'].keys():
             if species is not None:
                 data['Jmagn'][species] = np.sqrt(data['Jx'][species]**2 + data['Jy'][species]**2 + data['Jz'][species]**2)
-                data['Vmagn'][species] = np.sqrt(data['Vx'][species]**2 + data['Vy'][species]**2 + data['Vz'][species]**2)
+                if 'Vx' in data.keys():
+                    data['Vmagn'][species] = np.sqrt(data['Vx'][species]**2 + data['Vy'][species]**2 + data['Vz'][species]**2)
                 
 
     # The diagonal and offdiagonal part of the pressure is calculated (to do so you need to read rho and J first).
@@ -334,9 +385,9 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                     if species is not None:
                         try:
                             if species in data[f'PI{component_1}{component_2}']:
-                                data[f'PI{component_1}{component_2}'][species] += read_fieldname(files_path,filenames,f'P{component_1}{component_2}_{i}',choose_x,choose_y,choose_z,verbose=verbose)
+                                data[f'PI{component_1}{component_2}'][species] += read_fieldname(files_path,filenames,f'P{component_1}{component_2}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
                             else:
-                                data[f'PI{component_1}{component_2}'][species] = read_fieldname(files_path,filenames,f'P{component_1}{component_2}_{i}',choose_x,choose_y,choose_z,verbose=verbose)
+                                data[f'PI{component_1}{component_2}'][species] = read_fieldname(files_path,filenames,f'P{component_1}{component_2}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
                         except:
                             if verbose:
                                 logger.info(f'Component P{component_1}{component_2} for species {species} missing because tensor is symmetric')
@@ -352,28 +403,43 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                        
         if fields_to_read["PI"]:
             for species in data[f'PI{component_1}{component_2}']:
-                data['PIyx'][species] = data['PIxy'][species]
-                data['PIzx'][species] = data['PIxz'][species]
-                data['PIzy'][species] = data['PIyz'][species]
+                if species in data['PIxy']:
+                    data['PIyx'][species] = data['PIxy'][species]
+                if species in data['PIxz']:
+                    data['PIzx'][species] = data['PIxz'][species]
+                if species in data['PIyz']:
+                    data['PIzy'][species] = data['PIyz'][species]
         if fields_to_read["P"]:
             data['Ppar'], data['Pperp'] = {}, {}
             for species in data[f'P{component_1}{component_2}']:
-                data['Pyx'][species] = data['Pxy'][species]
-                data['Pzx'][species] = data['Pxz'][species]
-                data['Pzy'][species] = data['Pyz'][species]
+                if species in data['Pxy']:
+                    data['Pyx'][species] = data['Pxy'][species]
+                if species in data['Pxz']:
+                    data['Pzx'][species] = data['Pxz'][species]
+                if species in data['Pyz']:
+                    data['Pzy'][species] = data['Pyz'][species]
                 if verbose:
                     logger.info(f"loading Ppar and Pperp")
-                data['Ppar'][species] = (data['Pxx'][species]*data['Bx']**2 + data['Pyy'][species]*data['By']**2  + data['Pzz'][species]*data['Bz']**2 + \
+                try:
+                    data['Ppar'][species] = (data['Pxx'][species]*data['Bx']**2 + data['Pyy'][species]*data['By']**2  + data['Pzz'][species]*data['Bz']**2 + \
                                         2*data['Pxy'][species]*data['Bx']*data['By']+2*data['Pxz'][species]*data['Bx']*data['Bz'] + \
                                             2*data['Pyz'][species]*data['By']*data['Bz'])/(data['By']**2+data['Bx']**2+data['Bz']**2)
-                data['Pperp'][species] = (data['Pxx'][species] + data['Pyy'][species] + data['Pzz'][species] - data['Ppar'][species])/2
+                except Exception as e:
+                    logger.warning(f"Failed to calculate Ppar for {species} likely due to missing fields, see: {e}")
+                try:
+                    data['Pperp'][species] = (data['Pxx'][species] + data['Pyy'][species] + data['Pzz'][species] - data['Ppar'][species])/2
+                except Exception as e:
+                    logger.warning(f"Failed to calculate Pperp for {species} likely due to missing fields, see: {e}")
             if "gyro_radius" in fields_to_read and fields_to_read["gyro_radius"]:
-                for species in data[f'P{component_1}{component_2}']:
-                    data['gyro_radius'] = {}
-                    i = choose_species.index(species)
-                    p = data['Pxx'][species]+data['Pyy'][species]+data['Pzz'][species]
-                    vth=np.sqrt(np.abs(p/(data['rho'][species]+small)*qom[i]))
-                    data['gyro_radius'][species] = np.abs(vth/(qom[i]*data['Bmagn']))
+                try:
+                    for species in data[f'P{component_1}{component_2}']:
+                        data['gyro_radius'] = {}
+                        i = choose_species.index(species)
+                        p = data['Pxx'][species]+data['Pyy'][species]+data['Pzz'][species]
+                        vth=np.sqrt(np.abs(p/(data['rho'][species]+small)*qom[i]))
+                        data['gyro_radius'][species] = np.abs(vth/(qom[i]*data['Bmagn']))
+                except Exception as e:
+                    logger.warning(f"Failed to calculate gyro_radius, see: {e}")
 
     # The heat flux is calculated (to do so you need to read rho, J and P first).
     if fields_to_read["Heat_flux"]:
@@ -384,23 +450,27 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
             for i, species in enumerate(choose_species):
                 if species is not None:
                     if species in data[f'EF{component}']:
-                        data[f'EF{component}'][species] += read_fieldname(files_path,filenames,f'EF{component}_{i}',choose_x,choose_y,choose_z,verbose=verbose)
+                        data[f'EF{component}'][species] += read_fieldname(files_path,filenames,f'EF{component}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
                     else:
-                        data[f'EF{component}'][species] = read_fieldname(files_path,filenames,f'EF{component}_{i}',choose_x,choose_y,choose_z,verbose=verbose)
+                        data[f'EF{component}'][species] = read_fieldname(files_path,filenames,f'EF{component}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
             #logger.info(f"{data[f'EF{component}'].keys() = }")
-            data[f'q{component}'] = {}
-            for species in data[f'EF{component}'].keys():
-                i = choose_species.index(species)
-                data[f'q{component}'][species] =  data[f'EF{component}'][species] - \
-                    (data['Jx'][species]**2+data['Jy'][species]**2+data['Jz'][species]**2)*data[f'J{component}'][species]/(2*qom[i]*data[f'rho'][species]**2+small) - \
-                    (data['Pxx'][species] + data[f'Pyy'][species] + data[f'Pzz'][species])*data[f'J{component}'][species]/(2*data['rho'][species]+small) - \
-                    (data['Jx'][species]*data[f'Px{component}'][species] + data['Jy'][species]*data[f'Py{component}'][species] + data['Jz'][species]*data[f'Pz{component}'][species])/(data['rho'][species]+small)
-            #logger.info(f"{data[f'q{component}'].keys() = }")
+            try:
+                data[f'q{component}'] = {}
+                for species in data[f'EF{component}'].keys():
+                    i = choose_species.index(species)
+                    data[f'q{component}'][species] =  data[f'EF{component}'][species] - \
+                        (data['Jx'][species]**2+data['Jy'][species]**2+data['Jz'][species]**2)*data[f'J{component}'][species]/(2*qom[i]*data[f'rho'][species]**2+small) - \
+                        (data['Pxx'][species] + data[f'Pyy'][species] + data[f'Pzz'][species])*data[f'J{component}'][species]/(2*data['rho'][species]+small) - \
+                        (data['Jx'][species]*data[f'Px{component}'][species] + data['Jy'][species]*data[f'Py{component}'][species] + data['Jz'][species]*data[f'Pz{component}'][species])/(data['rho'][species]+small)
+            except Exception as e:
+                logger.warning(f"Failed to calculate q{component} see: {e}")
+                #logger.info(f"{data[f'q{component}'].keys() = }")
             if 'EF' not in fields_to_read or not fields_to_read['EF']:
                 del data[f'EF{component}']
     return data
 
-def get_experiments(experiments, files_path, fields_to_read, choose_species=None, choose_times=None,choose_x=None, choose_y=None, choose_z=None, verbose=False):
+def get_exp_times(experiments, files_path, fields_to_read, choose_species=None, choose_times=None,choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, choose_z=DEFAULT_CHOOSE_Z, 
+                  verbose=DEFAULT_VERBOSE, **kwargs):
     """
     Retrieves data from experiments and returns the data structure stored as a dictionary along with the corresponding meshgrid.
 
@@ -411,8 +481,8 @@ def get_experiments(experiments, files_path, fields_to_read, choose_species=None
                 field names to read from the files. 
     - qom (array of floats): The charge-to-mass ratio in the PIC units for each species.
     - choose_species (list): A list of species indices to choose.  # the ones which have directive None will be ignored, the ones which have same name will be summed over
-    - choose_times (list): A list of time indices to choose. If None is given, all times are chosen. If list specific timeshots are chosen, 
-                i.e. [0, 1, 5], otherwise choose_times = None means take all times
+    - choose_times (list): A list of time indices to choose. If None is given, all times are chosen. If an integer is given, all times before that one are ignored.
+         list specific timeshots are chosen,  i.e. [0, 1, 5], otherwise choose_times = None means take all times
     - choose_x (list): A list specifying the range of x indices to choose. If None is given, the whole range is chosen.
     - choose_y (list): A list specifying the range of y indices to choose. If None is given, the whole range is chosen.
     - choose_z (list): A list specifying the range of z indices to choose. If None is given, the whole range is chosen.
@@ -422,76 +492,90 @@ def get_experiments(experiments, files_path, fields_to_read, choose_species=None
     - data (dict): A dictionary containing the retrieved data for each experiment.
     - X (ndarray): The meshgrid of x values.
     - Y (ndarray): The meshgrid of y values.
+    - (optional) Z (ndarray): The meshgrid of z values.
+    - qom (list): A list of charge-to-mass ratios for each species.
+    - times (list): A list of times corresponding to the data.
     
     Example:
     >>>
         choose_species = ['e1',None,'e2',None] # the ones which have directive None will be ignored, the ones which have same name will be summed over
     """    
     # Read qom, Lx, Ly, Lz, nxc, nyc, nzc and dt from the SimulationData.txt file.
-    f=open(f"{files_path}/{experiments[0]}/SimulationData.txt","r")
-    content=f.readlines()
-    f.close()
-
-    qom=[]
-    for n in content:
-        if "QOM" in n:
-            qom.append(float(re.split("=",re.sub(" |\n","",n))[-1]))
-        if "x-Length" in n:
-            Lx=float(re.split("=",re.sub(" |\n","",n))[1])
-        if "y-Length" in n:
-            Ly=float(re.split("=",re.sub(" |\n","",n))[1])
-        if "z-Length" in n:
-            Lz=float(re.split("=",re.sub(" |\n","",n))[1])
-        if "Number of cells (x)" in n:
-            nxc=int(re.split("=",re.sub(" |\n","",n))[1])
-        if "Number of cells (y)" in n:
-            nyc=int(re.split("=",re.sub(" |\n","",n))[1])
-        if "Number of cells (z)" in n:
-            nzc=int(re.split("=",re.sub(" |\n","",n))[1])
-        if "Time step" in n:
-            dt=float(re.split("=",re.sub(" |\n","",n))[1])
-
-    # The x, y and z axes are set.
-    x=np.linspace(0,Lx,nxc+1)
-    y=np.linspace(0,Ly,nyc+1)
-    z=np.linspace(0,Lz,nzc+1)    
-    #compute dx and dy to be used for the gradients computation
-    #dx = Lx/nxc
-    #dy = Ly/nyc
+    
     data = {}
     for experiment in experiments:
+        logger.info(f" reading {files_path}/{experiment}/SimulationData.txt")
+        f=open(f"{files_path}/{experiment}/SimulationData.txt","r")
+        content=f.readlines()
+        f.close()
+
+        qom=[]
+        for n in content:
+            if "QOM" in n:
+                qom.append(float(re.split("=",re.sub(" |\n","",n))[-1]))
+            if "x-Length" in n:
+                Lx=float(re.split("=",re.sub(" |\n","",n))[1])
+            if "y-Length" in n:
+                Ly=float(re.split("=",re.sub(" |\n","",n))[1])
+            if "z-Length" in n:
+                Lz=float(re.split("=",re.sub(" |\n","",n))[1])
+            if "Number of cells (x)" in n:
+                nxc=int(re.split("=",re.sub(" |\n","",n))[1])
+            if "Number of cells (y)" in n:
+                nyc=int(re.split("=",re.sub(" |\n","",n))[1])
+            if "Number of cells (z)" in n:
+                nzc=int(re.split("=",re.sub(" |\n","",n))[1])
+            if "Time step" in n:
+                dt=float(re.split("=",re.sub(" |\n","",n))[1])
+        logger.info(f"{Lx = }, {Ly = }, {nxc = }, {nyc = }")
+        # The x, y and z axes are set.
+        x=np.linspace(0,Lx,nxc+1)
+        y=np.linspace(0,Ly,nyc+1)
+        z=np.linspace(0,Lz,nzc+1)    
+        #compute dx and dy to be used for the gradients computation
+        #dx = Lx/nxc
+        #dy = Ly/nyc
         # sorted(os.listdir()) creates a sorted list containing the .h5 filenames, os.listdir() alone would put them in random order.
-        filenames=sorted([n for n in os.listdir(f"{files_path}{experiment}") if "-Fields_" in n and n.endswith(".h5")])
-        if choose_times is not None:
+        filenames = sorted([n for n in os.listdir(f"{files_path}{experiment}") if "-Fields_" in n and (n.endswith(".pkl") or n.endswith(".h5"))])
+        if choose_times is None:
+            selected_filenames = filenames
+        elif isinstance(choose_times, int):
+            selected_filenames = filenames[choose_times:]
+        else:
             try:
                 selected_filenames = [filenames[i] for i in choose_times]
             except Exception as e:
                 logger.info(f"Inconsistent size: {len(filenames) = }  {len(choose_times) = }")
                 raise e
-        else:
-            selected_filenames = filenames
         try:
-            times=[int(n[-9:-3])*dt for n in filenames]  # the last 6 characters of the filename are the time in units of dt.
+            times = [int(n[-13:-7] if n.endswith(".h5.pkl") else n[-9:-3]) * dt for n in selected_filenames]
         except Exception as e:
             logger.info(f"Failed to extract times from {n = }")
-            logger.info(f"{filenames=}")
+            logger.info(f"{selected_filenames=}")
             raise e
         #logger.info(times)
         data[experiment] = read_data(f"{files_path}{experiment}/",selected_filenames,fields_to_read,qom,
-                                     choose_species=choose_species,choose_x=choose_x,choose_y=choose_y,choose_z=choose_z,verbose=verbose)
+                                     choose_species=choose_species,choose_x=choose_x,choose_y=choose_y,choose_z=choose_z,verbose=verbose, **kwargs)
         if choose_x is None:
-            choose_x = [0,x.shape[0]]
+            choose_x = [0,x.shape[0]-1]
         if choose_y is None:
-            choose_y = [0,y.shape[0]]
+            choose_y = [0,y.shape[0]-1]
         if choose_z is None:
-            choose_z = [0,z.shape[0]]
+            choose_z = [0,z.shape[0]-1]
         if verbose:
-            logger.info(f"{choose_x = }, {choose_y = }, {choose_z = }")
+            logger.info(f"{choose_x = }, {choose_y = }, {choose_z = }, {choose_times =}")
         if nzc == 1:
-            X, Y = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], indexing='ij')
+            X, Y = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], indexing=kwargs.get('indexing',DEFAULT_INDEXING))
         else:
-            X, Y, Z = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], z[choose_z[0]:choose_z[1]], indexing='ij')
+            X, Y, Z = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], z[choose_z[0]:choose_z[1]], indexing=kwargs.get('indexing',DEFAULT_INDEXING))
     if nzc == 1:
-        return data, X, Y, qom
+        return data, X, Y, qom, times
     else:
-        return data, X, Y, Z, qom
+        return data, X, Y, Z, qom, times
+    
+def get_experiments(*args, **kwargs):
+    """
+    A wrapper function for get_exp_times that does not return times for backward compatibility.
+    """
+    logger.warning("get_experiments is deprecated, use get_exp_times instead")
+    return get_exp_times(*args, **kwargs)[:-1]
