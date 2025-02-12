@@ -111,10 +111,11 @@ def get_git_revision_hash() -> str:
 def parse_score(score):
     """
     This function takes a score name and converts them to class object of this scores"""
+    import torchmetrics
     if score in ['MSE', 'L1Loss']:
         return getattr(torch.nn, score)()
     elif score == 'r2':
-        return None #torchmetrics.functional.r2_score
+        return torchmetrics.functional.r2_score
 
 def compare_runs(work_dirs=['./'], runs=['./0'], metric=None, rescale=True, renorm=True, verbose=True, **kwargs):
     """
