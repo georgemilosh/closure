@@ -31,6 +31,37 @@ logging.basicConfig(level=logging.INFO)
 logging.captureWarnings(True)
 logger = logging.getLogger(__name__)
 
+def set_nested_config(config, key, value):
+    """
+    Set a nested configuration value in a dictionary.
+    This function takes a configuration dictionary, a dot-separated key string, 
+    and a value. It sets the value in the dictionary at the location specified 
+    by the key string, creating nested dictionaries as needed.
+    Args:
+        config (dict): The configuration dictionary to update.
+        key (str): A dot-separated string specifying the nested key.
+        value (str): The value to set. It will be converted to an int or float 
+                     if possible.
+    Example:
+        config = {}
+        set_nested_config(config, 'a.b.c', '123')
+        # config is now {'a': {'b': {'c': 123}}}
+    """
+
+    keys = key.split('.')
+    d = config
+    for k in keys[:-1]:
+        d = d.setdefault(k, {})
+    # Convert value to appropriate type
+    if value.isdigit():
+        value = int(value)
+    else:
+        try:
+            value = float(value)
+        except ValueError:
+            pass
+    d[keys[-1]] = value
+
 class CustomFilter(logging.Filter):
     """
     A custom filter class for logging that will be used to prepend the rank, local_rank and nodename to the log messages.
@@ -455,16 +486,27 @@ class Trainer:
 def main():
     # Training settings
     parser = argparse.ArgumentParser(description='Work Directory')
-    parser.add_argument('--work_dir', type=str, default='./',
-                        help='Name of the work directory, default to the same directory')
     parser.add_argument('--force', action=argparse.BooleanOptionalAction,
                         help='Force the training to start even if the run exists')
-    parser.add_argument('--run', type=str, default=None,
-                        help='Name of the run directory, default to None which means that run directory will be used rather than subdirectory')
     parser.add_argument('--timing_name', type=str, default=False,
                         help='Name of the timing CSV file. If not provided no timing file will be created')
+    parser.add_argument('--config', action='append', default=None, help="Update nested config keys. Use 'key.subkey=value' format")
+    # example usage: python -m closure.src.trainers --config work_dir=work_dir --config run=run --config model_kwargs.model_name=ResNet --config model_kwargs.model_depth=18
+
     args = parser.parse_args()
-    
+
+    # Extract work_dir from config
+    work_dir = None
+    if args.config:
+        for update in args.config:
+            key, value = update.split("=", 1)  # Split at the first '='
+            if key == "work_dir":
+                work_dir = value
+                break
+
+    if work_dir is None:
+        raise ValueError("work_dir must be specified in the --config argument")
+
     world_size = int(os.environ["WORLD_SIZE"])
     rank = int(os.environ["SLURM_PROCID"])
     gpus_per_node = int(os.environ["SLURM_GPUS_ON_NODE"])
@@ -482,13 +524,19 @@ def main():
     print(f"host: {gethostname()}, rank: {rank}, local_rank: {local_rank}, \
                 gpus_per_node: {gpus_per_node}, num_workers: {num_workers}")
     
-    print(f"Creating Trainer object with {args.work_dir = }")
-    trainer = Trainer(work_dir=args.work_dir, world_size=world_size, rank=rank, gpus_per_node=gpus_per_node, 
+    print(f"Creating Trainer object with work_dir={work_dir}")
+    trainer = Trainer(work_dir=work_dir, world_size=world_size, rank=rank, gpus_per_node=gpus_per_node, 
                       local_rank=local_rank, num_workers=num_workers, force=args.force, timing_name=args.timing_name)
-    
-    if args.run is not None:
+
+    if args.config is not None:
         config = copy.deepcopy(trainer.config)
-        config['run'] = str(args.run)
+        # Apply nested updates from --config
+        for update in args.config:
+            key, value = update.split("=", 1)  # Split at the first '='
+            if key != "work_dir":  # Skip work_dir as it is already handled
+                set_nested_config(config, key, value)
+                print(f"Setting {key} to {value}")
+        print(config)
         trainer.fit(config=config)
     else:
         trainer.fit()
