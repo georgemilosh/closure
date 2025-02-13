@@ -1,4 +1,3 @@
-import h5py
 import numpy as np
 import os
 import re
@@ -50,6 +49,7 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
     for filename in filenames:
         try:
             if filename.endswith(".h5"):
+                import h5py
                 with h5py.File(files_path + filename, "r") as n:
                     field.append(np.array(n[f"/Step#0/Block/{fieldname}/0"]))
             elif filename.endswith(".h5.pkl"):

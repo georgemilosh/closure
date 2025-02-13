@@ -18,7 +18,6 @@ import pandas as pd
 import numpy as np
 import joblib
 import scipy.ndimage as nd
-from torchvision.transforms import v2
 
 from  . import read_pic as rp
 
@@ -512,6 +511,7 @@ class DataFrameDataset(torch.utils.data.Dataset):
         if transform is not None: 
             transform_copy = copy.deepcopy(transform)
             if self.datalabel in transform_copy.pop('apply', None): # if the transform is to be applied to this dataset (e.g. train)
+                from torchvision.transforms import v2
                 logger.info(f"Transforms applied to {self.datalabel} set are {transform_copy.keys()}")
                 self.transform = v2.Compose([getattr(v2, name)(**params) for name, params in transform_copy.items()])
             else:
