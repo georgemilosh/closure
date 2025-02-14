@@ -97,6 +97,7 @@ class Trainer:
         dataset_kwargs (dict): Keyword arguments for creating dataset object.
         load_data_kwargs (dict): Keyword arguments for data loaders.
         model_kwargs (dict): Keyword arguments for creating the model.
+        mode_test (bool): whether trainer is intended to not load data.
         device (str): Device to use for training.
         config (dict): A copy of the attributes of the Trainer object.
         train_dataset (DataFrameDataset): Training dataset.
@@ -119,7 +120,7 @@ class Trainer:
             Fits the model to the training data and returns the best loss.
 
     """
-    def __init__(self, dataset_kwargs=None, load_data_kwargs=None, model_kwargs=None, 
+    def __init__(self, dataset_kwargs=None, load_data_kwargs=None, model_kwargs=None, mode_test=False,
                  device=None, work_dir=None, log_name=None, log_level=None, force=False, timing_name=None,
                  world_size=None, rank=None, gpus_per_node=None, local_rank=None, num_workers=None):
         """
@@ -150,6 +151,7 @@ class Trainer:
         self.num_workers = num_workers
         self.force = force
         self.timing_name = timing_name
+        self.mode_test = mode_test
         
         # === Deal with the configuration file === #
         if work_dir is not None:
@@ -169,6 +171,8 @@ class Trainer:
                     config['load_data_kwargs'] = self.load_data_kwargs
                 if self.model_kwargs is not None:
                     config['model_kwargs'] = self.model_kwargs
+                if self.mode_test is not None:
+                    config['mode_test'] = self.mode_test
                 if self.device is not None:
                     config['device'] = self.device
                 if self.log_name is not None:
@@ -206,9 +210,10 @@ class Trainer:
         val_sample = self.dataset_kwargs.pop('val_sample')
         test_sample = self.dataset_kwargs.pop('test_sample')
 
-        self.set_dataset(datalabel="train", samples_file=train_sample)
-        self.set_dataset(datalabel="val", samples_file=val_sample)
-        self.set_dataset(datalabel="test", samples_file=test_sample)
+        if not self.mode_test:
+            self.set_dataset(datalabel="train", samples_file=train_sample)
+            self.set_dataset(datalabel="val", samples_file=val_sample)
+            self.set_dataset(datalabel="test", samples_file=test_sample)
         
         self.comprehend_config()
 
@@ -311,8 +316,8 @@ class Trainer:
         logger.info(f"{self.device = } on {self.local_rank = }")
         
         logger.info(f"Code version git hash: {ut.get_git_revision_hash()}") # TODO: add this to the config file and raise error if it doesn't coincide wiht the current version
-
-        self.load_data(load_data_kwargs)
+        if not self.mode_test:
+            self.load_data(load_data_kwargs)
     
     def load_data(self, load_data_kwargs):
         """
@@ -326,11 +331,11 @@ class Trainer:
         Returns:
             None
         """
-        if self.local_rank is None and self.rank is None:
-            sampler_type = 'serial'
-        else:
+        if self.world_size is not None and self.world_size > 1:
             sampler_type = 'distributed'
-        logger.info(f"Creating data loaders with {sampler_type = }")
+        else:
+            sampler_type = 'serial'
+        logger.info(f"Creating data loaders with {sampler_type = } because {self.world_size = }")
         if 'num_workers' in load_data_kwargs['train_loader_kwargs']:
             logger.info("Config file contains num_workers in train_loader_kwargs so ignoring the number of actual cpus")
             self.train_loader = datasets.ChannelDataLoader(self.train_dataset, sampler_type=sampler_type, world_size = self.world_size, 

@@ -49,7 +49,7 @@ class PyNet:
         logger.info(f"Initializing model {self.model_}")
         try:
             self.model = DDP(self.model_, device_ids=[self.local_rank])
-        except ValueError:
+        except Exception:
             self.model = self.model_
             logger.info(f"DDP not available, initializing model using single GPU {self.local_rank = }")
         if optimizer_kwargs is None:

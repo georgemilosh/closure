@@ -182,20 +182,20 @@ def compare_metrics(work_dirs=['./'], runs=['./0'], metric=None):
             for metric_name in metric:
                 score[f"total_{metric_name}"] = trainer.model._compute_loss(ground_truth.flatten(),prediction.flatten(),
                                                                  parse_score(metric_name)).cpu().numpy()
-        if trainer.train_loader.target_channels is None:
-            list_of_target_indices = range(len(trainer.train_dataset.prescaler_targets))
+        if trainer.val_loader.target_channels is None:
+            list_of_target_indices = range(len(trainer.test_dataset.prescaler_targets))
         else:
-            list_of_target_indices = trainer.train_loader.target_channels
+            list_of_target_indices = trainer.val_loader.target_channels
         loss_dict = {'work_dir': work_dir, 'exp' : work_dir.rsplit('/')[-2],'run': run, 'total_loss': total_loss}
         if metric is not None:
             loss_dict.update(score)
         # computing per channel loss
         for channel in list_of_target_indices:
             target_loss = trainer.model._compute_loss(ground_truth[:, channel].flatten(), prediction[:, channel].flatten(), trainer.model.criterion)
-            loss_dict[trainer.train_dataset.request_targets[channel]] = target_loss.cpu().numpy()
+            loss_dict[trainer.test_dataset.request_targets[channel]] = target_loss.cpu().numpy()
             if metric is not None:
                 for metric_name in metric:
-                    loss_dict[f"{trainer.train_dataset.request_targets[channel]}_{metric_name}"] = \
+                    loss_dict[f"{trainer.test_dataset.request_targets[channel]}_{metric_name}"] = \
                         trainer.model._compute_loss(ground_truth[:, channel].flatten(), prediction[:, channel].flatten(),
                                                                  parse_score(metric_name)).cpu().numpy()
 
@@ -288,22 +288,22 @@ def transform_features(trainer, rescale=True, renorm=True, verbose=True):
     pred_shape[1] = -1
     pred_shape = tuple(pred_shape)
 
-    if trainer.train_loader.feature_channels is None: 
+    if trainer.val_Loader.feature_channels is None: 
         list_of_feature_indices = range(len(trainer.dataset_kwargs['read_features_targets_kwargs']['request_features']))
     else:
-        list_of_feature_indices = trainer.train_loader.feature_channels
+        list_of_feature_indices = trainer.val_loader.feature_channels
 
     if renorm:
         ground_truth_scaled = (ground_truth*trainer.test_dataset.features_std[list_of_feature_indices].reshape(pred_shape)+
                                 trainer.test_dataset.features_mean[list_of_feature_indices].reshape(pred_shape))
     if rescale:
-        for channel, _ in enumerate(trainer.train_dataset.request_features):
-            if trainer.train_loader.feature_channels is None:
+        for channel, _ in enumerate(trainer.test_dataset.request_features):
+            if trainer.val_loader.feature_channels is None:
                 list_of_feature_indices = range(len(trainer.dataset_kwargs['read_features_targets_kwargs']['request_features']))
             else:
-                list_of_feature_indices = trainer.train_loader.feature_channels
-            if trainer.train_dataset.prescaler_features is not None:
-                func = [trainer.train_dataset.prescaler_features[i] for i in list_of_feature_indices][channel]
+                list_of_feature_indices = trainer.val_loader.feature_channels
+            if trainer.test_dataset.prescaler_features is not None:
+                func = [trainer.test_dataset.prescaler_features[i] for i in list_of_feature_indices][channel]
                 if func == None:
                     invfunc = lambda a: a
                 elif func.__name__ == 'log':
@@ -334,10 +334,10 @@ def transform_targets(trainer, rescale=True, renorm=True, verbose=True):
     pred_shape[1] = -1
     pred_shape = tuple(pred_shape)
 
-    if trainer.train_loader.target_channels is None:
-        list_of_target_indices = range(len(trainer.train_dataset.prescaler_targets))
+    if trainer.val_loader.target_channels is None:
+        list_of_target_indices = range(len(trainer.test_dataset.prescaler_targets))
     else:
-        list_of_target_indices = trainer.train_loader.target_channels
+        list_of_target_indices = trainer.val_loader.target_channels
 
     if renorm:
         prediction_scaled = (prediction*trainer.test_dataset.targets_std[list_of_target_indices].reshape(pred_shape)+
@@ -345,13 +345,13 @@ def transform_targets(trainer, rescale=True, renorm=True, verbose=True):
         ground_truth_scaled = (ground_truth*trainer.test_dataset.targets_std[list_of_target_indices].reshape(pred_shape)+
                                 trainer.test_dataset.targets_mean[list_of_target_indices].reshape(pred_shape))
     if rescale:
-        for channel, _ in enumerate(trainer.train_dataset.request_targets):
-            if trainer.train_loader.target_channels is None:
-                list_of_target_indices = range(len(trainer.train_dataset.prescaler_targets))
+        for channel, _ in enumerate(trainer.test_dataset.request_targets):
+            if trainer.val_loader.target_channels is None:
+                list_of_target_indices = range(len(trainer.test_dataset.prescaler_targets))
             else:
-                list_of_target_indices = trainer.train_loader.target_channels
+                list_of_target_indices = trainer.val_loader.target_channels
 
-            func = [trainer.train_dataset.prescaler_targets[i] for i in list_of_target_indices][channel]
+            func = [trainer.test_dataset.prescaler_targets[i] for i in list_of_target_indices][channel]
             if func == None:
                 invfunc = lambda a: a
             elif func.__name__ == 'log':
@@ -388,15 +388,15 @@ def evaluate_loss(trainer, ground_truth, prediction, criterion, verbose=True):
     loss = {label : compute_loss(ground_truth.flatten(),prediction.flatten(),criterion)}
     if verbose:
         print(f"Total loss {loss[label]}")
-    if trainer.train_loader.target_channels is None:
-        list_of_target_indices = range(len(trainer.train_dataset.prescaler_targets))
+    if trainer.val_loader.target_channels is None:
+        list_of_target_indices = range(len(trainer.test_dataset.prescaler_targets))
     else:
-        list_of_target_indices = trainer.train_loader.target_channels
+        list_of_target_indices = trainer.val_loader.target_channels
     for channel in list_of_target_indices:
-        label = f'{trainer.train_dataset.request_targets[channel]}_{criterion}'
+        label = f'{trainer.test_dataset.request_targets[channel]}_{criterion}'
         loss[label] = compute_loss(ground_truth[:,channel].flatten(),prediction[:,channel].flatten(),criterion)
         if verbose:
-            print(f'Loss for channel {channel}:  {trainer.train_dataset.request_targets[channel]}, loss = {loss[label]}')
+            print(f'Loss for channel {channel}:  {trainer.test_dataset.request_targets[channel]}, loss = {loss[label]}')
     return loss
 
 def graph_pred_targets(trainer, target_name: str, ground_truth_scaled, prediction_scaled):
@@ -410,7 +410,7 @@ def graph_pred_targets(trainer, target_name: str, ground_truth_scaled, predictio
     Returns:
     None
     """
-    channel = trainer.train_dataset.request_targets.index(target_name)
+    channel = trainer.test_dataset.request_targets.index(target_name)
     prediction_reshaped = prediction_scaled[:,channel].reshape(trainer.test_dataset.targets_shape[:-1]+(1,)).cpu().numpy()
     ground_truth_reshaped = ground_truth_scaled[:,channel].reshape(trainer.test_dataset.targets_shape[:-1]+(1,)).cpu().numpy()
 
@@ -468,10 +468,10 @@ def pred_ground_targets(trainer, verbose=True):
     loss = trainer.model._compute_loss(ground_truth.flatten(),prediction.flatten(),trainer.model.criterion)
     if verbose:
         print(f"Total loss {loss}")
-    if trainer.train_loader.target_channels is None:
-        list_of_target_indices = range(len(trainer.train_dataset.prescaler_targets))
+    if trainer.val_loader.target_channels is None:
+        list_of_target_indices = range(len(trainer.test_dataset.prescaler_targets))
     else:
-        list_of_target_indices = trainer.train_loader.target_channels
+        list_of_target_indices = trainer.val_loader.target_channels
     for channel in list_of_target_indices:
         try:
             loss = trainer.model._compute_loss(ground_truth[:,channel].flatten(),prediction[:,channel].flatten(),trainer.model.criterion)
@@ -479,7 +479,7 @@ def pred_ground_targets(trainer, verbose=True):
             print(f"{ground_truth.shape = }, {prediction.shape = }, {channel = }, {trainer.model.criterion = }")
             raise e
         if verbose:
-            print(f'Loss for channel {channel}:  {trainer.train_dataset.request_targets[channel]}, loss = {loss}')
+            print(f'Loss for channel {channel}:  {trainer.test_dataset.request_targets[channel]}, loss = {loss}')
     return prediction, ground_truth, list_of_target_indices
 
 def plot_pred_targets(trainer, target_name: str, prediction=None, ground_truth=None, 
@@ -505,13 +505,13 @@ def plot_pred_targets(trainer, target_name: str, prediction=None, ground_truth=N
     pred_shape[1] = -1
     pred_shape = tuple(pred_shape)
 
-    channel = trainer.train_dataset.request_targets.index(target_name)
-    if trainer.train_loader.target_channels is None:
-        list_of_target_indices = range(len(trainer.train_dataset.prescaler_targets))
+    channel = trainer.test_dataset.request_targets.index(target_name)
+    if trainer.val_loader.target_channels is None:
+        list_of_target_indices = range(len(trainer.test_dataset.prescaler_targets))
     else:
-        list_of_target_indices = trainer.train_loader.target_channels
+        list_of_target_indices = trainer.val_loader.target_channels
 
-    func = [trainer.train_dataset.prescaler_targets[i] for i in list_of_target_indices][channel]
+    func = [trainer.test_dataset.prescaler_targets[i] for i in list_of_target_indices][channel]
     if func == None:
         invfunc = lambda a: a
     elif func.__name__ == 'log':
