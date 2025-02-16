@@ -231,6 +231,7 @@ class Trainer:
         with open(file_path, 'w', newline='') as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow(['Host', 'Rank', 'Local Rank', 'Time'])
+
     def set_logger(self, log_dir=None):
         if log_dir is not None:
             # Remove all handlers associated with the root logger object.
@@ -268,68 +269,12 @@ class Trainer:
             read_pic_logger = logging.getLogger(datasets.__name__)
             self.apply_handler(read_pic_logger, f_handler, self.log_level)
         return f_handler
-
-    def set_logge_old(self, log_dir=None):
-        if log_dir is not None:
-            f_handler = logging.FileHandler(log_dir)
-            f_handler.setLevel(self.log_level)
-            warnings_logger = logging.getLogger("py.warnings")
-            job_id = ""
-            if "SLURM_JOB_ID" in os.environ:
-                job_id = f'job:{os.environ["SLURM_JOB_ID"]}'
-            f_format = logging.Formatter('%(job_id)s | %(nodename)s | @rank: %(rank)s | @local: %(local_rank)s at %(asctime)s | %(levelname)s | %(name)s  | \t %(message)s')
-            f_handler.setFormatter(f_format)
-
-            # Add the custom filter to the handler
-            custom_filter = CustomFilter(job_id, self.rank, self.local_rank, os.uname().nodename)
-            f_handler.addFilter(custom_filter)
-
-            logger.addHandler(f_handler)
-            warnings_logger.addHandler(f_handler)
-            logger.setLevel(self.log_level)
-            logger.info(f" ")
-            logger.info(f"===Logging to {log_dir} on level {self.log_level}, @ {self.rank=}, {self.local_rank=}, {self.device=} ===") 
-            logger.info(f"host: {os.uname().nodename}")
-            logger.info(f" ")
-            # Define the extra loggers and add the same FileHandler to them
-            datasets_logger = logging.getLogger(__name__) # TODO: Fix the names 
-            self.apply_handler(datasets_logger, f_handler, self.log_level) 
-            models_logger = logging.getLogger(models.__name__)
-            self.apply_handler(models_logger, f_handler, self.log_level)
-            read_pic_logger = logging.getLogger(datasets.__name__)
-            self.apply_handler(read_pic_logger, f_handler, self.log_level)
-        return f_handler
             
     def apply_handler(self, logger, f_handler, log_level):
         logger.addHandler(f_handler)
         logger.setLevel(log_level)
         return None
 
-    def set_dataset(self,datalabel="test", samples_file=None):
-        if datalabel == "train":
-            self.train_dataset = datasets.DataFrameDataset(datalabel=datalabel, samples_file=samples_file,norm_folder=self.work_dir,
-                                                       **self.dataset_kwargs)
-            if self.dataset_kwargs.pop('scaler_features', None) is True: # removing these to avoid passing them to the validation and test datasets
-                self.scaler_features = (self.train_dataset.features_mean,self.train_dataset.features_std)
-            else: # if it is None or it is False we should not try to pass normalization of the train set to the val or test sets
-                self.scaler_features = None
-            if self.dataset_kwargs.pop('scaler_targets', None) is True:
-                self.scaler_targets = (self.train_dataset.targets_mean,self.train_dataset.targets_std)
-            else: # if it is None or it is False we should not try to pass normalization of the train set to the val or test sets
-                self.scaler_targets = None
-        elif datalabel == "val":
-            self.val_dataset = datasets.DataFrameDataset(datalabel=datalabel, samples_file=samples_file,norm_folder=self.work_dir, 
-                                            scaler_features=self.scaler_features, 
-                                            scaler_targets=self.scaler_targets,
-                                            **self.dataset_kwargs)
-        elif datalabel == "test":
-            self.test_dataset = datasets.DataFrameDataset(datalabel=datalabel,samples_file=samples_file,norm_folder=self.work_dir,
-                                            scaler_features=self.scaler_features, 
-                                            scaler_targets=self.scaler_targets,
-                                             **self.dataset_kwargs)
-        else:
-            raise ValueError(f"Unknown datalabel: {datalabel}")
-    
     def comprehend_config(self):
         """
         Comprehends the configuration settings for the model and its configs. The method deep copies
@@ -345,7 +290,7 @@ class Trainer:
         #dataset_kwargs = config['dataset_kwargs']
         load_data_kwargs = config['load_data_kwargs']
         model_kwargs = config['model_kwargs']
-        device = config['device']
+        #device = config['device']
         if 'run' in config:  # this is to handle optuna trials or other runs
             self.run = config['run']
         else:
@@ -363,8 +308,7 @@ class Trainer:
         logger.info(f"{self.device = } on {self.local_rank = }")
         
         logger.info(f"Code version git hash: {ut.get_git_revision_hash()}") # TODO: add this to the config file and raise error if it doesn't coincide wiht the current version
-        if not self.mode_test:
-            self.load_data(load_data_kwargs)
+        self.load_data(load_data_kwargs)
     
     def load_data(self, load_data_kwargs):
         """
@@ -383,24 +327,23 @@ class Trainer:
         else:
             sampler_type = 'serial'
         logger.info(f"Creating data loaders with {sampler_type = } because {self.world_size = }")
-        if 'num_workers' in load_data_kwargs['train_loader_kwargs']:
-            logger.info("Config file contains num_workers in train_loader_kwargs so ignoring the number of actual cpus")
-            self.train_loader = datasets.ChannelDataLoader(self.train_dataset, sampler_type=sampler_type, world_size = self.world_size, 
-                                                       rank = self.rank, gpus_per_node = self.gpus_per_node, local_rank = self.local_rank,
-                                                       **load_data_kwargs['train_loader_kwargs'])
-        else:
-            self.train_loader = datasets.ChannelDataLoader(self.train_dataset, sampler_type=sampler_type, world_size = self.world_size, 
-                                                       rank = self.rank, gpus_per_node = self.gpus_per_node, local_rank = self.local_rank,
-                                                       num_workers=self.num_workers, **load_data_kwargs['train_loader_kwargs'])
-        if 'num_workers' in load_data_kwargs['val_loader_kwargs']:
-            logger.info("Config file contains num_workers in train_loader_kwargs so ignoring the number of actual cpus")
-            self.val_loader = datasets.ChannelDataLoader(self.val_dataset,sampler_type=sampler_type, world_size = self.world_size, 
-                                                       rank = self.rank, gpus_per_node = self.gpus_per_node, local_rank = self.local_rank,
-                                                       **load_data_kwargs['val_loader_kwargs'])
-        else:
-            self.val_loader = datasets.ChannelDataLoader(self.val_dataset,sampler_type=sampler_type, world_size = self.world_size, 
-                                                       rank = self.rank, gpus_per_node = self.gpus_per_node, local_rank = self.local_rank,
-                                                        num_workers=self.num_workers, **load_data_kwargs['val_loader_kwargs'])
+        for phase in ['train', 'val', 'test']:
+            if phase == 'test' or not self.mode_test:
+                dataset = getattr(self, f"{phase}_dataset")
+                if phase == 'test':
+                    loader_kwargs = load_data_kwargs[f"val_loader_kwargs"]
+                else:
+                    loader_kwargs = load_data_kwargs[f"{phase}_loader_kwargs"]
+                if 'num_workers' in loader_kwargs:
+                    logger.info(f"Config file contains num_workers in {phase}_loader_kwargs so ignoring the number of actual cpus")
+                    loader = datasets.ChannelDataLoader(dataset, sampler_type=sampler_type, world_size=self.world_size, 
+                                                        rank=self.rank, gpus_per_node=self.gpus_per_node, local_rank=self.local_rank,
+                                                        **loader_kwargs)
+                else:
+                    loader = datasets.ChannelDataLoader(dataset, sampler_type=sampler_type, world_size=self.world_size, 
+                                                        rank=self.rank, gpus_per_node=self.gpus_per_node, local_rank=self.local_rank,
+                                                        num_workers=self.num_workers, **loader_kwargs)
+                setattr(self, f"{phase}_loader", loader)
 
     def load_run(self, run):
         """
