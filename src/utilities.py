@@ -410,6 +410,7 @@ def graph_pred_targets(trainer, target_name: str, ground_truth_scaled, predictio
     Returns:
     None
     """
+    print("The function graph_pred_targets is deprecated. Use pred_ground_targets instead.")
     channel = trainer.test_dataset.request_targets.index(target_name)
     prediction_reshaped = prediction_scaled[:,channel].reshape(trainer.test_dataset.targets_shape[:-1]+(1,)).cpu().numpy()
     ground_truth_reshaped = ground_truth_scaled[:,channel].reshape(trainer.test_dataset.targets_shape[:-1]+(1,)).cpu().numpy()
@@ -497,7 +498,6 @@ def plot_pred_targets(trainer, target_name: str, prediction=None, ground_truth=N
         plot_indices (list): A list of indices to plot, basically which times to plot.
         **kwargs: Additional keyword arguments to be passed to the plotting functions: axes.pcolormesh
     """
-    print("The function pred_ground_targets is deprecated. Use graph_pred_targets instead.")
     if prediction is None or ground_truth is None or list_of_target_indices is None:
         prediction, ground_truth, list_of_target_indices = pred_ground_targets(trainer)
     

@@ -332,10 +332,10 @@ class PyNet:
                 msg = f"{msg} | Time/epoch_train: {round(epoch_time_train, 3)} s"
                 if self.scheduler is not None:
                     try:
-                        msg = f"{msg} | Learn rate: {self.scheduler.get_last_lr():.4e}"
+                        msg = f"{msg} | Learn rate: {self.scheduler.get_last_lr()}"
                     except AttributeError: # Compatability with an earlier version of Pytorch
                         try:
-                            msg = f"{msg} | Learn rate: {self.scheduler._last_lr:.4e}"
+                            msg = f"{msg} | Learn rate: {self.scheduler._last_lr}"
                         except TypeError: 
                             msg = f"{msg} | Learn rate: {self.scheduler._last_lr}"
 

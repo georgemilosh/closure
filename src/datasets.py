@@ -583,14 +583,11 @@ class DataFrameDataset(torch.utils.data.Dataset):
         if self.scaler_features is not None and self.scaler_features is not False:
             #processing_folder, samples_file_name = self.samples_file.rsplit('/', 1)
             name = f'{self.norm_folder}/X.pkl' #_{samples_file_name}_{str(self.prescaler_features)}.pkl' # X_{samples_file_name}_{str(self.prescaler_features)}.pkl'
-            if isinstance(self.scaler_features, tuple):
-                logger.info(f"dataset provided with scaler features") # TODO: check if self.datalabel is correct
-                self.features_mean, self.features_std = self.scaler_features
+            if os.path.exists(name):
+                self.features_mean, self.features_std = joblib.load(name)
+                logger.info(f"Loaded self.features_mean, self.features_std from {name}")
             else:
-                if os.path.exists(name):
-                    self.features_mean, self.features_std = joblib.load(name)
-                    logger.info(f"Loaded self.features_mean, self.features_std from {name}")
-                else:
+                if self.datalabel == 'train':
                     if len(self.features.shape) > 2:
                         self.features_mean = np.asarray(np.mean(self.features, axis=(0, 2, 3)), dtype=self.feature_dtype_numpy)
                         self.features_std = np.asarray(np.std(self.features, axis=(0, 2, 3)), dtype=self.feature_dtype_numpy)
@@ -599,6 +596,8 @@ class DataFrameDataset(torch.utils.data.Dataset):
                         self.features_std = np.asarray(np.std(self.features, axis=0), dtype=self.feature_dtype_numpy)
                     joblib.dump((self.features_mean, self.features_std), name)
                     logger.info(f"Saved self.features_mean, self.features_std to {name}")
+                else:
+                    raise ValueError(f"Scalers for features are not provided and the file {name} does not exist. Please provide the scalers or ensure that the file exists.")
             logger.info("Normalization applied to features")
             for channel in range(self.features.shape[1]):
                 try:
@@ -619,14 +618,11 @@ class DataFrameDataset(torch.utils.data.Dataset):
         if self.scaler_targets is not None and self.scaler_targets is not False:
             #processing_folder, samples_file_name = self.samples_file.rsplit('/', 1)
             name = f'{self.norm_folder}/y.pkl' #y_{samples_file_name}_{str(self.prescaler_targets)}.pkl'
-            if isinstance(self.scaler_targets, tuple):
-                logger.info(f"dataset provided with scaler targets")
-                self.targets_mean, self.targets_std = self.scaler_targets
+            if os.path.exists(name):
+                self.targets_mean, self.targets_std = joblib.load(name)
+                logger.info(f"Loaded self.targets_mean, self.targets_std from {name}")
             else:
-                if os.path.exists(name):
-                    self.targets_mean, self.targets_std = joblib.load(name)
-                    logger.info(f"Loaded self.targets_mean, self.targets_std from {name}")
-                else:
+                if self.datalabel == 'train':
                     if len(self.targets.shape) > 2:
                         self.targets_mean = np.asarray(np.mean(self.targets, axis=(0, 2, 3)), dtype=self.target_dtype_numpy)
                         self.targets_std = np.asarray(np.std(self.targets, axis=(0, 2, 3)), dtype=self.target_dtype_numpy)
@@ -635,6 +631,8 @@ class DataFrameDataset(torch.utils.data.Dataset):
                         self.targets_std = np.asarray(np.std(self.targets, axis=0), dtype=self.target_dtype_numpy)
                     joblib.dump((self.targets_mean, self.targets_std), name)
                     logger.info(f"Saved self.targets_mean, self.targets_std to {name}")
+                else:
+                    raise ValueError(f"Scalers for targets are not provided and the file {name} does not exist. Please provide the scalers or ensure that the file exists")
             logger.info("Normalization applied to targets")
             for channel in range(self.targets.shape[1]):
                 self.targets[:,channel,...] -= self.targets_mean[channel]

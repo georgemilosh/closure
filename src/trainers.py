@@ -211,9 +211,19 @@ class Trainer:
         test_sample = self.dataset_kwargs.pop('test_sample')
 
         if not self.mode_test:
-            self.set_dataset(datalabel="train", samples_file=train_sample)
-            self.set_dataset(datalabel="val", samples_file=val_sample)
-            self.set_dataset(datalabel="test", samples_file=test_sample)
+            self.train_dataset = datasets.DataFrameDataset(datalabel="train", 
+                                                           samples_file=train_sample,
+                                                           norm_folder=self.work_dir,
+                                                       **self.dataset_kwargs)
+            self.val_dataset = datasets.DataFrameDataset(datalabel="val",
+                                                          samples_file=val_sample,
+                                                           norm_folder=self.work_dir,
+                                                       **self.dataset_kwargs)
+                                                       
+        self.test_dataset = datasets.DataFrameDataset(datalabel="test",
+                                                          samples_file=test_sample,
+                                                           norm_folder=self.work_dir,
+                                                       **self.dataset_kwargs)
         
         self.comprehend_config()
 
@@ -221,8 +231,45 @@ class Trainer:
         with open(file_path, 'w', newline='') as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow(['Host', 'Rank', 'Local Rank', 'Time'])
-
     def set_logger(self, log_dir=None):
+        if log_dir is not None:
+            # Remove all handlers associated with the root logger object.
+            for handler in logging.root.handlers[:]:
+                logging.root.removeHandler(handler)
+            
+            # Set the log level to CRITICAL for the root logger
+            logging.root.setLevel(self.log_level)
+            
+            f_handler = logging.FileHandler(log_dir)
+            f_handler.setLevel(self.log_level)
+            warnings_logger = logging.getLogger("py.warnings")
+            job_id = ""
+            if "SLURM_JOB_ID" in os.environ:
+                job_id = f'job:{os.environ["SLURM_JOB_ID"]}'
+            f_format = logging.Formatter('%(job_id)s | %(nodename)s | @rank: %(rank)s | @local: %(local_rank)s at %(asctime)s | %(levelname)s | %(name)s  | \t %(message)s')
+            f_handler.setFormatter(f_format)
+
+            # Add the custom filter to the handler
+            custom_filter = CustomFilter(job_id, self.rank, self.local_rank, os.uname().nodename)
+            f_handler.addFilter(custom_filter)
+
+            logger.addHandler(f_handler)
+            warnings_logger.addHandler(f_handler)
+            logger.setLevel(self.log_level)
+            logger.info(f" ")
+            logger.info(f"===Logging to {log_dir} on level {self.log_level}, @ {self.rank=}, {self.local_rank=}, {self.device=} ===") 
+            logger.info(f"host: {os.uname().nodename}")
+            logger.info(f" ")
+            # Define the extra loggers and add the same FileHandler to them
+            datasets_logger = logging.getLogger(__name__) # TODO: Fix the names 
+            self.apply_handler(datasets_logger, f_handler, self.log_level) 
+            models_logger = logging.getLogger(models.__name__)
+            self.apply_handler(models_logger, f_handler, self.log_level)
+            read_pic_logger = logging.getLogger(datasets.__name__)
+            self.apply_handler(read_pic_logger, f_handler, self.log_level)
+        return f_handler
+
+    def set_logge_old(self, log_dir=None):
         if log_dir is not None:
             f_handler = logging.FileHandler(log_dir)
             f_handler.setLevel(self.log_level)
@@ -551,7 +598,7 @@ def main():
             if key != "work_dir":  # Skip work_dir as it is already handled
                 set_nested_config(config, key, value)
                 print(f"Setting {key} to {value}")
-        print(config)
+        #print(config)
         trainer.fit(config=config)
     else:
         trainer.fit()
