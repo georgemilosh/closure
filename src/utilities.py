@@ -131,13 +131,18 @@ def compare_runs(work_dirs=['./'], runs=['./0'], metric=None, rescale=True, reno
         pandas.DataFrame: DataFrame containing the comparison results.
     """
     loss_df = None
-
-    for work_dir, run in zip(work_dirs,runs):
+    for i, (work_dir, run) in enumerate(zip(work_dirs,runs)):
         if not os.path.exists(work_dir):
             raise ValueError(f"Work directory '{work_dir}' does not exist.")
+        if i == 0 or (i > 0 and os.path.normpath(work_dir) != os.path.normpath(trainer.work_dir)): # only request new trainer if work_dir is different from the previous one
+            if verbose:
+                if i > 0:
+                    print(f"Loading trainer from {os.path.normpath(work_dir)} which is different from {os.path.normpath(trainer.work_dir)}")
+                else:
+                    print(f"Loading trainer from {work_dir} ")
+            trainer = tr.Trainer(work_dir=work_dir, **kwargs)
         if verbose:
-            print(f"Loading run {run} from {work_dir}")
-        trainer = tr.Trainer(work_dir=work_dir, **kwargs)
+            print(f"Loading run {run} ")
         trainer.load_run(run)
         ground_truth_scaled, prediction_scaled = transform_targets(trainer, rescale=rescale, renorm=renorm, verbose=verbose)
         score_total = evaluate_loss(trainer, ground_truth_scaled, prediction_scaled, 
