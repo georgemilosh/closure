@@ -293,6 +293,16 @@ class Trainer:
             self.apply_handler(models_logger, f_handler, self.log_level)
             read_pic_logger = logging.getLogger(datasets.__name__)
             self.apply_handler(read_pic_logger, f_handler, self.log_level)
+        # Add a StreamHandler to also output logs to the console (and thus to the notebook)
+        stream_handler = logging.StreamHandler()
+        stream_handler.setLevel(self.log_level)
+        stream_format = logging.Formatter('%(asctime)s | %(levelname)s | %(name)s | \t %(message)s')
+        stream_handler.setFormatter(stream_format)
+        logger.addHandler(stream_handler)
+        warnings_logger.addHandler(stream_handler)
+        datasets_logger.addHandler(stream_handler)
+        models_logger.addHandler(stream_handler)
+        read_pic_logger.addHandler(stream_handler)
         return f_handler
             
     def apply_handler(self, logger, f_handler, log_level):

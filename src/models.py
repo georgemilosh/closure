@@ -267,7 +267,7 @@ class PyNet:
             
             epoch_time = time.time() - epoch_start_time
             self.total_time["train+val"].append(epoch_time)
-            if self.rank == 0:
+            if self.rank is None or self.rank == 0:
                 if val_loss["criterion"] < best_loss:
                     if self.save_every == 'best' or (isinstance(self.save_every, int) and epoch % self.save_every == 0):
                         best_loss = val_loss["criterion"]
