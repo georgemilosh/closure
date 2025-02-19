@@ -1,4 +1,24 @@
+
 import os
+"""
+This script compares the results of multiple training runs stored in a specified directory.
+
+The script performs the following steps:
+1. Parses command-line arguments to get the path to the trainer folder.
+2. Lists all subdirectories (runs) in the specified trainer folder.
+3. For each run, loads the loss dictionary from 'loss_dict.pkl' and the configuration from 'config.json'.
+4. Uses the loaded data to compare the runs using a specified metric.
+5. Saves the comparison results and the loaded data to 'evaluation.pkl' in the trainer folder.
+
+Arguments:
+    --work_dir (str): Path to the trainer folder containing the runs.
+
+Outputs:
+    evaluation.pkl: A pickle file containing the loss dictionaries, configuration data, and comparison results.
+
+Example usage:
+    python run_compare_runs.py --work_dir /path/to/trainer/folder
+"""
 import pickle
 import argparse
 import json

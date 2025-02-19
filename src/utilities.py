@@ -373,7 +373,10 @@ def transform_targets(trainer, rescale=True, renorm=True, verbose=True):
 
 def compute_loss(ground_truth, prediction, criterion):
     if criterion == 'r2':
-        loss = (1- torch.nn.MSELoss()(ground_truth,prediction)/torch.var(ground_truth)).cpu().numpy()
+        #loss = (1- torch.nn.MSELoss()(ground_truth,prediction)/torch.var(ground_truth)).cpu().numpy()
+        ss_total = torch.sum((ground_truth - torch.mean(ground_truth)) ** 2)
+        ss_residual = torch.sum((ground_truth - prediction) ** 2)
+        loss = 1 - (ss_residual / ss_total)
     else:
         loss = getattr(torch.nn, criterion)()(ground_truth,prediction).cpu().numpy()
     return loss

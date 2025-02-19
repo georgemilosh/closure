@@ -20,6 +20,7 @@ import torch.distributed as dist
 import json
 from socket import gethostname
 import csv
+import ast
 
 
 from . import datasets
@@ -34,24 +35,38 @@ logger = logging.getLogger(__name__)
 def set_nested_config(config, key, value):
     """
     Set a nested configuration value in a dictionary.
+    
     This function takes a configuration dictionary, a dot-separated key string, 
     and a value. It sets the value in the dictionary at the location specified 
-    by the key string, creating nested dictionaries as needed.
+    by the key string, creating nested dictionaries as needed. The value will 
+    be converted to an int, float, or list of ints/floats if possible.
+    
     Args:
         config (dict): The configuration dictionary to update.
         key (str): A dot-separated string specifying the nested key.
-        value (str): The value to set. It will be converted to an int or float 
-                     if possible.
+        value (str): The value to set. It will be converted to an int, float, 
+                     or list if possible.
+    
     Example:
         config = {}
         set_nested_config(config, 'a.b.c', '123')
         # config is now {'a': {'b': {'c': 123}}}
+        
+        set_nested_config(config, 'a.b.d', '45.67')
+        # config is now {'a': {'b': {'c': 123, 'd': 45.67}}}
+        
+        set_nested_config(config, 'a.e', '[1, 2, 3]')
+        # config is now {'a': {'b': {'c': 123, 'd': 45.67}, 'e': [1, 2, 3]}}
+        
+        set_nested_config(config, 'a.f', '[1.1, 2.2, 3.3]')
+        # config is now {'a': {'b': {'c': 123, 'd': 45.67}, 'e': [1, 2, 3], 'f': [1.1, 2.2, 3.3]}}
     """
 
     keys = key.split('.')
     d = config
     for k in keys[:-1]:
         d = d.setdefault(k, {})
+    
     # Convert value to appropriate type
     if value.isdigit():
         value = int(value)
@@ -59,7 +74,14 @@ def set_nested_config(config, key, value):
         try:
             value = float(value)
         except ValueError:
-            pass
+            try:
+                # Attempt to parse list
+                value = ast.literal_eval(value)
+                if isinstance(value, list):
+                    value = [float(v) if '.' in str(v) else int(v) for v in value]
+            except (ValueError, SyntaxError):
+                pass
+    
     d[keys[-1]] = value
 
 class CustomFilter(logging.Filter):
@@ -148,7 +170,10 @@ class Trainer:
         self.rank = rank
         self.gpus_per_node = gpus_per_node
         self.local_rank = local_rank
-        self.num_workers = num_workers
+        if num_workers is not None:
+            self.num_workers = num_workers
+        else:
+            self.num_workers = os.cpu_count()
         self.force = force
         self.timing_name = timing_name
         self.mode_test = mode_test
