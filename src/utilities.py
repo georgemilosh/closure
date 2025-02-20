@@ -9,6 +9,7 @@ from . import read_pic as rp
 import re
 import os
 import pickle
+import scipy.ndimage as nd
 
 def species_to_list(input_list):
     """
