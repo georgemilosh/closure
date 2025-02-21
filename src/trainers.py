@@ -226,6 +226,10 @@ class Trainer:
                 except Exception as e:
                     logger.error(f"Error saving configuration file: {e}")
         self.config = copy.deepcopy(self.__dict__) # save the attributes to the config of the trainer class 
+
+        if not torch.cuda.is_available():
+            self.device = torch.device('cpu')
+
         if self.work_dir is not None:
             self.f_handler = self.set_logger(f'{self.work_dir}/{self.log_name}')
 
@@ -393,8 +397,14 @@ class Trainer:
                 self.set_logger(f'{self.work_dir}/{run}/run.log')
             logger.info(f"==========Config file {config_file} found, logging to {self.work_dir}/{run}/run.log========")
             logger.warning(f"Loading configuration based on it and the associated model weights/training loss!")
-            if config['dataset_kwargs'] != self.config['dataset_kwargs']:
-                raise ValueError("The old and new config file have dataset_kwargs which are not consistent! You must create a new run")
+            
+            if 'transform' in config['dataset_kwargs'] and 'transform' in self.config['dataset_kwargs']:
+                for key in config['dataset_kwargs']:
+                    if key != 'transform' and config['dataset_kwargs'][key] != self.config['dataset_kwargs'][key]:
+                        raise ValueError(f"The old and new config file have dataset_kwargs which are not consistent in {key = }! You must create a new run")
+            else:
+                if config['dataset_kwargs'] != self.config['dataset_kwargs']:
+                    raise ValueError("The old and new config file have dataset_kwargs which are not consistent! You must create a new run")
             self.config  = config
             self.comprehend_config()
             model_file = f"{self.config['work_dir']}/{run}/model.pth"    # < ======= TODO: Add multiple models here
@@ -405,7 +415,11 @@ class Trainer:
             except RuntimeError:
                 # torch.nn.parallel.DistributedDataParallel, which prefixes the keys with "module.".
                 # Load the state dictionary
-                state_dict = torch.load(model_file, map_location=self.device)
+                try:
+                    state_dict = torch.load(model_file, map_location=self.device)
+                except Exception as e:
+                    logger.error(f"Error loading model weights with {self.device = }")
+                    raise e
                 # Remove 'module.' prefix from keys
                 new_state_dict = {}
                 for k, v in state_dict.items():
@@ -496,6 +510,8 @@ class Trainer:
         """
         Get the device to use for training.
         """
+        if not torch.cuda.is_available():
+            self.device = torch.device('cpu')
         if device is None:
             if torch.cuda.is_available():
                 logger.info(f"Number of GPUs: {torch.cuda.device_count()}")
