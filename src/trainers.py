@@ -597,7 +597,11 @@ def main():
     else:
         trainer.fit()
 
-    dist.destroy_process_group()
+    try:
+        dist.destroy_process_group()
+    except Exception as e:
+        print(f"Error destroying process group, possibly because it didn't exist?")
+        print(e)
 
 if __name__ == '__main__':
     main()
