@@ -576,8 +576,8 @@ def main():
         world_size = 1
         rank = 0
         local_rank = 0
-        gpus_per_node = torch.cuda.device_count()
-        num_workers = os.cpu_count()
+        gpus_per_node = min(torch.cuda.device_count(),1) if torch.cuda.is_available() else 0
+        num_workers = os.cpu_count() if os.cpu_count() < 32 else 32
         print(f"Running on a single node with {gpus_per_node} GPUs and {num_workers} CPU cores.")
 
     print(f"Creating Trainer object with work_dir={work_dir}")
