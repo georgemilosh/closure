@@ -13,11 +13,11 @@ start_time = time.time()
 fields_to_read={"B":True,"B_ext":False,"divB":True,"E":True,"E_ext":False,"rho":True,"J":True,
                 "P":True,"PI":False,"Heat_flux":False,"N":False,"Qrem":False}
 # Path of the folder containing the .h5 files to read.
-files_path="/volume1/scratch/share_dir/peppe/" #"/lustre1/project/stg_00032/share_dir/brecht/" # "/users/cpa/francesc/share_dir/SW/data_small/" #"/users/cpa/francesc/share_dir/jincai/dat_FF2D07e/" #="/users/cpa/francesc/share_dir/nn/data/raw_data/"
-if len(sys.argv) > 1:
-    experiment = sys.argv[1]
+if len(sys.argv) > 2:
+    experiment = sys.argv[2]
+    files_path = sys.argv[1] #"/volume1/scratch/share_dir/ecsim/peppe/" #"/lustre1/project/stg_00032/share_dir/brecht/" # "/users/cpa/francesc/share_dir/SW/data_small/" #"/users/cpa/francesc/share_dir/jincai/dat_FF2D07e/" #="/users/cpa/francesc/share_dir/nn/data/raw_data/"
 else:
-    print("Please provide the experiment name as a command line argument.")
+    print("Please provide the experiment name and files_path as command line arguments separated by a space.")
     sys.exit(1)
 
 experiments = [f.name for f in os.scandir(files_path) if f.is_dir()]
@@ -30,7 +30,14 @@ data, X, Y, qom, times = rp.get_exp_times([experiment], files_path, fields_to_re
                                            filters = None) 
 print(f"{data[experiment]['Bx'].shape = }")
 filtered = {}
-xs = [2048, 1376, 928, 608, 416, 288, 192, 128, 96, 64, 32, 20, 16, 12, 10, 8, 6, 4, 3, 2, 1]
+if X.shape[0] == 2048:
+    xs = [2048, 1376, 928, 608, 416, 288, 192, 128, 96, 64, 32, 20, 16, 12, 10, 8, 6, 4, 3, 2, 1]
+elif X.shape[0] == 512:
+    xs = [512, 352, 256, 176, 128, 88, 64, 44, 32, 22, 16, 11, 8, 6, 4, 3, 2, 1]
+else:
+    raise ValueError(f"Shape {X.shape[0]} treatment not implemented")
+
+filtered['xs'] = xs
 
 for quantity in ['PIuu', 'PIbb', 'Ef_favre', 'PS', '-Ptheta', 'JdotE']:
     filtered[quantity] = {}
