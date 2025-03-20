@@ -407,7 +407,8 @@ class Trainer:
                     raise ValueError("The old and new config file have dataset_kwargs which are not consistent! You must create a new run")
             self.config  = config
             self.comprehend_config()
-            model_file = f"{self.config['work_dir']}/{run}/model.pth"    # < ======= TODO: Add multiple models here
+            self.model.load(f"{self.config['work_dir']}/{run}")
+            """model_file = f"{self.config['work_dir']}/{run}/model.pth"    # < ======= TODO: Add multiple models here
             loss_file = f"{self.config['work_dir']}/{run}/loss_dict.pkl"
             logger.info(f"Loading model weights from {model_file}")
             try:
@@ -432,7 +433,7 @@ class Trainer:
                 loss_dict = pickle.load(f)
             self.model.train_loss_, self.model.val_loss_ = loss_dict['train_loss'], loss_dict['val_loss']
         else:
-            raise FileNotFoundError(f"Config file {config_file} not found.")
+            raise FileNotFoundError(f"Config file {config_file} not found.")"""
         
     def fit(self, config=None):
         """

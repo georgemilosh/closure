@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader
 from torch.nn.parallel import DistributedDataParallel as DDP
 import copy
 import sys
+import pickle
 
 import logging
 logging.basicConfig(level=logging.INFO)
@@ -146,6 +147,36 @@ class PyNet:
         self.features_dtype = features.dtype
         self.targets_dtype = out.dtype
         return torch.cat(predictions)
+    
+    def load(self, path, **kwargs):
+        """
+        Load the model from the specified path.
+        """
+        #self.model.load_state_dict(torch.load(path))
+        model_file = f"{path}/model.pth"    # < ======= TODO: Add multiple models here
+        loss_file = f"{path}/loss_dict.pkl"
+        logger.info(f"Loading model weights from {model_file}")
+        try:
+            self.model.load_state_dict(torch.load(model_file, map_location=self.device))
+        except RuntimeError:
+            # torch.nn.parallel.DistributedDataParallel, which prefixes the keys with "module.".
+            # Load the state dictionary
+            try:
+                state_dict = torch.load(model_file, map_location=self.device)
+            except Exception as e:
+                logger.error(f"Error loading model weights with {self.device = }")
+                raise e
+            # Remove 'module.' prefix from keys
+            new_state_dict = {}
+            for k, v in state_dict.items():
+                new_key = k.replace('module.', '')
+                new_state_dict[new_key] = v
+            # Load the modified state dictionary
+            self.model.load_state_dict(new_state_dict)
+        with open(loss_file, 'rb') as f:
+            logger.info(f"Loading loss dictionary from {loss_file}")
+            loss_dict = pickle.load(f)
+        self.train_loss_, self.val_loss_ = loss_dict['train_loss'], loss_dict['val_loss']
 
     def _compute_loss(self, prediction, ground_truth, criterion):
         """
