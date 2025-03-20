@@ -408,32 +408,8 @@ class Trainer:
             self.config  = config
             self.comprehend_config()
             self.model.load(f"{self.config['work_dir']}/{run}")
-            """model_file = f"{self.config['work_dir']}/{run}/model.pth"    # < ======= TODO: Add multiple models here
-            loss_file = f"{self.config['work_dir']}/{run}/loss_dict.pkl"
-            logger.info(f"Loading model weights from {model_file}")
-            try:
-                self.model.model.load_state_dict(torch.load(model_file, map_location=self.device))
-            except RuntimeError:
-                # torch.nn.parallel.DistributedDataParallel, which prefixes the keys with "module.".
-                # Load the state dictionary
-                try:
-                    state_dict = torch.load(model_file, map_location=self.device)
-                except Exception as e:
-                    logger.error(f"Error loading model weights with {self.device = }")
-                    raise e
-                # Remove 'module.' prefix from keys
-                new_state_dict = {}
-                for k, v in state_dict.items():
-                    new_key = k.replace('module.', '')
-                    new_state_dict[new_key] = v
-                # Load the modified state dictionary
-                self.model.model.load_state_dict(new_state_dict)
-            with open(loss_file, 'rb') as f:
-                logger.info(f"Loading loss dictionary from {loss_file}")
-                loss_dict = pickle.load(f)
-            self.model.train_loss_, self.model.val_loss_ = loss_dict['train_loss'], loss_dict['val_loss']
         else:
-            raise FileNotFoundError(f"Config file {config_file} not found.")"""
+            raise FileNotFoundError(f"Config file {config_file} not found.")
         
     def fit(self, config=None):
         """
