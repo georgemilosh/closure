@@ -334,18 +334,15 @@ class Trainer:
             self.run = config['run']
         else:
             self.run = ''
-
         if isinstance(model_kwargs, dict): # if model is not instantiated we create it
             logger.warning(f"Creating new model. Note this will replace any previous model")
-            
             self.model = models.PyNet(**model_kwargs, rank=self.rank, local_rank=self.local_rank) 
-            #logger.info(f"Successfully parsed the {model_name} class")
-            logger.info(f"Creating object: {self.model} which contains {self.model.model} as the model")
         else: # if model is already instantiated
             logger.info(f"Model provided as an input {model_kwargs =}")
             self.model = model_kwargs
+
         logger.info(f"{self.device = } on {self.local_rank = }")
-        
+
         logger.info(f"Code version git hash: {ut.get_git_revision_hash()}") # TODO: add this to the config file and raise error if it doesn't coincide wiht the current version
         self.load_data(load_data_kwargs)
     
@@ -464,8 +461,8 @@ class Trainer:
                     if not os.path.exists(f"{self.work_dir}/{self.run}/config.json"):
                         logger.warning(f"Config file {self.work_dir}/{self.run}/config.json not found, which means that the rank=0 did not yet save the configuration file")
                 if self.work_dir is not None:
-                        os.makedirs(os.path.dirname(f"{self.work_dir}/{self.run}/"), exist_ok=True)
-                        self.set_logger(f'{self.work_dir}/{self.run}/run.log')
+                    os.makedirs(os.path.dirname(f"{self.work_dir}/{self.run}/"), exist_ok=True)
+                    self.set_logger(f'{self.work_dir}/{self.run}/run.log')
 
         # Getting % usage of virtual_memory ( 3rd field)
         logger.info(f'Prior to fit: RAM memory % used: {psutil.virtual_memory()[2]}, RAM Used (GB):, {psutil.virtual_memory()[3]/1000000000}, process RAM usage (GB): {psutil.Process(os.getpid()).memory_info().rss / 1024 ** 3}')

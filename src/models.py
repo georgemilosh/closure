@@ -36,12 +36,18 @@ class PyNet:
         Keyword arguments for initializing the scheduler, by default None
     logger_kwargs : dict, optional
         Keyword arguments for initializing the logger, by default None
+    rank : int, optional
+        Rank of the process, by default None
+    local_rank : int, optional
+        Local rank of the process, by default None
+    init_path : str, optional
+        Path to the model weights, by default None
 
     Attributes:
     model : (torch.nn.Module) : The neural network model.
     """
     def __init__(self, model='FCNN', model_seed=None, optimizer_kwargs=None, scheduler_kwargs=None, logger_kwargs=None,
-                rank=None, local_rank=None, **kwargs): 
+                rank=None, local_rank=None, init_path=None, **kwargs): 
         model_class =  globals() [model] #getattr(__name__, model)
         self.local_rank = local_rank
         self.rank = rank
@@ -70,6 +76,10 @@ class PyNet:
         if model_seed is not None:
             torch.manual_seed(model_seed) # set the seed for the weights
         self.define_optimizer_sheduler()
+        #logger.info(f"Successfully parsed the {model_name} class")
+        logger.info(f"Creating object: {self} which contains {self.model} as the model")
+        if init_path is not None:
+            self.load(init_path)
 
     def define_optimizer_sheduler(self):
         """
