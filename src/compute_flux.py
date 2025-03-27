@@ -61,8 +61,11 @@ for quantity in ['PIuu', 'PIbb', 'Ef_favre', 'PS', '-Ptheta', 'JdotE']:
 for quantity in ['E2_bar', 'B2_bar']:
     filtered[quantity] = np.array(filtered[quantity])
 
-    with open(f'{files_path}/{experiment}/filtered_quantities.pkl', 'wb') as f:
-        pickle.dump(filtered, f)
+filtered['Ethi_i'] = 3*np.mean(data['P']['i'], axis=(0,1))/2
+filtered['Ethi_e'] = 3*np.mean(data['P']['e'], axis=(0,1))/2
+
+with open(f'{files_path}/{experiment}/filtered_quantities.pkl', 'wb') as f:
+    pickle.dump(filtered, f)
 
 
 end_time = time.time()

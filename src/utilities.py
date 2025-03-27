@@ -970,7 +970,57 @@ def get_Ohm(data,qom, x,y):
 
 
 
-
+def get_Az(x,y,data):
+    def get_Az(x, y, data):
+        """
+        Compute the vector potential component Az based on the input magnetic field components Bx and By.
+        This function calculates the Az component of the vector potential using the provided
+        magnetic field data (Bx and By) and spatial coordinates (x and y). The calculation
+        is performed using numerical integration along the x and y axes.
+        Parameters:
+        -----------
+        x : numpy.ndarray
+            1D array representing the x-coordinates of the grid points.
+        y : numpy.ndarray
+            1D array representing the y-coordinates of the grid points.
+        data : dict
+            Dictionary containing the magnetic field components:
+            - 'Bx': 3D numpy array representing the x-component of the magnetic field.
+            - 'By': 3D numpy array representing the y-component of the magnetic field.
+        Modifies:
+        ---------
+        data : dict
+            Adds a new key 'Az' to the input dictionary, which contains the computed
+            3D numpy array of the Az component of the vector potential.
+        Notes:
+        ------
+        - The function assumes that the input magnetic field components ('Bx' and 'By')
+          are defined on a regular grid.
+        - The grid spacing is computed as the difference between consecutive elements
+          in the x and y arrays (dx and dy).
+        - The integration is performed using a trapezoidal rule along the respective axes.
+        Example:
+        --------
+        >>> ut.get_Az(X[:,0],Y[0,:],data)
+        >>> print(data['Az'])  # Access the computed Az component
+        """
+    
+    Nx=data['Bx'].shape[0]
+    Ny=data['Bx'].shape[1]
+    Nz=data['Bx'].shape[2]
+    dx = x[1]-x[0]
+    dy = y[1]-y[0]
+    
+    f=np.zeros((Nx,Ny,Nz))
+    g=np.zeros((Nx,Ny,Nz))
+    
+    for iy in range(1,Ny):
+        g[:,iy,:]=g[:,iy-1,:]+(data['Bx'][:,iy-1,:]+data['Bx'][:,iy,:])*dy/2
+        
+    for iy in range(0,Ny):
+        for ix in range(1,Nx):
+            f[ix,iy,:]=f[ix-1,iy,:]-(data['By'][ix-1,0,:]+data['By'][ix,0,:])*dx/2    
+    data['Az'] = f+g
 
     
 
