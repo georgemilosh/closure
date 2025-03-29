@@ -363,6 +363,9 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                 for species in data[f'J{component}'].keys():
                     data[f'V{component}'][species] = data[f'J{component}'][species]/(data['rho'][species]+small)
         data['Jmagn'] = {}
+        data['Jtotx'] = np.sum([data['Jx'][species] for species in data['Jx'].keys()], axis=0)
+        data['Jtoty'] = np.sum([data['Jy'][species] for species in data['Jy'].keys()], axis=0)
+        data['Jtotz'] = np.sum([data['Jz'][species] for species in data['Jz'].keys()], axis=0)
         if 'Vx' in data.keys():
             data['Vmagn'] = {}
         for species in data[f'J{component}'].keys():

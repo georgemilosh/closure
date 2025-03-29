@@ -574,6 +574,96 @@ def plot_pred_targets(trainer, target_name: str, prediction=None, ground_truth=N
     plt.tight_layout()
     plt.show()
 
+def normalize_input(data, trainer):
+    """
+    Normalize the input data based on the trainer's dataset settings.
+
+    Parameters:
+    data (dict): Dictionary containing the simulation data.
+    trainer (Trainer): Trainer object containing the model and normalization settings.
+
+    Returns:
+    torch.Tensor: Normalized test features ready for model prediction.
+    """
+    test_features = []
+    for key in trainer.test_dataset.request_features:
+        if '_' in key:
+            key1, key2 = key.split('_')
+            if key1 in data and key2 in data[key1]:
+                test_features.append(data[key1][key2])
+        else:
+            if key in data:
+                test_features.append(data[key])
+
+    # Concatenate the selected data into one array
+    test_features = np.array(test_features).transpose([3, 0, 1, 2])
+    print("original std = ", np.std(test_features, axis=(0, 2, 3)))
+    if trainer.test_dataset.prescaler_features is not None and trainer.test_dataset.prescaler_features is not False:
+        for channel in range(trainer.test_dataset.features.shape[1]):
+            if trainer.test_dataset.prescaler_features[channel] is not None:
+                test_features[:,channel,...] =  trainer.test_dataset.prescaler_features[channel](test_features[:,channel,...])
+    if trainer.test_dataset.scaler_features:
+        for channel in range(trainer.test_dataset.features.shape[1]):
+            try:
+                test_features[:,channel,...] -= trainer.test_dataset.features_mean[channel]
+            except Exception as e:
+                print(f"{test_features.shape = }, {trainer.test_dataset.features_mean = }")
+                raise e
+            test_features[:,channel,...] /= trainer.test_dataset.features_std[channel]
+    print("after normalization std = ", np.std(test_features, axis=(0, 2, 3)))
+    test_features = torch.tensor(test_features, dtype=trainer.test_dataset.feature_dtype)
+    return test_features
+
+def unnormalize_output(data, test_features, trainer):
+    """
+    Unnormalize the output predictions based on the trainer's dataset settings.
+
+    Parameters:
+    data (dict): Dictionary containing the simulation data.
+    test_features (torch.Tensor): Normalized test features used for model prediction.
+    trainer (Trainer): Trainer object containing the model and normalization settings.
+
+    Returns:
+    None: The function updates the `data` dictionary with the unnormalized predictions.
+    """
+    prediction = trainer.model.predict(test_features).cpu()
+    pred_shape = [1 for _ in prediction.shape]
+    pred_shape[1] = -1
+    pred_shape = tuple(pred_shape)
+    if trainer.test_loader.target_channels is None:
+        list_of_target_indices = range(len(trainer.test_dataset.prescaler_targets))
+    else:
+        list_of_target_indices = trainer.test_loader.target_channels
+
+    if trainer.test_dataset.scaler_targets:
+        prediction_scaled = (prediction*trainer.test_dataset.targets_std[list_of_target_indices].reshape(pred_shape)+
+                            trainer.test_dataset.targets_mean[list_of_target_indices].reshape(pred_shape))
+    if trainer.test_dataset.prescaler_targets is not None and trainer.test_dataset.prescaler_targets is not False:
+        for channel, _ in enumerate(trainer.test_dataset.request_targets):
+            if trainer.test_loader.target_channels is None:
+                list_of_target_indices = range(len(trainer.test_dataset.prescaler_targets))
+            else:
+                list_of_target_indices = trainer.test_loader.target_channels
+
+            func = [trainer.test_dataset.prescaler_targets[i] for i in list_of_target_indices][channel]
+            if func == None:
+                invfunc = lambda a: a
+            elif func.__name__ == 'log':
+                invfunc = torch.exp
+            elif func.__name__ == 'arcsinh':
+                invfunc = torch.sinh
+            prediction_scaled[:,channel] = invfunc(prediction_scaled[:,channel])
+
+    for i, key in enumerate(trainer.test_dataset.request_targets):
+        if '_' in key:
+            key1, key2 = key.split('_')
+            if key1 in data and key2 in data[key1]:
+                data[key1][key2] = prediction_scaled[:, i, ...].numpy().transpose([1, 2, 0])
+        else:
+            if key in data:
+                data[key] = prediction_scaled[:, i, ...].numpy().transpose([1, 2, 0])
+                
+
 
 # The scripts below are adapted from G. Arrò
 
