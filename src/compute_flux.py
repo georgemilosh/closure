@@ -17,7 +17,7 @@ if len(sys.argv) > 2:
     experiment = sys.argv[2]
     files_path = sys.argv[1] #"/volume1/scratch/share_dir/ecsim/peppe/" #"/lustre1/project/stg_00032/share_dir/brecht/" # "/users/cpa/francesc/share_dir/SW/data_small/" #"/users/cpa/francesc/share_dir/jincai/dat_FF2D07e/" #="/users/cpa/francesc/share_dir/nn/data/raw_data/"
 else:
-    print("Please provide the experiment name and files_path as command line arguments separated by a space.")
+    print("Usage: python compute_flux.py <path> <experiment>")
     sys.exit(1)
 
 experiments = [f.name for f in os.scandir(files_path) if f.is_dir()]
@@ -29,6 +29,7 @@ data, X, Y, qom, times = rp.get_exp_times([experiment], files_path, fields_to_re
                                           choose_times=1, indexing='ij',
                                            filters = None) 
 print(f"{data[experiment]['Bx'].shape = }")
+print(f"{data[experiment].keys() = }")
 filtered = {}
 if X.shape[0] == 2048:
     xs = [2048, 1376, 928, 608, 416, 288, 192, 128, 96, 64, 32, 20, 16, 12, 10, 8, 6, 4, 3, 2, 1]
@@ -60,9 +61,11 @@ for quantity in ['PIuu', 'PIbb', 'Ef_favre', 'PS', '-Ptheta', 'JdotE']:
         filtered[quantity][species] = np.array(filtered[quantity][species])
 for quantity in ['E2_bar', 'B2_bar']:
     filtered[quantity] = np.array(filtered[quantity])
-
-filtered['Ethi_i'] = 3*np.mean(data['P']['i'], axis=(0,1))/2
-filtered['Ethi_e'] = 3*np.mean(data['P']['e'], axis=(0,1))/2
+data[experiment]['P'] = {}
+for species in ['e', 'i']:
+    data[experiment]['P'][species]=(data[experiment]['Pxx'][species]+data[experiment]['Pyy'][species]+data[experiment]['Pzz'][species])/3
+filtered['Ethi_i'] = 3*np.mean(data[experiment]['P']['i'], axis=(0,1))/2
+filtered['Ethi_e'] = 3*np.mean(data[experiment]['P']['e'], axis=(0,1))/2
 
 with open(f'{files_path}/{experiment}/filtered_quantities.pkl', 'wb') as f:
     pickle.dump(filtered, f)

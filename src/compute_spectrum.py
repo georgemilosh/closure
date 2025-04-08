@@ -67,7 +67,7 @@ if len(sys.argv) > 2:
     experiment = sys.argv[2]
     files_path = sys.argv[1] #"/volume1/scratch/share_dir/ecsim/peppe/" #"/lustre1/project/stg_00032/share_dir/brecht/" # "/users/cpa/francesc/share_dir/SW/data_small/" #"/users/cpa/francesc/share_dir/jincai/dat_FF2D07e/" #="/users/cpa/francesc/share_dir/nn/data/raw_data/"
 else:
-    print("Please provide the experiment name and files_path as command line arguments separated by a space.")
+    print("Usage: python compute_spectra.py  <path_to_files> <experiment_name>")
     sys.exit(1)
 
 experiments = [f.name for f in os.scandir(files_path) if f.is_dir()]
