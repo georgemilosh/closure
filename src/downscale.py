@@ -43,11 +43,17 @@ parser = argparse.ArgumentParser(description='Process HDF5 files and apply filte
 parser.add_argument('--path', type=str, default='/volume1/scratch/share_dir/peppe/', help='The base directory path for reading and writing files.')
 parser.add_argument('--read_folder', default='data', type=str, required=True, help='The folder name where input HDF5 files are located.')
 parser.add_argument('--write_folder', default='data_filter', type=str, required=True, help='The folder name where output pickle files will be saved.')
+parser.add_argument('--roll_x', default='0', type=str, required=True, help='How much we would like to shift the x axis.')
+parser.add_argument('--roll_y', default='0', type=str, required=True, help='How much we would like to shift the y axis.')
+parser.add_argument('--timeshot', default='None', type=str, required=True, help='The time shot we would like to process, if None all timeshots will be processed.')
 args = parser.parse_args()
 
 path = args.path
 read_folder = args.read_folder
 write_folder = args.write_folder
+roll_x = int(args.roll_x)
+roll_y = int(args.roll_y)
+timeshot = args.timeshot
 
 
 if not os.path.exists(f'{path}{read_folder}'): # Check if read_folder exists
@@ -64,6 +70,9 @@ all_filenames = glob.glob(f'{path}{read_folder}/*.h5')
 filenames_list = [os.path.basename(f) for f in all_filenames]
 
 for filename in filenames_list:
+    if timeshot != 'None':
+        if timeshot not in filename:
+            continue
     read_filename = f'{path}{read_folder}/{filename}'
     write_filename = f'{path}{write_folder}/{filename}.pkl'
     print(f"Processing {read_filename}")
@@ -95,6 +104,7 @@ for filename in filenames_list:
                 if verbose:
                     print(data[fieldname].shape)
                 data[fieldname] = np.pad(data[fieldname], pad_width=((0,0), (0, 1), (0, 1)), mode='wrap')[0:1,...]
+                data[fieldname] = np.roll(data[fieldname], (roll_x, roll_y), axis=(0,1))
             with open(write_filename, 'wb') as out_file:
                 pickle.dump(data, out_file)
         else:
