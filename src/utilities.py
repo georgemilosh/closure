@@ -574,7 +574,7 @@ def plot_pred_targets(trainer, target_name: str, prediction=None, ground_truth=N
     plt.tight_layout()
     plt.show()
 
-def normalize_input(data, trainer):
+def normalize_input(data, trainer, prescaler_features=None, scaler_features=None):
     """
     Normalize the input data based on the trainer's dataset settings.
 
@@ -594,15 +594,18 @@ def normalize_input(data, trainer):
         else:
             if key in data:
                 test_features.append(data[key])
-
+    if scaler_features is None:
+        scaler_features = trainer.test_dataset.scaler_features
+    if prescaler_features is None:
+        prescaler_features = trainer.test_dataset.prescaler_features
     # Concatenate the selected data into one array
     test_features = np.array(test_features).transpose([3, 0, 1, 2])
     print("original std = ", np.std(test_features, axis=(0, 2, 3)))
-    if trainer.test_dataset.prescaler_features is not None and trainer.test_dataset.prescaler_features is not False:
+    if prescaler_features is not None and prescaler_features is not False and trainer.test_dataset.prescaler_features is not None:
         for channel in range(trainer.test_dataset.features.shape[1]):
             if trainer.test_dataset.prescaler_features[channel] is not None:
                 test_features[:,channel,...] =  trainer.test_dataset.prescaler_features[channel](test_features[:,channel,...])
-    if trainer.test_dataset.scaler_features:
+    if scaler_features:
         for channel in range(trainer.test_dataset.features.shape[1]):
             try:
                 test_features[:,channel,...] -= trainer.test_dataset.features_mean[channel]
@@ -614,7 +617,7 @@ def normalize_input(data, trainer):
     test_features = torch.tensor(test_features, dtype=trainer.test_dataset.feature_dtype)
     return test_features
 
-def unnormalize_output(data, test_features, trainer):
+def unnormalize_output(data, test_features, trainer, scaler_targets=None, prescaler_targets=None):
     """
     Unnormalize the output predictions based on the trainer's dataset settings.
 
@@ -630,15 +633,22 @@ def unnormalize_output(data, test_features, trainer):
     pred_shape = [1 for _ in prediction.shape]
     pred_shape[1] = -1
     pred_shape = tuple(pred_shape)
+    if scaler_targets is None:
+        scaler_targets = trainer.test_dataset.scaler_targets
+    if prescaler_targets is None:
+        prescaler_targets = trainer.test_dataset.prescaler_targets
+
     if trainer.test_loader.target_channels is None:
         list_of_target_indices = range(len(trainer.test_dataset.prescaler_targets))
     else:
         list_of_target_indices = trainer.test_loader.target_channels
 
-    if trainer.test_dataset.scaler_targets:
+    if scaler_targets:
         prediction_scaled = (prediction*trainer.test_dataset.targets_std[list_of_target_indices].reshape(pred_shape)+
                             trainer.test_dataset.targets_mean[list_of_target_indices].reshape(pred_shape))
-    if trainer.test_dataset.prescaler_targets is not None and trainer.test_dataset.prescaler_targets is not False:
+    else:
+        prediction_scaled = prediction
+    if prescaler_targets is not None and prescaler_targets is not False:
         for channel, _ in enumerate(trainer.test_dataset.request_targets):
             if trainer.test_loader.target_channels is None:
                 list_of_target_indices = range(len(trainer.test_dataset.prescaler_targets))
@@ -1023,7 +1033,33 @@ def get_agyrotropy(data):
 												data['Pyz'][species]*by*bz)
 			data['agyrotropy'][species]=1-4*I2/((I1-P_par)*(I1+3*P_par))
 
+def highdiff(data, dx, dy, axis=0):
+    """
+    Compute the 4th-order central finite difference derivative for a 2D array 
+    along either the x or y axis.
 
+    Parameters:
+        data (ndarray): Input 2D or higher-dimensional array.
+        dx (float): Grid spacing in the x-direction.
+        dy (float): Grid spacing in the y-direction.
+        axis (str): Axis along which to compute the derivative (0 or 1).
+
+    Returns:
+        ndarray: The derivative along the specified axis.
+    """
+    # 4th-order finite difference coefficients
+    coeff = np.array([1, -8, 0, 8, -1]) / 12.0
+    
+    if axis == 0:
+        # Compute derivative along the x-axis
+        dx_kernel = coeff.reshape((-1,) + (1,) * (data.ndim - 1))  # generalizing reshape (-1,1) for higher dimensions
+        return nd.convolve(data, dx_kernel, mode='wrap', output=float) / dx
+    elif axis == 1:
+        # Compute derivative along the y-axis
+        dy_kernel = coeff.reshape((-1,) + (1,) * (data.ndim - 1))  # generalizing reshape (1,-1) for higher dimensions
+        return nd.convolve(data, dy_kernel, mode='wrap', output=float) / dy
+    else:
+        raise ValueError("Invalid axis. Use 0 or 1.")
 
 def get_Ohm(data,qom, x,y):
     """
@@ -1040,24 +1076,25 @@ def get_Ohm(data,qom, x,y):
     J = np.array([data['Jtotx'], data['Jtoty'], data['Jtotz']]).transpose(1,2,3,0)
     data['EHall_x'], data['EHall_y'], data['EHall_z'] = - (np.cross(J,B)/(data['rho']['e'])[...,np.newaxis]).transpose(3,0,1,2)
     norm = 0
+    data['uCMx'] = 0
+    data['uCMy'] = 0
+    data['uCMz'] = 0
     for i, species in enumerate(data['rho'].keys()):
-        if 'uCMx' in data.keys():
-            data['uCMx'] += (data['rho'][species]/qom[i])*data['Vx'][species]
-            data['uCMy'] += (data['rho'][species]/qom[i])*data['Vy'][species]
-            data['uCMz'] += (data['rho'][species]/qom[i])*data['Vz'][species]
-        else:
-            data['uCMx'] = (data['rho'][species]/qom[i])*data['Vx'][species]
-            data['uCMy'] = (data['rho'][species]/qom[i])*data['Vy'][species]
-            data['uCMz'] = (data['rho'][species]/qom[i])*data['Vz'][species]
+        data['uCMx'] += (data['rho'][species]/qom[i])*data['Vx'][species]
+        data['uCMy'] += (data['rho'][species]/qom[i])*data['Vy'][species]
+        data['uCMz'] += (data['rho'][species]/qom[i])*data['Vz'][species]
         norm += data['rho'][species]/qom[i]
     data['uCMx'] /= norm
+    data['uCMy'] /= norm
+    data['uCMz'] /= norm
     uCM = np.array([data['uCMx'], data['uCMy'], data['uCMz']]).transpose(1,2,3,0)
     data['EMHD_x'], data['EMHD_y'], data['EMHD_z'] = - np.cross(uCM,B).transpose(3,0,1,2)
-
-    data['EP_x'] = (np.gradient(data['Pxx']['e'],x,axis=0,edge_order=2)+np.gradient(data['Pxy']['e'],y,axis=1,edge_order=2))/data['rho']['e']
-    data['EP_y'] = (np.gradient(data['Pxy']['e'],x,axis=0,edge_order=2)+np.gradient(data['Pyy']['e'],y,axis=1,edge_order=2))/data['rho']['e']
-    data['EP_z'] = (np.gradient(data['Pxz']['e'],x,axis=0,edge_order=2)+np.gradient(data['Pyz']['e'],y,axis=1,edge_order=2))/data['rho']['e']
-
+    dx = x[1]-x[0]
+    dy = y[1]-y[0]
+    data['EP_x'] = (highdiff(data['Pxx']['e'], dx, dy, axis=0) + highdiff(data['Pxy']['e'], dx, dy, axis=1))/data['rho']['e']
+    data['EP_y'] = (highdiff(data['Pxy']['e'], dx, dy, axis=0) + highdiff(data['Pyy']['e'], dx, dy, axis=1))/data['rho']['e']
+    data['EP_z'] = (highdiff(data['Pxz']['e'], dx, dy, axis=0) + highdiff(data['Pyz']['e'], dx, dy, axis=1))/data['rho']['e']
+    
 
 
 def get_Az(x,y,data):
