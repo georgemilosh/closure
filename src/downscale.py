@@ -41,10 +41,10 @@ parser = argparse.ArgumentParser(description='Process HDF5 files and apply filte
 parser.add_argument('--path', type=str, default='/volume1/scratch/share_dir/peppe/', help='The base directory path for reading and writing files.')
 parser.add_argument('--read_folder', default='data', type=str, required=True, help='The folder name where input HDF5 files are located.')
 parser.add_argument('--write_folder', default='data_filter', type=str, required=True, help='The folder name where output pickle files will be saved.')
-parser.add_argument('--zoom', default='0.25', type=str, required=True, help='the amount of zoom.')
-parser.add_argument('--roll_x', default='0', type=str, required=True, help='How much we would like to shift the x axis.')
-parser.add_argument('--roll_y', default='0', type=str, required=True, help='How much we would like to shift the y axis.')
-parser.add_argument('--timeshot', default='None', type=str, required=True, help='The time shot we would like to process, if None all timeshots will be processed.')
+parser.add_argument('--zoom', default='0.25', type=str, required=False, help='the amount of zoom.')
+parser.add_argument('--roll_x', default='0', type=str, required=False, help='How much we would like to shift the x axis.')
+parser.add_argument('--roll_y', default='0', type=str, required=False, help='How much we would like to shift the y axis.')
+parser.add_argument('--timeshot', default='None', type=str, required=False, help='The time shot we would like to process, if None all timeshots will be processed.')
 args = parser.parse_args()
 
 path = args.path

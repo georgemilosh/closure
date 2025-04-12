@@ -1056,7 +1056,7 @@ def highdiff(data, dx, dy, axis=0):
         return nd.convolve(data, dx_kernel, mode='wrap', output=float) / dx
     elif axis == 1:
         # Compute derivative along the y-axis
-        dy_kernel = coeff.reshape((-1,) + (1,) * (data.ndim - 1))  # generalizing reshape (1,-1) for higher dimensions
+        dy_kernel = coeff.reshape((1, -1) + (1,) * (data.ndim - 2))   # generalizing reshape (1,-1) for higher dimensions
         return nd.convolve(data, dy_kernel, mode='wrap', output=float) / dy
     else:
         raise ValueError("Invalid axis. Use 0 or 1.")
@@ -1091,6 +1091,9 @@ def get_Ohm(data,qom, x,y):
     data['EMHD_x'], data['EMHD_y'], data['EMHD_z'] = - np.cross(uCM,B).transpose(3,0,1,2)
     dx = x[1]-x[0]
     dy = y[1]-y[0]
+    #data['EP_x'] = (np.gradient(data['Pxx']['e'],x,axis=0,edge_order=2)+np.gradient(data['Pxy']['e'],y,axis=1,edge_order=2))/data['rho']['e']
+    #data['EP_y'] = (np.gradient(data['Pxy']['e'],x,axis=0,edge_order=2)+np.gradient(data['Pyy']['e'],y,axis=1,edge_order=2))/data['rho']['e']
+    #data['EP_z'] = (np.gradient(data['Pxz']['e'],x,axis=0,edge_order=2)+np.gradient(data['Pyz']['e'],y,axis=1,edge_order=2))/data['rho']['e']
     data['EP_x'] = (highdiff(data['Pxx']['e'], dx, dy, axis=0) + highdiff(data['Pxy']['e'], dx, dy, axis=1))/data['rho']['e']
     data['EP_y'] = (highdiff(data['Pxy']['e'], dx, dy, axis=0) + highdiff(data['Pyy']['e'], dx, dy, axis=1))/data['rho']['e']
     data['EP_z'] = (highdiff(data['Pxz']['e'], dx, dy, axis=0) + highdiff(data['Pyz']['e'], dx, dy, axis=1))/data['rho']['e']
