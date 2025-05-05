@@ -1033,7 +1033,7 @@ def get_agyrotropy(data):
 												data['Pyz'][species]*by*bz)
 			data['agyrotropy'][species]=1-4*I2/((I1-P_par)*(I1+3*P_par))
 
-def highdiff(data, dx, dy, axis=0):
+def highdiff(data, dx, dy, coeff = None, axis=0, **kwargs):
     """
     Compute the 4th-order central finite difference derivative for a 2D array 
     along either the x or y axis.
@@ -1042,30 +1042,34 @@ def highdiff(data, dx, dy, axis=0):
         data (ndarray): Input 2D or higher-dimensional array.
         dx (float): Grid spacing in the x-direction.
         dy (float): Grid spacing in the y-direction.
+        coeff (ndarray): Coefficients for the finite difference scheme.
+            Default is 4th-order central difference coefficients.
         axis (str): Axis along which to compute the derivative (0 or 1).
 
     Returns:
         ndarray: The derivative along the specified axis.
     """
     # 4th-order finite difference coefficients
-    coeff = np.array([1, -8, 0, 8, -1]) / 12.0
+    if coeff is None:
+        coeff = np.array([-1, 8, 0, -8, 1]) / 12.0
     
     if axis == 0:
         # Compute derivative along the x-axis
         dx_kernel = coeff.reshape((-1,) + (1,) * (data.ndim - 1))  # generalizing reshape (-1,1) for higher dimensions
-        return nd.convolve(data, dx_kernel, mode='wrap', output=float) / dx
+        return nd.convolve(data, dx_kernel, output=float, **kwargs) / dx
     elif axis == 1:
         # Compute derivative along the y-axis
         dy_kernel = coeff.reshape((1, -1) + (1,) * (data.ndim - 2))   # generalizing reshape (1,-1) for higher dimensions
-        return nd.convolve(data, dy_kernel, mode='wrap', output=float) / dy
+        return nd.convolve(data, dy_kernel, output=float, **kwargs) / dy
     else:
         raise ValueError("Invalid axis. Use 0 or 1.")
 
-def get_Ohm(data,qom, x,y):
+def get_Ohm(data,qom, x,y, coeff=None):
     """
-    ExB/B^2
-
-    Notice that if electrons are massless qom = np.inf
+    Compute the electric field and other derived quantities based on the input data.
+    This function calculates the electric field, ExB/B^2, EHall, EMHD, and other quantities
+    using the provided data dictionary. It also computes the pressure gradient and other
+    relevant quantities based on the input data.
     """
     B = np.array([data['Bx'], data['By'], data['Bz']]).transpose(1,2,3,0)
     E = np.array([data['Ex'], data['Ey'], data['Ez']]).transpose(1,2,3,0)
@@ -1074,7 +1078,7 @@ def get_Ohm(data,qom, x,y):
     data['Jtoty'] = np.sum([data['Jy'][species] for species in data['Jy'].keys()], axis=0)
     data['Jtotz'] = np.sum([data['Jz'][species] for species in data['Jz'].keys()], axis=0)
     J = np.array([data['Jtotx'], data['Jtoty'], data['Jtotz']]).transpose(1,2,3,0)
-    data['EHall_x'], data['EHall_y'], data['EHall_z'] = - (np.cross(J,B)/(data['rho']['e'])[...,np.newaxis]).transpose(3,0,1,2)
+    data['EHall_x'], data['EHall_y'], data['EHall_z'] = (np.cross(J,B)/(-data['rho']['e'])[...,np.newaxis]).transpose(3,0,1,2)
     norm = 0
     data['uCMx'] = 0
     data['uCMy'] = 0
@@ -1094,9 +1098,9 @@ def get_Ohm(data,qom, x,y):
     #data['EP_x'] = (np.gradient(data['Pxx']['e'],x,axis=0,edge_order=2)+np.gradient(data['Pxy']['e'],y,axis=1,edge_order=2))/data['rho']['e']
     #data['EP_y'] = (np.gradient(data['Pxy']['e'],x,axis=0,edge_order=2)+np.gradient(data['Pyy']['e'],y,axis=1,edge_order=2))/data['rho']['e']
     #data['EP_z'] = (np.gradient(data['Pxz']['e'],x,axis=0,edge_order=2)+np.gradient(data['Pyz']['e'],y,axis=1,edge_order=2))/data['rho']['e']
-    data['EP_x'] = (highdiff(data['Pxx']['e'], dx, dy, axis=0) + highdiff(data['Pxy']['e'], dx, dy, axis=1))/data['rho']['e']
-    data['EP_y'] = (highdiff(data['Pxy']['e'], dx, dy, axis=0) + highdiff(data['Pyy']['e'], dx, dy, axis=1))/data['rho']['e']
-    data['EP_z'] = (highdiff(data['Pxz']['e'], dx, dy, axis=0) + highdiff(data['Pyz']['e'], dx, dy, axis=1))/data['rho']['e']
+    data['EP_x'] = -(highdiff(data['Pxx']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap') + highdiff(data['Pxy']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
+    data['EP_y'] = -(highdiff(data['Pxy']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap') + highdiff(data['Pyy']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
+    data['EP_z'] = -(highdiff(data['Pxz']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap') + highdiff(data['Pyz']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
     
 
 

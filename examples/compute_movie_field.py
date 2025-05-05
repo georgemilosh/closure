@@ -9,7 +9,7 @@ import matplotlib.animation as animation
 # Fields to read.
 
 
-if len(sys.argv) != 3:
+if len(sys.argv) != 4:
     print("Usage: python compute_movie_field.py <plot_field> <run_ID>")
     sys.exit(1)
 
@@ -31,11 +31,11 @@ print(f'{fields_list = }, {species_list = }')
 fields_to_read={"B":True,"B_ext":False,"divB":True,"E":True,"E_ext":False,"rho":True,"J":True,
                 "P":True,"PI":False,"Heat_flux":False,"N":False,"Qrem":False}
 # Path of the folder containing the .h5 files to read.
-files_path="/volume1/scratch/share_dir/ecsim/peppe/" #"/lustre1/project/stg_00032/share_dir/brecht/" # "/users/cpa/francesc/share_dir/SW/data_small/" #"/users/cpa/francesc/share_dir/jincai/dat_FF2D07e/" #="/users/cpa/francesc/share_dir/nn/data/raw_data/"
+files_path= sys.argv[2] #"/volume1/scratch/share_dir/ecsim/peppe/" #"/lustre1/project/stg_00032/share_dir/brecht/" # "/users/cpa/francesc/share_dir/SW/data_small/" #"/users/cpa/francesc/share_dir/jincai/dat_FF2D07e/" #="/users/cpa/francesc/share_dir/nn/data/raw_data/"
 experiments = [f.name for f in os.scandir(files_path) if f.is_dir()]
 print(f"{experiments = }")
 
-run_ID = sys.argv[2] #'data_filter'
+run_ID = sys.argv[3] #'data_filter'
 data, X, Y, qom, times = rp.get_exp_times([run_ID], files_path, fields_to_read, 
                                           choose_species=['e','i'], verbose=True, 
                                           choose_times=1)
