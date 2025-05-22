@@ -440,7 +440,7 @@ class Trainer:
             self.config = new_config
             self.comprehend_config()
             if self.run != '': # if we are running a trial, we need to save config to subdirectory
-                if self.rank == 0:  #self.local_rank == 0:
+                if self.rank is None or self.rank == 0:  #self.local_rank == 0:
                     config_dir = os.path.join(self.work_dir, self.run)
                     config_file = os.path.join(config_dir, 'config.json')
                     if os.path.exists(f"{self.work_dir}/{self.run}/config.json"):
@@ -468,7 +468,7 @@ class Trainer:
         logger.info(f'Prior to fit: RAM memory % used: {psutil.virtual_memory()[2]}, RAM Used (GB):, {psutil.virtual_memory()[3]/1000000000}, process RAM usage (GB): {psutil.Process(os.getpid()).memory_info().rss / 1024 ** 3}')
         best_loss = self.model.fit(self.train_loader, self.val_loader, trial=trial)   
         logger.info(f'After fit: RAM memory % used: {psutil.virtual_memory()[2]}, RAM Used (GB):, {psutil.virtual_memory()[3]/1000000000}, process RAM usage (GB): {psutil.Process(os.getpid()).memory_info().rss / 1024 ** 3}')
-        if self.local_rank == 0:
+        if self.local_rank is None or self.local_rank == 0:
             if self.work_dir is not None:
                 logger.info(f"Saving the model weights and loss history to {self.work_dir}/{self.run}/")
                 os.makedirs(os.path.dirname(f"{self.work_dir}/{self.run}/"), exist_ok=True)
