@@ -1,12 +1,24 @@
 
 """
-PyNets: A Python package for neural network training and evaluation.
-Author: George Miloshevich
-date: 2024
+trainers.py
+Repo:       closure
+Projects:   STRIDE, HELIOSKILL
+Author:     George Miloshevich
+Date:       2025
+License:    MIT License
+Description:
+    This module defines a Trainer class for orchestrating machine learning protocols.
+
+Usage in Python:
+    from closure.src.trainers import Trainer
+    trainer = Trainer(work_dir='path/to/work_dir', dataset_kwargs=dataset_kwargs, model_kwargs=model_kwargs)
+    best_loss = trainer.fit()
+
+Usage in Command Line:
+    python -m src.trainers --config work_dir=path/to/work_dir --config run=run_name --config model_kwargs.model_name=ResNet
 
 
 """
-
 import logging
 import torch
 import pickle
@@ -20,8 +32,6 @@ import torch.distributed as dist
 import json
 from socket import gethostname
 import csv
-import ast
-
 
 from . import datasets
 from . import models
@@ -32,102 +42,47 @@ logging.basicConfig(level=logging.INFO)
 logging.captureWarnings(True)
 logger = logging.getLogger(__name__)
 
-def set_nested_config(config, key, value):
-    """
-    Set a nested configuration value in a dictionary.
-    
-    This function takes a configuration dictionary, a dot-separated key string, 
-    and a value. It sets the value in the dictionary at the location specified 
-    by the key string, creating nested dictionaries as needed. The value will 
-    be converted to an int, float, or list of ints/floats if possible.
-    
-    Args:
-        config (dict): The configuration dictionary to update.
-        key (str): A dot-separated string specifying the nested key.
-        value (str): The value to set. It will be converted to an int, float, 
-                     or list if possible.
-    
-    Example:
-        config = {}
-        set_nested_config(config, 'a.b.c', '123')
-        # config is now {'a': {'b': {'c': 123}}}
-        
-        set_nested_config(config, 'a.b.d', '45.67')
-        # config is now {'a': {'b': {'c': 123, 'd': 45.67}}}
-        
-        set_nested_config(config, 'a.e', '[1, 2, 3]')
-        # config is now {'a': {'b': {'c': 123, 'd': 45.67}, 'e': [1, 2, 3]}}
-        
-        set_nested_config(config, 'a.f', '[1.1, 2.2, 3.3]')
-        # config is now {'a': {'b': {'c': 123, 'd': 45.67}, 'e': [1, 2, 3], 'f': [1.1, 2.2, 3.3]}}
-    """
-
-    keys = key.split('.')
-    d = config
-    for k in keys[:-1]:
-        d = d.setdefault(k, {})
-    
-    # Convert value to appropriate type
-    if value.isdigit():
-        value = int(value)
-    else:
-        try:
-            value = float(value)
-        except ValueError:
-            try:
-                # Attempt to parse list
-                value = ast.literal_eval(value)
-                if isinstance(value, list):
-                    value = [float(v) if '.' in str(v) else int(v) for v in value]
-            except (ValueError, SyntaxError):
-                pass
-    
-    d[keys[-1]] = value
-
-class CustomFilter(logging.Filter):
-    """
-    A custom filter class for logging that will be used to prepend the rank, local_rank and nodename to the log messages.
-    """
-    def __init__(self, job_id, rank, local_rank, nodename):
-        super().__init__()
-        self.job_id = job_id
-        self.rank = rank
-        self.local_rank = local_rank
-        self.nodename = nodename
-
-    def filter(self, record):
-        record.job_id = self.job_id
-        record.rank = self.rank
-        record.local_rank = self.local_rank
-        record.nodename = self.nodename
-        return True
-    
-
 class Trainer:
     """
-    A class that represents a trainer object for training machine learning models.
+    A trainer class that manages configs/logging/datasets/dataloaders/models. 
 
-    Args:
-        dataset_kwargs (dict, optional): Keyword arguments for creating dataset object.
-        load_data_kwargs (dict, optional): Keyword arguments for data loaders.
-        model_kwargs (dict, optional): Keyword arguments for creating the model.
-        device (str, optional): Device to use for training. Defaults to None.
-        work_dir (str, optional): Directory to save training outputs. Defaults to None.
+    See: constructor of this class for the Args.
 
     Attributes:
-        work_dir (str): Directory to save training outputs.
-        dataset_kwargs (dict): Keyword arguments for creating dataset object.
-        load_data_kwargs (dict): Keyword arguments for data loaders.
-        model_kwargs (dict): Keyword arguments for creating the model.
-        mode_test (bool): whether trainer is intended to not load data.
-        device (str): Device to use for training.
-        config (dict): A copy of the attributes of the Trainer object.
-        train_dataset (DataFrameDataset): Training dataset.
-        val_dataset (DataFrameDataset): Validation dataset.
-        test_dataset (DataFrameDataset): Test dataset.
-        train_loader (DataLoader): Data loader for training dataset.
-        val_loader (DataLoader): Data loader for validation dataset.
-        model (nn.Module): Machine learning model.
+        work_dir (str):                     Directory to save training outputs.
+        dataset_kwargs (dict):              kwargs for creating dataset object.
+        load_data_kwargs (dict):            kwargs for data loaders.
+        model_kwargs (dict):                kwargs for creating the model.
+        mode_test (bool):                   whether trainer is intended to not load data. 
+            If True, it will not load train/val datasets accelerating the dataloading.
+        device (str):                       Device to use for training.
+        config (dict):                      A copy of the attributes of the Trainer object
+            that will be saved to the config file.
+        run (str):                          The run name. If provided trainer will save 
+            the config file to a subdirectory with the run name.
+        log_name (str):                     Name of the log file.
+        log_level (str):                    Logging level.
+        force (bool):                       Whether to force the training to start even if the run exists.
+        timing_name (str):                  Name of the timing CSV file which times how long the training took.
+            If not provided no timing file will be created.
+        mode_test (bool):                   Whether trainer is intended to not load data.
+        device (str):                       Device to use for training.
+        config (dict):                      A copy of the attributes of the Trainer object 
+            that will be saved to the config file.
+        
+        f_handler (FileHandler):            File handler for logging.
+        num_workers (int):                  Number of workers for data loading.
+        world_size (int):                   Number of processes in distributed training.
+        rank (int):                         Rank of the current process in distributed training.
+        gpus_per_node (int):                Number of GPUs per node in distributed training.
+        local_rank (int):                   Local rank of the current process in distributed training.
+
+        train_dataset (DataFrameDataset):   Training dataset.
+        val_dataset (DataFrameDataset):     Validation dataset.
+        test_dataset (DataFrameDataset):    Test dataset.
+        train_loader (DataLoader):          Data loader for training dataset.
+        val_loader (DataLoader):            Data loader for validation dataset.
+        model (nn.Module):                  Model that fits the data.
 
     Methods:
         __init__(self, dataset_kwargs=None, load_data_kwargs=None, model_kwargs=None, device=None, work_dir=None):
@@ -137,9 +92,23 @@ class Trainer:
         load_data(self, load_data_kwargs):
             Creates the data loaders for training/validation and testing.
         load_run(self, run):
-            Load the configuration file of a specific run, comprehend config the associated file associated with the model and load model weights.
+            Loads the configuration file of a specific run, comprehend config the associated 
+            file associated with the model and load model weights.
         fit(self, config=None):
             Fits the model to the training data and returns the best loss.
+    
+    Notes:
+        - The Trainer object manages a parent directory (the "trainer folder"), 
+            specified by its work_dir attribute. You may train a model in that parent directory as well.
+        - Each run (if provided in trainer.fit) is a subfolder inside this parent directory. 
+            The subfolder is typically named after the run (e.g., work_dir/0, work_dir/1, etc.).
+        - Each run subfolder contains its own config.json, model weights, logs, and results. 
+            This allows you to keep results from different experiments (runs) organized and reproducible.
+        - When you want to start a new run, you usually change a few keys in the config 
+            (such as hyperparameters or target variables), and the Trainer will save 
+            the new configuration and outputs in a new subfolder.
+        - The Trainer can load a specific run using the load_run method, 
+            which loads the config and model state from the corresponding subfolder.
 
     """
     def __init__(self, dataset_kwargs=None, load_data_kwargs=None, model_kwargs=None, mode_test=False,
@@ -147,13 +116,35 @@ class Trainer:
                  world_size=None, rank=None, gpus_per_node=None, local_rank=None, num_workers=None):
         """
         Initialize a Trainer object.
-
         Args:
-            dataset_kwargs (dict, optional): Keyword arguments for creating dataset object.
-            load_data_kwargs (dict, optional): Keyword arguments for data loaders.
-            model_kwargs (dict, optional): Keyword arguments for creating the model
-            device (str, optional): Device to use for training. Defaults to None.
-            work_dir (str, optional): Directory to save training outputs. Defaults to None.
+            dataset_kwargs (dict, optional):    kwargs for creating dataset object.
+            load_data_kwargs (dict, optional):  kwargs for data loaders.
+            model_kwargs (dict, optional):      kwargs for creating the model.
+            mode_test (bool, optional):         Whether trainer is intended to not load data. Defaults to False.
+                This will not load train/val datasets accelerating the dataloading. 
+            device (str, optional):             Device to use for training. Defaults to None.
+            work_dir (str, optional):           Directory to save training outputs. 
+                Defaults to None in which case it will not save anything.
+            log_name (str, optional):           Name of the log file. Defaults to "training.log".
+            log_level (str, optional):          Logging level. Defaults to "INFO".
+            force (bool, optional):             Whether to force the training to start 
+                even if the run exists. Defaults to False.
+            timing_name (str, optional):        Name of the timing CSV file. 
+                If not provided no timing file will be created.
+            world_size (int, optional):         Number of processes in distributed training. 
+                Defaults to None.
+            rank (int, optional):               Rank of the current process in distributed training. 
+                Defaults to None.
+            gpus_per_node (int, optional):     Number of GPUs per node in distributed training. 
+                Defaults to None.
+            local_rank (int, optional):         Local rank of the current process in distributed training. 
+                Defaults to None.
+            num_workers (int, optional):        Number of workers for data loading. Defaults to None, 
+                in which case it will use os.cpu_count().
+        Raises:
+            FileExistsError: If the config file already exists and overwriting is not allowed.
+            Exception: If there is an error saving the configuration file.
+            
         """
         if log_name == None:
             log_name = "training.log"
@@ -186,46 +177,25 @@ class Trainer:
                 with open(config_file, 'r') as f:
                     config = json.load(f)
                 logger.warning(f"Config file {config_file} found -> loading configuration")
-                #assert config['work_dir'] == self.work_dir, f"work_dir in the config file is different from the current work_dir: {config['work_dir']} != {self.work_dir}"
-                # === Applying local changes to the configuration file === #
-                # === this is useful if we would like to load traner object with different parameters === #
-                # === and particularly useful when trainging and testing on different architectures === #
-                if self.dataset_kwargs is not None:
-                    config['dataset_kwargs'] = self.dataset_kwargs
-                if self.load_data_kwargs is not None:
-                    config['load_data_kwargs'] = self.load_data_kwargs
-                if self.model_kwargs is not None:
-                    config['model_kwargs'] = self.model_kwargs
-                if self.mode_test is not None:
-                    config['mode_test'] = self.mode_test
-                if self.device is not None:
-                    config['device'] = self.device
-                if self.log_name is not None:
-                    config['log_name'] = self.log_name
-                if self.log_level is not None:
-                    config['log_level'] = self.log_level
-                if self.world_size is not None:
-                    config['world_size'] = self.world_size
-                if self.rank is not None:
-                    config['rank'] = self.rank
-                if self.gpus_per_node is not None:
-                    config['gpus_per_node'] = self.gpus_per_node
-                if self.local_rank is not None:
-                    config['local_rank'] = self.local_rank
-                if self.num_workers is not None:
-                    config['num_workers'] = self.num_workers
-                
-                self.__dict__.update(**config) # update the attributes with the configuration file
+                # Update config with any new values provided
+                for key in [
+                    'dataset_kwargs', 'load_data_kwargs', 'model_kwargs', 'mode_test', 'device',
+                    'log_name', 'log_level', 'world_size', 'rank', 'gpus_per_node', 'local_rank', 'num_workers'
+                    ]:
+                    value = getattr(self, key, None)
+                    if value is not None:
+                        config[key] = value
+                self.__dict__.update(**config) # Update the Trainer object's attributes with the loaded config
             else:
-                config = copy.deepcopy(self.__dict__) # save the attributes to the config file
+                config = copy.deepcopy(self.__dict__)
                 logger.info(f"Creating a new configuration file: {config_file}")
-                os.makedirs(os.path.dirname(self.work_dir), exist_ok=True)
                 try:
                     with open(config_file, 'w') as f:
                         f.write(json.dumps(config, indent=4))
                 except Exception as e:
                     logger.error(f"Error saving configuration file: {e}")
-        self.config = copy.deepcopy(self.__dict__) # save the attributes to the config of the trainer class 
+
+        self.config = copy.deepcopy(self.__dict__) # to save the configuration of the Trainer object
 
         if not torch.cuda.is_available():
             self.device = torch.device('cpu')
@@ -234,97 +204,36 @@ class Trainer:
             self.f_handler = self.set_logger(f'{self.work_dir}/{self.log_name}')
 
         
-        self.dataset_kwargs.pop('samples_file',None)  # guardrails against accidentally passing samples_file to DataFrameDataset     
+        self.dataset_kwargs.pop('samples_file',None)  # guardrails against 
+            # passing samples_file to DataFrameDataset  
         train_sample = self.dataset_kwargs.pop('train_sample')
         val_sample = self.dataset_kwargs.pop('val_sample')
         test_sample = self.dataset_kwargs.pop('test_sample')
 
         if not self.mode_test:
             self.train_dataset = datasets.DataFrameDataset(datalabel="train", 
-                                                           samples_file=train_sample,
-                                                           norm_folder=self.work_dir,
-                                                       **self.dataset_kwargs)
+                        samples_file=train_sample, norm_folder=self.work_dir, **self.dataset_kwargs)
             self.val_dataset = datasets.DataFrameDataset(datalabel="val",
-                                                          samples_file=val_sample,
-                                                           norm_folder=self.work_dir,
-                                                       **self.dataset_kwargs)
+                        samples_file=val_sample, norm_folder=self.work_dir, **self.dataset_kwargs)
                                                        
         self.test_dataset = datasets.DataFrameDataset(datalabel="test",
-                                                          samples_file=test_sample,
-                                                           norm_folder=self.work_dir,
-                                                       **self.dataset_kwargs)
+                        samples_file=test_sample, norm_folder=self.work_dir, **self.dataset_kwargs)
         
         self.comprehend_config()
-
-    def create_empty_csv(file_path):
-        with open(file_path, 'w', newline='') as csvfile:
-            writer = csv.writer(csvfile)
-            writer.writerow(['Host', 'Rank', 'Local Rank', 'Time'])
-
-    def set_logger(self, log_dir=None):
-        if log_dir is not None:
-            # Remove all handlers associated with the root logger object.
-            for handler in logging.root.handlers[:]:
-                logging.root.removeHandler(handler)
-            
-            # Set the log level to CRITICAL for the root logger
-            logging.root.setLevel(self.log_level)
-            
-            f_handler = logging.FileHandler(log_dir)
-            f_handler.setLevel(self.log_level)
-            warnings_logger = logging.getLogger("py.warnings")
-            job_id = ""
-            if "SLURM_JOB_ID" in os.environ:
-                job_id = f'job:{os.environ["SLURM_JOB_ID"]}'
-            f_format = logging.Formatter('%(job_id)s | %(nodename)s | @rank: %(rank)s | @local: %(local_rank)s at %(asctime)s | %(levelname)s | %(name)s  | \t %(message)s')
-            f_handler.setFormatter(f_format)
-
-            # Add the custom filter to the handler
-            custom_filter = CustomFilter(job_id, self.rank, self.local_rank, os.uname().nodename)
-            f_handler.addFilter(custom_filter)
-
-            logger.addHandler(f_handler)
-            warnings_logger.addHandler(f_handler)
-            logger.setLevel(self.log_level)
-            logger.info(f" ")
-            logger.info(f"===Logging to {log_dir} on level {self.log_level}, @ {self.rank=}, {self.local_rank=}, {self.device=} ===") 
-            logger.info(f"host: {os.uname().nodename}")
-            logger.info(f" ")
-            # Define the extra loggers and add the same FileHandler to them
-            datasets_logger = logging.getLogger(__name__) # TODO: Fix the names 
-            self.apply_handler(datasets_logger, f_handler, self.log_level) 
-            models_logger = logging.getLogger(models.__name__)
-            self.apply_handler(models_logger, f_handler, self.log_level)
-            read_pic_logger = logging.getLogger(datasets.__name__)
-            self.apply_handler(read_pic_logger, f_handler, self.log_level)
-        # Add a StreamHandler to also output logs to the console (and thus to the notebook)
-        stream_handler = logging.StreamHandler()
-        stream_handler.setLevel(self.log_level)
-        stream_format = logging.Formatter('%(asctime)s | %(levelname)s | %(name)s | \t %(message)s')
-        stream_handler.setFormatter(stream_format)
-        logger.addHandler(stream_handler)
-        warnings_logger.addHandler(stream_handler)
-        datasets_logger.addHandler(stream_handler)
-        models_logger.addHandler(stream_handler)
-        read_pic_logger.addHandler(stream_handler)
-        return f_handler
-            
-    def apply_handler(self, logger, f_handler, log_level):
-        logger.addHandler(f_handler)
-        logger.setLevel(log_level)
-        return None
 
     def comprehend_config(self):
         """
         Comprehends the configuration settings for the model and its configs. The method deep copies
-        the configuration settings and extracts the necessary parameters for the model. At the end it calls the method
-        trainer::load_data to create/update the data loaders accordingly.
+        the configuration settings and extracts the necessary parameters for the model. 
+        It is also responsible for creating the model object based on the provided
+        model_kwargs. If the model is already instantiated, it will use the provided model object.
+        If the model_kwargs is a dictionary, it will create a new model instance using the PyNet class.
+        At the end it calls the method trainer::load_data to create/update the data loaders accordingly.
 
         Returns:
             None
         """
-        logger.info("Comprehending the configuration settings") # it is called once during creation of the Trainer object and once during the fit method
-        # === Deal with the model === #
+        logger.info("Comprehending the configuration settings") 
         config = copy.deepcopy(self.config)
         #dataset_kwargs = config['dataset_kwargs']
         load_data_kwargs = config['load_data_kwargs']
@@ -342,13 +251,14 @@ class Trainer:
             self.model = model_kwargs
 
         logger.info(f"{self.device = } on {self.local_rank = }")
-
         logger.info(f"Code version git hash: {ut.get_git_revision_hash()}") # TODO: add this to the config file and raise error if it doesn't coincide wiht the current version
         self.load_data(load_data_kwargs)
     
     def load_data(self, load_data_kwargs):
         """
-        Creates the data loaders for training/validation and testing.
+        Creates the data loaders for training/validation and testing. Note that datasets have already been 
+            created in the __init__ method. Depending on world_size, it will create either a distributed or 
+            serial sampler for the data loaders.
 
         Args:
             load_data_kwargs (dict): A dictionary containing the following keyword arguments:
@@ -372,19 +282,27 @@ class Trainer:
                     loader_kwargs = load_data_kwargs[f"{phase}_loader_kwargs"]
                 if 'num_workers' in loader_kwargs:
                     logger.info(f"Config file contains num_workers in {phase}_loader_kwargs so ignoring the number of actual cpus")
-                    loader = datasets.ChannelDataLoader(dataset, sampler_type=sampler_type, world_size=self.world_size, 
-                                                        rank=self.rank, gpus_per_node=self.gpus_per_node, local_rank=self.local_rank,
-                                                        **loader_kwargs)
+                    loader = datasets.ChannelDataLoader(dataset, sampler_type=sampler_type, 
+                            world_size=self.world_size, rank=self.rank, gpus_per_node=self.gpus_per_node, 
+                            local_rank=self.local_rank, **loader_kwargs)
                 else:
-                    loader = datasets.ChannelDataLoader(dataset, sampler_type=sampler_type, world_size=self.world_size, 
-                                                        rank=self.rank, gpus_per_node=self.gpus_per_node, local_rank=self.local_rank,
-                                                        num_workers=self.num_workers, **loader_kwargs)
+                    loader = datasets.ChannelDataLoader(dataset, sampler_type=sampler_type, 
+                            world_size=self.world_size, rank=self.rank, gpus_per_node=self.gpus_per_node, 
+                            local_rank=self.local_rank, num_workers=self.num_workers, **loader_kwargs)
                 setattr(self, f"{phase}_loader", loader)
 
     def load_run(self, run):
         """
         Load the configuration file of a specific run, comprehend config the associated file associated 
-        with the model and load model weights.
+        with the model and load model weights. 
+
+        Args:
+            run (str): The name of the run to load. This should be a subdirectory in the work_dir.
+        Raises:
+            FileNotFoundError:  If the config file for the specified run does not exist.
+            ValueError:         If the dataset_kwargs in the old and new config file are not consistent.
+                This is done to ensure that all runs within trainer parent folder share the same dataset_kwargs.
+                The only exception is if the transform is different, in which case it will not raise an error.
         """
         config_file = os.path.join(self.work_dir, run, 'config.json')
         if os.path.exists(config_file):
@@ -410,12 +328,14 @@ class Trainer:
         
     def fit(self, config=None):
         """
-        Fits the model to the training data and returns the best loss.
-
+        Fits the model to the training data and returns the best loss, while saving the products 
+        of the training process to disk. Note that if you want to use subfolder `runs` you need to provide
+        the `run` key in the config dictionary, and call `trainer.fit(config=config)`
         Args:
             config (dict): A dictionary containing the configuration parameters for the training process. 
-            If provided, the original configuration will be updated with the new configuration.
-
+            If provided, the original config will be updated with the new config. If dataset_kwargs are
+            not consistent between the original and new config warning will be raised 
+            (see comprehend_config method).
         Returns:
             float: The best loss achieved during the training process.
 
@@ -424,11 +344,11 @@ class Trainer:
             Exception: If there is an error saving the configuration file.
 
         Notes:
-            - If `config` is provided, the original configuration will be updated with the new configuration before training.
+            - If `config` is provided, the original configuration will be updated with the new 
+                configuration before training.
             - If `self.run` is not empty, the new configuration will be saved to a subdirectory.
-            - The model weights and loss history will be saved to `self.work_dir` if it is not None.
         """
-        trial = None
+        trial = None # handling optuna trials
         if config is not None:
             new_config = copy.deepcopy(config) # to avoid changing the original dictionary
             trial = new_config.pop('trial',None) # handling optuna trials # TODO: check that this is working in distributed mode
@@ -440,7 +360,7 @@ class Trainer:
             self.config = new_config
             self.comprehend_config()
             if self.run != '': # if we are running a trial, we need to save config to subdirectory
-                if self.rank is None or self.rank == 0:  #self.local_rank == 0:
+                if self.rank is None or self.rank == 0: # only rank 0 saves the config file 
                     config_dir = os.path.join(self.work_dir, self.run)
                     config_file = os.path.join(config_dir, 'config.json')
                     if os.path.exists(f"{self.work_dir}/{self.run}/config.json"):
@@ -449,7 +369,6 @@ class Trainer:
                             shutil.rmtree(f"{self.work_dir}/{self.run}/")
                         else:
                             raise FileExistsError(f"Config file {self.work_dir}/{self.run}/config.json already exists. Overwriting not allowed!")
-                    # Ensure the directory exists before writing the config file
                     os.makedirs(config_dir, exist_ok=True)
                     logger.info(f"Saving the new configuration to {config_file}")
                     try:
@@ -464,7 +383,6 @@ class Trainer:
                     os.makedirs(os.path.dirname(f"{self.work_dir}/{self.run}/"), exist_ok=True)
                     self.set_logger(f'{self.work_dir}/{self.run}/run.log')
 
-        # Getting % usage of virtual_memory ( 3rd field)
         logger.info(f'Prior to fit: RAM memory % used: {psutil.virtual_memory()[2]}, RAM Used (GB):, {psutil.virtual_memory()[3]/1000000000}, process RAM usage (GB): {psutil.Process(os.getpid()).memory_info().rss / 1024 ** 3}')
         best_loss = self.model.fit(self.train_loader, self.val_loader, trial=trial)   
         logger.info(f'After fit: RAM memory % used: {psutil.virtual_memory()[2]}, RAM Used (GB):, {psutil.virtual_memory()[3]/1000000000}, process RAM usage (GB): {psutil.Process(os.getpid()).memory_info().rss / 1024 ** 3}')
@@ -502,6 +420,72 @@ class Trainer:
             dev = device
 
         return dev
+
+    def set_logger(self, log_dir=None):
+        """
+        Configures logging for the trainer, including file and stream handlers, custom formatting, 
+        and logger levels. If a log directory is provided, this method sets up a FileHandler to log messages 
+        to the specified file, applies a custom formatter and filter to include job, node, and rank information,
+        and attaches the handler to the main logger, warnings logger, and other relevant loggers. It also 
+        sets up a StreamHandler to output logs to the console (useful for notebooks or interactive sessions).
+        Args:
+            log_dir (str, optional): Path to the log file. If None, only console logging is configured.
+        Returns:
+            logging.FileHandler: The file handler used for logging to the specified file, or None if 
+            log_dir is not provided.
+        """
+
+        if log_dir is not None:
+            # Remove all handlers associated with the root logger object.
+            for handler in logging.root.handlers[:]:
+                logging.root.removeHandler(handler)
+            
+            # Set the log level to CRITICAL for the root logger
+            logging.root.setLevel(self.log_level)
+            
+            f_handler = logging.FileHandler(log_dir)
+            f_handler.setLevel(self.log_level)
+            warnings_logger = logging.getLogger("py.warnings")
+            job_id = ""
+            if "SLURM_JOB_ID" in os.environ:
+                job_id = f'job:{os.environ["SLURM_JOB_ID"]}'
+            f_format = logging.Formatter('%(job_id)s | %(nodename)s | @rank: %(rank)s | @local: %(local_rank)s at %(asctime)s | %(levelname)s | %(name)s  | \t %(message)s')
+            f_handler.setFormatter(f_format)
+
+            # Add the custom filter to the handler
+            custom_filter = ut.CustomFilter(job_id, self.rank, self.local_rank, os.uname().nodename)
+            f_handler.addFilter(custom_filter)
+
+            logger.addHandler(f_handler)
+            warnings_logger.addHandler(f_handler)
+            logger.setLevel(self.log_level)
+            logger.info(f" ")
+            logger.info(f"===Logging to {log_dir} on level {self.log_level}, @ {self.rank=}, {self.local_rank=}, {self.device=} ===") 
+            logger.info(f"host: {os.uname().nodename}")
+            logger.info(f" ")
+            # Define the extra loggers and add the same FileHandler to them
+            datasets_logger = logging.getLogger(__name__) # TODO: Fix the names 
+            self.apply_handler(datasets_logger, f_handler, self.log_level) 
+            models_logger = logging.getLogger(models.__name__)
+            self.apply_handler(models_logger, f_handler, self.log_level)
+            read_pic_logger = logging.getLogger(datasets.__name__)
+            self.apply_handler(read_pic_logger, f_handler, self.log_level)
+        # Add a StreamHandler to also output logs to the console (and thus to the notebook)
+        stream_handler = logging.StreamHandler()
+        stream_handler.setLevel(self.log_level)
+        stream_format = logging.Formatter('%(asctime)s | %(levelname)s | %(name)s | \t %(message)s')
+        stream_handler.setFormatter(stream_format)
+        logger.addHandler(stream_handler)
+        warnings_logger.addHandler(stream_handler)
+        datasets_logger.addHandler(stream_handler)
+        models_logger.addHandler(stream_handler)
+        read_pic_logger.addHandler(stream_handler)
+        return f_handler
+            
+    def apply_handler(self, logger, f_handler, log_level):
+        logger.addHandler(f_handler)
+        logger.setLevel(log_level)
+        return None
 
 def main():
     # Training settings
@@ -564,7 +548,7 @@ def main():
         for update in args.config:
             key, value = update.split("=", 1)  # Split at the first '='
             if key != "work_dir":  # Skip work_dir as it is already handled
-                set_nested_config(config, key, value)
+                ut.set_nested_config(config, key, value)
                 print(f"Setting {key} to {value}")
         #print(config)
         trainer.fit(config=config)

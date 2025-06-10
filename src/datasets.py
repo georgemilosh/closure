@@ -1,8 +1,41 @@
 
 """
-PyNets: A Python package for neural network training and evaluation.
+datasets.py
+This module provides custom dataset and data loading utilities for closure repo workflows,
+particularly for distributed and channel-based data loading scenarios. It is designed to work
+with PyTorch and supports advanced features such as distributed sampling, subsampling, patch-based
+cropping, feature/target channel selection, and normalization.
+Classes:
+    - DistributedSampler: A sampler that restricts data loading to a subset of the dataset based on provided indices,
+      supporting distributed training with PyTorch's DistributedDataParallel.
+    - SubSampler: A custom sampler that allows for optional shuffling and subsampling of dataset indices.
+    - ChannelDataLoader: An extension of PyTorch's DataLoader that supports channel-based data loading, subsampling,
+      distributed sampling, and patch extraction from images.
+    - DataFrameDataset: A dataset class for loading data from a DataFrame, supporting feature/target normalization,
+      filtering, prescaling, and transformation.
+Key Features:
+    - Distributed and serial sampling for efficient data loading in multi-GPU or multi-node environments.
+    - Flexible subsampling and shuffling of dataset indices for training and evaluation.
+    - Channel selection for both features and targets, allowing for fine-grained control over input/output data.
+    - Patch-based cropping for image data, enabling random spatial sampling during training.
+    - Support for feature and target normalization, including pre-scaling and saving/loading of normalization parameters.
+    - Logging for key operations and warnings to aid in debugging and reproducibility.
+Intended Usage:
+    - Designed for use in machine learning pipelines where data is stored as images or arrays, and metadata is managed
+      via CSV files or DataFrames.
+    - Suitable for both single-node and distributed training scenarios.
+    - Can be extended or customized for specific project requirements.
+Dependencies:
+    - numpy, pandas, torch, scipy, joblib
 Author: George Miloshevich
-date: 2024
+License: MIT License
+Repo:       closure
+Projects:   STRIDE, HELIOSKILL
+Author:     George Miloshevich
+Date:       2025
+License:    MIT License
+Description:
+    
 """
 
 import numpy
@@ -13,7 +46,6 @@ from torch.utils.data.distributed import Sampler
 import torch.distributed as dist
 from torch.utils.data import DataLoader
 import math
-
 import pandas as pd
 import numpy as np
 import joblib
@@ -25,7 +57,6 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logging.captureWarnings(True)
 logger = logging.getLogger(__name__)
-#logger = logging.getLogger('trainers')
 
 from torch.utils.data import DataLoader
 import copy
@@ -73,8 +104,6 @@ class DistributedSampler(Sampler[T_co]):
         the same ordering will be always used.
 
     Example::
-
-        >>> # xdoctest: +SKIP
         >>> sampler = DistributedSampler(indices) if is_distributed else None
         >>> loader = DataLoader(dataset, shuffle=(sampler is None),
         ...                     sampler=sampler)
@@ -187,7 +216,6 @@ class SubSampler(torch.utils.data.Sampler[int]):
     indices: Sequence[int]
     def __init__(self, indices: Sequence[int], seed=None, shuffle=False) -> None: #, device='cpu') -> None:
         self.indices = indices
-        #self.device = device
         if seed is None:
             self.generator = None
         else:
@@ -208,22 +236,22 @@ class SubSampler(torch.utils.data.Sampler[int]):
 
 class ChannelDataLoader(DataLoader):
     """
-    A custom data loader that allows for channel-based data loading and subsampling.
-
-    Args:
-        dataset (Dataset): The dataset to load the data from.
-        feature_channel_names (list, optional): A list of feature channel names to include in the data. If None, all feature channels will be sampled. Default is None.
-        target_channel_names (list, optional): A list of target channel names to include in the data. If None, all target channels will be sampled. Default is None.
-        subsample_rate (float, optional): The subsampling rate to apply to the data. Should be a value between 0 and 1. If None, no subsampling will be applied. Default is None.
-        Importantly subsampling creates a sampler which is used to shuffle the data. 
-        subsample_seed (int, optional): The seed value for the random number generator used for subsampling. If None, no seed will be set. Default is None.
-        patch_dim (list, optional): The dimensions of the patch to sample from the image. Default is None.
-        sampler_type (str, optional): The type of sampler to use for subsampling. Default is 'serial'. Another option is 'distributed'.
-        **kwargs: Additional keyword arguments to be passed to the parent DataLoader class.
+    This loader extends the PyTorch DataLoader to support distributed sampling, subsampling, and patch-based cropping.
+        It allows channel-based data loading and subsampling. Channels are typically
+        the different modalities or features in the dataset, such as RGB channels in an image. In case of 
+        physics data they correspond to different physical quantities, such as density, pressure, etc.
+        To use this loader, you need to provide a dataset that has the `request_features` and `request_targets` 
+        attributes, which are lists of feature and target channel names, respectively. The loader will then sample 
+        the data based on these channel names, and optionally apply subsampling and patch-based cropping. 
+        Note that this data loader is designed to work with both image and vector data.
+    
+    See: constructor of this class for the Args.
 
     Attributes:
-        feature_channels (list or None): The indices of the feature channels to include in the data. If None, all feature channels will be included.
-        target_channels (list or None): The indices of the target channels to include in the data. If None, all target channels will be included.
+        feature_channels (list or None): The indices of the feature channels to include in the data. 
+            If None, all feature channels will be included.
+        target_channels (list or None): The indices of the target channels to include in the data. 
+            If None, all target channels will be included.
         subsample_rate (float or None): The subsampling rate applied to the data. If None, no subsampling was applied.
         subsample_seed (int or None): The seed value used for subsampling. If None, no seed was set.
 
@@ -235,7 +263,8 @@ class ChannelDataLoader(DataLoader):
         dataset = MyDataset()
 
         # Create a ChannelDataLoader with specific feature and target channels
-        loader = ChannelDataLoader(dataset, feature_channel_names=['channel1', 'channel2'], target_channel_names=['channel3'])
+        loader = ChannelDataLoader(dataset, feature_channel_names=['channel1', 'channel2'], 
+                    target_channel_names=['channel3'])
 
         # Iterate over the data
         for features, targets in loader:
@@ -247,8 +276,9 @@ class ChannelDataLoader(DataLoader):
                  **kwargs):
         self.request_features = dataset.request_features
         self.request_targets = dataset.request_targets
-        self.sampler_type = sampler_type
-        self.world_size = world_size
+        self.sampler_type = sampler_type  # 'serial' or 'distributed'
+        self.world_size = world_size # TODO: add this line here >>> 
+            # if world_size is not None else dist.get_world_size() if dist.is_available() else 1
         self.rank = rank
         self.gpus_per_node = gpus_per_node
         self.local_rank = local_rank
@@ -274,7 +304,7 @@ class ChannelDataLoader(DataLoader):
             np.random.seed(self.subsample_seed)
         
         self.patch_dim = patch_dim
-        if self.patch_dim is not None:
+        if self.patch_dim is not None: # custom cropping if needed
             logger.info(f"Using {self.patch_dim = }")
             assert len(self.patch_dim) == 2, "Patch dimensions must be a list of length 2"
             assert dataset.flatten == False, "Patch sampling only works with non-flattened data"
@@ -284,7 +314,7 @@ class ChannelDataLoader(DataLoader):
         seed = kwargs.pop('seed', None) # these are only needed if subsample_rate is not None
         shuffle = kwargs.pop('shuffle', False) # these are only needed if subsample_rate is not None
 
-        if self.subsample_rate is None:
+        if self.subsample_rate is None: # By default use the full dataset
             self.subsample_rate = 1
 
         
@@ -301,13 +331,32 @@ class ChannelDataLoader(DataLoader):
             self.sampler = SubSampler(self.subset, seed=seed, shuffle=shuffle)
         else:
             raise ValueError(f"Sampler type {sampler_type} not recognized")
-            #super().__init__(dataset, sampler=self.sampler, **kwargs)
-        #else:
-        #    logger.info(f"Using full dataset (no subsampling)")
-            #super().__init__(dataset, **kwargs) # normal operation without specifying subsampling
         super().__init__(dataset, sampler=self.sampler, **kwargs)
     
     def __iter__(self):
+        """
+        Args:
+            dataset (Dataset): The dataset to load the data from.
+            feature_channel_names (list, optional): A list of feature channel names to include in the data. 
+                features are the physical quantities (e.g. density) that are used as input to the model
+                If None, all feature channels will be sampled. Default is None.
+            target_channel_names (list, optional): A list of target channel names to include in the data. 
+                targets are the physical quantities (e.g. pressure) that are used as output of the model.
+                If None, all target channels will be sampled. Default is None.
+            subsample_rate (float, optional): The subsampling rate to apply to the data, i.e. sample a 
+                fraction of the dataset. If a value between 0 and 1 this is correspond to udnersampling. If above1
+                then this will correspond to oversampling. Oversampling is useful when cropping is used, since cropping
+                will reduce the amount of data. Oversampling in this case is crucial to be able to sample significant
+                portion of the original dataset.
+                If None, no subsampling will be applied. Default is None.
+                Importantly subsampling creates a sampler which is used to shuffle the data. 
+            subsample_seed (int, optional): The seed value for the random number generator used for subsampling. 
+                If None, no seed will be set. Default is None.
+            patch_dim (list, optional): The dimensions of the patch to sample from the image. Default is None.
+            sampler_type (str, optional): The type of sampler to use for subsampling. Default is 'serial'. 
+                Another option is 'distributed'.
+            **kwargs: Additional keyword arguments to be passed to the parent DataLoader class.
+        """
         for features, targets in super().__iter__():
             if self.feature_channels is not None or self.target_channels is not None:
                 patched_features = features[:, self.feature_channels, ...]
@@ -326,7 +375,7 @@ class ChannelDataLoader(DataLoader):
                     y_starts = np.random.randint(0, features.shape[-1] - self.patch_dim[1])
                 else:
                     raise ValueError(f"Features and targets must have either 3 or 4 dimensions, but got {features.shape = }, {targets.shape = }")
-                features_shape = list(features.shape)  # TODO: move this to the constructor of the class
+                features_shape = list(features.shape)
                 features_shape[-2] = self.patch_dim[0]
                 features_shape[-1] = self.patch_dim[1]
                 features_shape = tuple(features_shape)
@@ -359,62 +408,84 @@ class ChannelDataLoader(DataLoader):
             yield patched_features, patched_targets
 
 class DataFrameDataset(torch.utils.data.Dataset):
+    
     """
     A custom PyTorch dataset class for loading data from a DataFrame.
 
-    Args:
-        data_folder (str): The folder where the images are stored.
-        norm_folder (str): The folder to save the normalization parameters.
-        feature_dtype (str, optional): The data type of the features when __getitem__ is called. Defaults to 'float32'.
-        target_dtype (str, optional): The data type of the targets when __getitem__ is called. Defaults to 'float32'.
-        feature_dtype_numpy (str, optional): The data type of the features. Defaults to 'float32'.
-        target_dtype_numpy (str, optional): The data type of the targets. Defaults to 'float32'.
-        samples_file (str, optional): The file containing the sample filenames. Defaults to None.
-        prescaler_features (str, optional): The pre-scaler function to apply to the features. Defaults to None.
-        prescaler_targets (str, optional): The pre-scaler function to apply to the targets. Defaults to None.
-        scaler_features (tuple or None, optional): The scaler for features. If a tuple is provided, it should contain the mean and standard deviation of the features. Defaults to None.
-        scaler_targets (tuple or None, optional): The scaler for targets. If a tuple is provided, it should contain the mean and standard deviation of the targets. Defaults to None.
-        image_file_name_column (str, optional): The column name in the DataFrame that contains the image filenames. Defaults to 'filenames'.
-        read_features_targets_kwargs (dict, optional): Additional keyword arguments to pass to the `read_features_targets` function. Defaults to None.
-        filter_features (str, optional): The filter to apply to the features. Defaults to None.
-        filter_targets (str, optional): The filter to apply to the targets. Defaults to None.
+    DataFrameDataset is a custom PyTorch Dataset for loading and preprocessing data from a DataFrame, 
+    typically used for supervised learning tasks involving image or array data stored as files. 
+    It supports flexible feature/target selection, normalization, filtering, and transformation pipelines.
+    This class is designed to:
+    - Load sample metadata (which provides datasplit information) from a CSV file into a DataFrame.
+    - Read features and targets from disk using filenames listed in the DataFrame.
+    - Optionally filter, pre-scale, and normalize features and targets using user-specified or precomputed statistics.
+    - Support both flattened and channel-first (NCHW) data formats to accommodate different model requirements, e.g.
+        we expect local model to operate with flattened pixel-wise data, while convolutional models to treat fields
+        like images, i.e. with channels first (NCHW).
+    - Apply torchvision-style transforms to features and targets, with support for deterministic application.
+
+    See constructor of this class for the Args.
 
     Attributes:
-        target_dtype (torch.dtype): The data type of the targets.
-        target_dtype_numpy (numpy.dtype): The data type of the targets in numpy format.
-        feature_dtype (torch.dtype): The data type of the features.
-        feature_dtype_numpy (numpy.dtype): The data type of the features in numpy format.
-        scaler_features (tuple or None): The scaler for features.
-        scaler_targets (tuple or None): The scaler for targets.
-        prescaler_features (list or None): The pre-scaler functions to apply to the features.
-        prescaler_targets (list or None): The pre-scaler functions to apply to the targets.
-        samples_file (str or None): The file containing the sample filenames.
-        image_file_name_column (str): The column name in the DataFrame that contains the image filenames.
-        data_folder (str): The folder where the images are stored.
-        norm_folder (str): The folder to save the normalization parameters.
-        read_features_targets_kwargs (dict): Additional keyword arguments to pass to the `read_features_targets` function.
-        logger: The logger object for logging messages.
-        dataframe (pd.DataFrame): The DataFrame containing the sample filenames.
-        flatten (bool): Whether to flatten the features and targets. Default is True.
-        features (np.ndarray): The features of the dataset.
-        targets (np.ndarray): The targets of the dataset.
-        features_shape (tuple): The shape of the features.
-        targets_shape (tuple): The shape of the targets.
-        samples (int): The number of samples in the dataset.
-        request_features (list or None): The requested features to load.
-        request_targets (list or None): The requested targets to load.
-        filter_features (dictionary or None): The filter to apply to the features.
-        filter_targets (dictionary or None): The filter to apply to the targets.
-        transform (dictionary or None): The transform to apply to the features, only the train set.
+        target_dtype (torch.dtype):             The data type of the targets when __getitem__ is called by data loader
+        target_dtype_numpy (numpy.dtype):       The original pre-processed data type of the targets in numpy format
+        feature_dtype (torch.dtype):            The data type of the features when __getitem__ is called by data loader
+        feature_dtype_numpy (numpy.dtype):      The original pre-processed data type of the features in numpy format.
+        scaler_features (tuple or None):        The scaler (normalization) applied after pre-scaler to features.
+        scaler_targets (tuple or None):         The scaler (normalization) applied after pre-scaler to targets.
+        prescaler_features (list or None):      The pre-scaler functions (such as log) to apply to the features.
+        prescaler_targets (list or None):       The pre-scaler functions (such as log) to apply to the targets.
+        samples_file (str or None):             The CSV file containing the sample filenames which provides 
+            the sample filenames that are extracted from data_folder. samples_file is used to create dataframe ->
+        dataframe (pd.DataFrame):               The DataFrame containing the sample filenames that are extracted from 
+            data_folder to create the full dataset by concatenating each file labelled in consecutive raws of dataframe
+        image_file_name_column (str):           The column name in the DataFrame that contains the image filenames.
+        data_folder (str):                      The folder where the input data is stored. Which data is used
+            is controlled by samples_file, which is a CSV file containing the filenames of the data.
+        norm_folder (str):                      The folder to save the normalization parameters (mean and std) 
+            for features and targets. This is used if scaler_features or scaler_targets are provided.
+        read_features_targets_kwargs (dict):    Additional keyword arguments to pass to the `read_features_targets` 
+            function. Examples:
+                {'fields_to_read' :    {"B": True,"B_ext": False,"divB": False,"E": True,"E_ext": False,"rho": True,
+                    "J": True, "P": True,"PI": True,"Heat_flux": False,"N": False,"Qrem": False}, # which fields to read
+                'request_features' :  ['rho_e', 'Bx', 'By', 'Bz', 'Vx_e', 'Vy_e', 'Vz_e', 'Ex', 'Ey', 'Ez'], # input
+                'request_targets' :   ["Pxx_e", "Pyy_e","Pzz_e","Pxy_e","Pxz_e","Pyz_e"],  # what we want to predict
+                'choose_species' :    ['e',None],   # which species to load/omit.
+                'choose_x' : [0,256], 'choose_y' : [0,256], 'verbose' : False
+        logger:                                 The logger object for logging messages.
+        
+        flatten (bool):                         Whether to flatten the features and targets. This is needed
+            when treating each pixel as individual sample and applying say MLP model to it. Default is True.
+        features (np.ndarray):                  The features of the dataset.
+        targets (np.ndarray):                   The targets of the dataset.
+        features_shape (tuple):                 The shape of the features.
+        targets_shape (tuple):                  The shape of the targets.
+        samples (int):                          The number of samples in the dataset.
+        request_features (list or None):        The requested features to load.
+        request_targets (list or None):         The requested targets to load.
+        filter_features (dictionary or None):   The filter to apply to the features.
+        filter_targets (dictionary or None):    The filter to apply to the targets.
+        transform (dictionary or None):         The transform to apply to the features, only the train set.
 
     Example:
-        transform = {
-            'RandomCrop': {'size': (16, 16)}
-        }
+        Example usage:
+        dataset = DataFrameDataset(
+            data_folder='/path/to/data',
+            norm_folder='/path/to/norm',
+            samples_file='/path/to/samples.csv',
+            feature_dtype='float32',
+            target_dtype='float32',
+            scaler_features=None,
+            scaler_targets=None,
+            transform={'RandomCrop': {'size': (16, 16)}, 'apply': ['train']},
+            datalabel='train'
+        )
+        loader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=True)
 
     Methods:
         load_original(): Loads the DataFrame from a CSV file and prepares the features and targets for further processing.
-        scale_data(): Scales the features and targets of the dataset using pre-defined scalers or calculates and saves new scalers if necessary.
+        scale_data(): Scales the features and targets of the dataset using pre-defined scalers or calculates 
+            and saves new scalers if necessary.
         __len__(): Returns the number of samples in the dataset.
         __getitem__(idx): Returns the features and targets for a given index.
 
@@ -438,6 +509,30 @@ class DataFrameDataset(torch.utils.data.Dataset):
                  filter_targets = None, # filter to apply to the targets
                  transform = None, # transform to apply to the features and targets
                  ):
+        """
+        Args:
+            data_folder (str): The folder where the images are stored.
+            norm_folder (str): The folder to save the normalization parameters.
+            feature_dtype (str, optional): The data type of the features when __getitem__ is called. 
+                Defaults to 'float32'.
+            target_dtype (str, optional): The data type of the targets when __getitem__ is called. 
+                Defaults to 'float32'.
+            feature_dtype_numpy (str, optional): The data type of the features. Defaults to 'float32'.
+            target_dtype_numpy (str, optional): The data type of the targets. Defaults to 'float32'.
+            samples_file (str, optional): The file containing the sample filenames. Defaults to None.
+            prescaler_features (str, optional): The pre-scaler function to apply to the features. Defaults to None.
+            prescaler_targets (str, optional): The pre-scaler function to apply to the targets. Defaults to None.
+            scaler_features (tuple or None, optional): The scaler for features. If a tuple is provided, 
+                it should contain the mean and standard deviation of the features. Defaults to None.
+            scaler_targets (tuple or None, optional): The scaler for targets. If a tuple is provided, 
+                it should contain the mean and standard deviation of the targets. Defaults to None.
+            image_file_name_column (str, optional): The column name in the DataFrame that contains the image filenames. 
+                Defaults to 'filenames'.
+            read_features_targets_kwargs (dict, optional): Additional keyword arguments to pass to the 
+                `read_features_targets` function. Defaults to None.
+            filter_features (str, optional): The filter to apply to the features. Defaults to None.
+            filter_targets (str, optional): The filter to apply to the targets. Defaults to None.
+        """
         self.features_mean = None  # TODO: check that this doesn't break something
         self.features_std = None
         self.flatten = flatten
@@ -526,7 +621,7 @@ class DataFrameDataset(torch.utils.data.Dataset):
     
     def load_original(self):
         """
-        Loads the atarame from a  file containing filenames which will be used to create this dataset. 
+        Loads the datarame from a file containing filenames which will be used to create this dataset. 
         Prepares the features and targets for further processing based on this dataframe.
 
         """
@@ -540,8 +635,8 @@ class DataFrameDataset(torch.utils.data.Dataset):
         self.request_features = self.read_features_targets_kwargs.get('request_features', None)
         self.request_targets = self.read_features_targets_kwargs.get('request_targets', None)
         self.features, self.targets = rp.read_features_targets(self.data_folder, self.filenames, 
-                                                  feature_dtype = self.feature_dtype_numpy, 
-                                                  target_dtype = self.target_dtype_numpy,**self.read_features_targets_kwargs)
+                    feature_dtype = self.feature_dtype_numpy, 
+                    target_dtype = self.target_dtype_numpy,**self.read_features_targets_kwargs)
         if self.filter_features is not None:
             self.features = self.filter_features(self.features, **self.filter_featuers_kwargs)
         if self.filter_targets is not None:
@@ -645,15 +740,21 @@ class DataFrameDataset(torch.utils.data.Dataset):
 
 
     def __len__(self):
+        """
+        Returns the number of samples in the dataset.
+        """
         return self.samples
 
     def __getitem__(self, idx: int) -> Tuple[Any, Any]:
         """
-        Tells data loaders how to load the data from the dataset.
+        Tells data loaders how to load the data from the dataset. If transform is not None,
+        it applies the transform to both features and targets. This is useful for data augmentation
+        Args:
+            idx (int): The index of the sample to load.
+        Returns:
+            Tuple[Any, Any]: A tuple containing the features and targets for the given index.
         """        
         features, targets = self.features[idx], self.targets[idx]
-        #features = torch.tensor(features, dtype=self.feature_dtype)
-        #targets = torch.tensor(targets, dtype=self.target_dtype)
         if self.transform is not None:
             state = torch.get_rng_state()
             features = self.transform(features)

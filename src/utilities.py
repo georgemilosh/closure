@@ -1,3 +1,15 @@
+"""
+utlities.py
+This module contains utility functions for various tasks such 
+as data transformation, loss evaluation, and plotting.
+Repo:       closure
+Projects:   STRIDE, HELIOSKILL
+Author:     George Miloshevich
+Date:       2025
+License:    MIT License
+            
+"""
+
 import subprocess
 from . import trainers as tr
 import pandas as pd
@@ -10,6 +22,80 @@ import re
 import os
 import pickle
 import scipy.ndimage as nd
+import logging
+import ast
+
+class CustomFilter(logging.Filter):
+    """
+    A custom filter class for logging that will be used to prepend the rank, local_rank and nodename to the log messages.
+    """
+    def __init__(self, job_id, rank, local_rank, nodename):
+        super().__init__()
+        self.job_id = job_id
+        self.rank = rank
+        self.local_rank = local_rank
+        self.nodename = nodename
+
+    def filter(self, record):
+        record.job_id = self.job_id
+        record.rank = self.rank
+        record.local_rank = self.local_rank
+        record.nodename = self.nodename
+        return True
+    
+
+def set_nested_config(config, key, value):
+    """
+    Set a nested configuration value in a dictionary.
+    
+    This function takes a configuration dictionary, a dot-separated key string, 
+    and a value. It sets the value in the dictionary at the location specified 
+    by the key string, creating nested dictionaries as needed. The value will 
+    be converted to an int, float, or list of ints/floats if possible.
+    
+    Args:
+        config (dict): The configuration dictionary to update.
+        key (str): A dot-separated string specifying the nested key.
+        value (str): The value to set. It will be converted to an int, float, 
+                     or list if possible.
+    
+    Example:
+        config = {}
+        set_nested_config(config, 'a.b.c', '123')
+        # config is now {'a': {'b': {'c': 123}}}
+        
+        set_nested_config(config, 'a.b.d', '45.67')
+        # config is now {'a': {'b': {'c': 123, 'd': 45.67}}}
+        
+        set_nested_config(config, 'a.e', '[1, 2, 3]')
+        # config is now {'a': {'b': {'c': 123, 'd': 45.67}, 'e': [1, 2, 3]}}
+        
+        set_nested_config(config, 'a.f', '[1.1, 2.2, 3.3]')
+        # config is now {'a': {'b': {'c': 123, 'd': 45.67}, 'e': [1, 2, 3], 'f': [1.1, 2.2, 3.3]}}
+    """
+
+    keys = key.split('.')
+    d = config
+    for k in keys[:-1]:
+        d = d.setdefault(k, {})
+    
+    # Convert value to appropriate type
+    if value.isdigit():
+        value = int(value)
+    else:
+        try:
+            value = float(value)
+        except ValueError:
+            try:
+                # Attempt to parse list
+                value = ast.literal_eval(value)
+                if isinstance(value, list):
+                    value = [float(v) if '.' in str(v) else int(v) for v in value]
+            except (ValueError, SyntaxError):
+                pass
+    
+    d[keys[-1]] = value
+
 
 def species_to_list(input_list):
     """

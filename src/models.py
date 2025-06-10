@@ -1,8 +1,15 @@
 
 """
-PyNets: A Python package for neural network training and evaluation.
-Author: George Miloshevich
-date: 2024
+models.py
+This module contains the definition of various neural network models used in PyNets.
+This includes the base class `PyNet` for managing neural networks, as well as specific model implementations 
+such as `CNet`, `ResNet`, `FCNN`, and `MLP`.
+
+Repo:       closure
+Projects:   STRIDE, HELIOSKILL
+Author:     George Miloshevich
+Date:       2025
+License:    MIT License
 """
 
 import torch
@@ -24,30 +31,95 @@ logger = logging.getLogger(__name__)
 #optuna.logging.enable_propagation()  # Propagate logs to the root logger.
 
 class PyNet:
-    """
-    base class for managing neural nets
-    Args:
     
-    model_seed : int, optional
-        Seed for the model weights, by default None
-    optimizer_kwargs : dict, optional
-        Keyword arguments for initializing the optimizer, by default None
-    scheduler_kwargs : dict, optional
-        Keyword arguments for initializing the scheduler, by default None
-    logger_kwargs : dict, optional
-        Keyword arguments for initializing the logger, by default None
-    rank : int, optional
-        Rank of the process, by default None
-    local_rank : int, optional
-        Local rank of the process, by default None
-    init_path : str, optional
-        Path to the model weights, by default None
+    """
+    PyNet is a flexible neural network training wrapper designed to simplify the process of model instantiation, 
+    training, evaluation, and checkpointing using PyTorch. It supports distributed training, custom optimizers, 
+    schedulers, and logging. This class dynamically loads a model architecture by name, initializes optimizers 
+    and schedulers with user-specified parameters, and manages the training loop with support for early stopping, 
+    checkpointing, and metric tracking. PyNet also provides utilities for prediction, loss computation, 
+    and device management.
+    - Attributes:
+        model (str):                        Name of the model class to instantiate. 
+            Must be defined in the global scope. Default is 'FCNN'.
+        optimizer_kwargs (dict, optional): Keyword arguments for optimizer setup, including 'optimizer', 
+            'criterion', and optional 'metrics'. Default is None.
+        scheduler_kwargs (dict, optional):  Keyword arguments for scheduler setup, including 'scheduler', 
+            'epochs', 'early_stopping', and 'save_every'. Default is None.
+        logger_kwargs (dict, optional):     Keyword arguments for logger configuration. Default is None.
+        rank (int, optional): Global rank of the process for distributed training. Default is None.
+        local_rank (int, optional):         Local rank of the process for distributed training. Default is None.
+        init_path (str, optional):          Path to load model weights and training history from checkpoint. 
+            Default is None.
 
+        model (torch.nn.Module):                            The neural network model, possibly wrapped in DDP.
+        optimizer (torch.optim.Optimizer):                  The optimizer used for training.
+        scheduler (torch.optim.lr_scheduler._LRScheduler):  The learning rate scheduler.
+        criterion (torch.nn.Module):                        The loss function.
+        metrics (list):                                     List of additional metric functions.
+        train_loss_ (dict):                                 Training loss history.
+        val_loss_ (dict):                                   Validation loss history.
+        total_time (dict):                                  Timing information for training.
+        lr (list):                                          Learning rate history.
+        device (torch.device):                              Device on which the model resides.
+        total_parameters (int):                             Total number of model parameters.
+
+    Methods:
+    
+        define_optimizer_sheduler(): Initializes optimizer, scheduler, criterion, and metrics.
+        predict(features): Runs inference on input features and returns predictions.
+        load(path, **kwargs): Loads model weights and training history from checkpoint.
+        _compute_loss(prediction, ground_truth, criterion): Computes loss between predictions and ground truth.
+        _forward_pass(loader, phase): Runs a forward pass for one epoch (train/val/test).
+        fit(train_loader, val_loader, trial=None): Trains the model with optional Optuna trial for hyperparameter optimization.
+        _to_device(features, targets, device): Moves data to the specified device.
+        _logging(tr_loss, val_loss, epoch, epochs, epoch_time, epoch_time_train, show, update_step): Logs training progress.
+    
     Attributes:
-    model : (torch.nn.Module) : The neural network model.
+        model : (torch.nn.Module) : The neural network model.
     """
     def __init__(self, model='FCNN', model_seed=None, optimizer_kwargs=None, scheduler_kwargs=None, logger_kwargs=None,
                 rank=None, local_rank=None, init_path=None, **kwargs): 
+        """
+        Args:
+    
+        model_seed :                int, optional
+            Seed for the model weights, by default None
+        optimizer_kwargs :          dict, optional
+            Keyword arguments for initializing the optimizer, by default None
+        scheduler_kwargs :          dict, optional
+            Keyword arguments for initializing the scheduler, by default None
+        logger_kwargs :             dict, optional
+            Keyword arguments for initializing the logger, by default None
+        rank :                      int, optional
+            Rank of the process, by default None
+        local_rank :                int, optional
+            Local rank of the process, by default None
+        init_path :                 str, optional
+            Path to the model weights, by default None
+    
+        model :                     str, optional
+            Name of the model class to be used, by default 'FCNN'.
+            This class is used to define the model, optimizer, and scheduler for training a neural network.
+            If the model is not found, it will raise an error.
+        model_seed :                int, optional
+            Seed for the model weights, by default None
+        optimizer_kwargs :          dict, optional
+            Keyword arguments for initializing the optimizer, by default None
+        scheduler_kwargs :          dict, optional
+            Keyword arguments for initializing the scheduler, by default None
+        logger_kwargs :             dict, optional
+            Keyword arguments for initializing the logger, by default None
+        rank :                      int, optional
+            Rank of the process, by default None
+        local_rank :                int, optional
+            Local rank of the process, by default None
+        init_path :                 str, optional
+            Path to the model weights, by default None
+        kwargs :                    dict, optional
+            Additional keyword arguments to be passed to the model class constructor, by default None
+        
+        """
         model_class =  globals() [model] #getattr(__name__, model)
         self.local_rank = local_rank
         self.rank = rank
@@ -260,19 +332,37 @@ class PyNet:
     
     def fit(self, train_loader, val_loader, trial=None):
         """
-        Trains the model using the provided training and validation data loaders.
+        Trains the model using the provided training and validation data loaders. This method performs the training 
+        loop for a specified number of epochs, tracks training and validation losses, applies learning rate scheduling, 
+        supports early stopping, and optionally integrates with Optuna for hyperparameter optimization and pruning. 
+        The best model weights (based on validation loss) are restored at the end of training.
+        Parameters
+        ----------
+        train_loader : torch.utils.data.DataLoader
+            DataLoader providing the training dataset.
+        val_loader : torch.utils.data.DataLoader
+            DataLoader providing the validation dataset.
+        trial : optuna.trial.Trial, optional
+            Optuna trial object for hyperparameter optimization and pruning (default: None).
 
-        Args:
-            train_loader (DataLoader): The data loader for the training set.
-            val_loader (DataLoader): The data loader for the validation set.
-            trial (optuna.Trial, optional): An optuna Trial object for hyperparameter optimization. Defaults to None.
-
-        Returns:
-            None
-
-        Raises:
-            optuna.exceptions.TrialPruned: If the optuna trial is pruned.
-
+        Returns
+        -------
+        float
+            The best validation loss achieved during training.
+        
+        Notes
+        -----
+        - Restores model weights corresponding to the best validation loss if `save_every` is set to 'best' or an integer.
+        - Logs training and validation losses, learning rates, and epoch times.
+        - Uses `self.criterion` for loss computation and `self.optimizer` for weight updates.
+        - Supports distributed training by wrapping the model in `DistributedDataParallel` if `rank` is specified.
+        - Uses `self.scheduler` for learning rate scheduling if provided.
+        - Tracks training and validation losses in `self.train_loss_` and `self.val_loss_`.
+        - Uses `self.local_rank` to determine the device for training.
+        - If `trial` is provided, integrates with Optuna for hyperparameter search and pruning.
+        
+        - Handles distributed training via the `rank` attribute.
+        - Integrates with Optuna for hyperparameter search and pruning.
         """
         if not hasattr(self, 'train_loss_'):
             self.train_loss_ = {} # training history
