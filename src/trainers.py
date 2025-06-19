@@ -309,7 +309,7 @@ class Trainer:
             with open(config_file, 'r') as f:
                 config = json.load(f)
             if self.work_dir is not None:
-                self.set_logger(f'{self.work_dir}/{run}/run.log')
+                self.set_logger(f'{self.work_dir}/{run}/run.log', console_stream=False)
             logger.info(f"==========Config file {config_file} found, logging to {self.work_dir}/{run}/run.log========")
             logger.warning(f"Loading configuration based on it and the associated model weights/training loss!")
             
@@ -421,7 +421,7 @@ class Trainer:
 
         return dev
 
-    def set_logger(self, log_dir=None):
+    def set_logger(self, log_dir=None, console_stream=True):
         """
         Configures logging for the trainer, including file and stream handlers, custom formatting, 
         and logger levels. If a log directory is provided, this method sets up a FileHandler to log messages 
@@ -430,6 +430,7 @@ class Trainer:
         sets up a StreamHandler to output logs to the console (useful for notebooks or interactive sessions).
         Args:
             log_dir (str, optional): Path to the log file. If None, only console logging is configured.
+            console_stream (bool, optional): Whether to add a StreamHandler for console output. Defaults to True.
         Returns:
             logging.FileHandler: The file handler used for logging to the specified file, or None if 
             log_dir is not provided.
@@ -449,7 +450,7 @@ class Trainer:
             job_id = ""
             if "SLURM_JOB_ID" in os.environ:
                 job_id = f'job:{os.environ["SLURM_JOB_ID"]}'
-            f_format = logging.Formatter('%(job_id)s | %(nodename)s | @rank: %(rank)s | @local: %(local_rank)s at %(asctime)s | %(levelname)s | %(name)s  | \t %(message)s')
+            f_format = ut.SafeFormatter('%(job_id)s | %(nodename)s | @rank: %(rank)s | @local: %(local_rank)s at %(asctime)s | %(levelname)s | %(name)s  | \t %(message)s')
             f_handler.setFormatter(f_format)
 
             # Add the custom filter to the handler
@@ -471,16 +472,43 @@ class Trainer:
             read_pic_logger = logging.getLogger(datasets.__name__)
             self.apply_handler(read_pic_logger, f_handler, self.log_level)
         # Add a StreamHandler to also output logs to the console (and thus to the notebook)
-        stream_handler = logging.StreamHandler()
-        stream_handler.setLevel(self.log_level)
-        stream_format = logging.Formatter('%(asctime)s | %(levelname)s | %(name)s | \t %(message)s')
-        stream_handler.setFormatter(stream_format)
-        logger.addHandler(stream_handler)
-        warnings_logger.addHandler(stream_handler)
-        datasets_logger.addHandler(stream_handler)
-        models_logger.addHandler(stream_handler)
-        read_pic_logger.addHandler(stream_handler)
+        stream_format = ut.SafeFormatter('%(asctime)s | %(levelname)s | %(name)s | \t %(message)s')
+        if console_stream:
+            stream_handler = logging.StreamHandler()
+            stream_handler.setLevel(self.log_level)
+            stream_handler.setFormatter(stream_format)
+        
+        
+
+        # Optionally, set propagate to False for your main loggers
+        logger.propagate = False
+        datasets_logger.propagate = False
+        models_logger.propagate = False
+        read_pic_logger.propagate = False
+        #logger.addHandler(stream_handler)
+        #warnings_logger.addHandler(stream_handler)
+        #datasets_logger.addHandler(stream_handler)
+        #models_logger.addHandler(stream_handler)
+        #read_pic_logger.addHandler(stream_handler)
+         
+        ## Attach handlers to the root logger
+        #logging.root.addHandler(f_handler)
+        #logging.root.addHandler(stream_handler)
+
+        # Attach to all known loggers
+        for logger_name in logging.Logger.manager.loggerDict:
+            log = logging.getLogger(logger_name)
+            self.add_handler_once(log, f_handler)
+            self.add_handler_once(log, stream_handler)
+            log.setLevel(self.log_level)
+        
+       
+
         return f_handler
+    
+    def add_handler_once(self,logger, handler):
+        if handler not in logger.handlers:
+            logger.addHandler(handler)
             
     def apply_handler(self, logger, f_handler, log_level):
         logger.addHandler(f_handler)

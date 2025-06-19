@@ -25,6 +25,13 @@ import scipy.ndimage as nd
 import logging
 import ast
 
+class SafeFormatter(logging.Formatter):
+    def format(self, record):
+        # Provide defaults for custom fields if missing
+        for field in ['job_id', 'nodename', 'rank', 'local_rank']:
+            if not hasattr(record, field):
+                setattr(record, field, 'N/A')
+        return super().format(record)
 class CustomFilter(logging.Filter):
     """
     A custom filter class for logging that will be used to prepend the rank, local_rank and nodename to the log messages.

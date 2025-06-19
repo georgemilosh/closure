@@ -99,7 +99,12 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
 
 def build_XY(files_path,choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, choose_z=DEFAULT_CHOOSE_Z, indexing=DEFAULT_INDEXING):
     # Read qom, Lx, Ly, Lz, nxc, nyc, nzc and dt from the SimulationData.txt file.
-    f=open(files_path+"SimulationData.txt","r")
+    try:
+        f=open(files_path+"SimulationData.txt","r")
+    except Exception:
+        # Remove the last folder from files_path
+        files_path = os.path.dirname(os.path.normpath(files_path)) + os.sep
+        f = open(files_path + "SimulationData.txt", "r")
     content=f.readlines()
     f.close()
     # TODO: deal with qom in more serious way, so that it is readed from the correct folder if the filenames are from different folders
@@ -194,7 +199,7 @@ def read_features_targets(files_path, filenames, fields_to_read=None, request_fe
     """
     try: # looks in the specific folder, or in the root:
         f=open(files_path+filenames[0].rsplit("/",1)[0]+"/SimulationData.txt","r")
-    except FileNotFoundError:
+    except Exception:
         f=open(files_path+"SimulationData.txt","r")
    
     content=f.readlines()

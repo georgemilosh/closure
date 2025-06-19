@@ -122,7 +122,7 @@ with open(simulation_data_path, 'r') as file:
 # Modify the specific lines
 for i, line in enumerate(lines):
     if 'Number of cells (x)' in line:
-        lines[i] = 'Number of cells (x)      = 512\n'
+        lines[i] = 'Number of cells (x)      = 512\n' # TODO: change this to the correct value, which is consistent with the zoom
     if 'Number of cells (y)' in line:
         lines[i] = 'Number of cells (y)      = 512\n'
 
