@@ -74,6 +74,8 @@ trainer.fit()
 
 ### 4. Command-line usage
 
+A tutorial on the usage of the trainer can be found in `Tutorial_trainer.pdf` in the `examples` folder.
+
 ```bash
 python -m closure.src.trainers --config work_dir=work_dir --config run=run_name --config model_kwargs.model_name=ResNet
 ```
