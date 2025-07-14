@@ -146,80 +146,89 @@ class Trainer:
             Exception: If there is an error saving the configuration file.
             
         """
-        if log_name == None:
-            log_name = "training.log"
-        if log_level == None:
-            log_level = "INFO"
+            # Set default values for optional parameters
+        self.log_name = log_name or "training.log"
+        self.log_level = getattr(logging, log_level or "INFO")
+        self.num_workers = num_workers or os.cpu_count()
+        
+        # Store initialization parameters
         self.work_dir = work_dir
-        self.dataset_kwargs = dataset_kwargs
-        self.load_data_kwargs = load_data_kwargs
-        self.model_kwargs = model_kwargs
+        self.dataset_kwargs = dataset_kwargs or {}
+        self.load_data_kwargs = load_data_kwargs or {}
+        self.model_kwargs = model_kwargs or {}
         self.device = device
-        self.log_name = log_name
-        self.log_level = getattr(logging, log_level)
+        self.mode_test = mode_test
+        self.force = force
+        self.timing_name = timing_name
+        
+        # Store distributed training parameters
         self.world_size = world_size
         self.rank = rank
         self.gpus_per_node = gpus_per_node
         self.local_rank = local_rank
-        if num_workers is not None:
-            self.num_workers = num_workers
-        else:
-            self.num_workers = os.cpu_count()
-        self.force = force
-        self.timing_name = timing_name
-        self.mode_test = mode_test
         
-        # === Deal with the configuration file === #
-        if work_dir is not None:
-            os.makedirs(os.path.dirname(self.work_dir), exist_ok=True)
-            config_file = os.path.join(self.work_dir, 'config.json')
-            if os.path.exists(config_file):
-                with open(config_file, 'r') as f:
-                    config = json.load(f)
-                logger.warning(f"Config file {config_file} found -> loading configuration")
-                # Update config with any new values provided
-                for key in [
-                    'dataset_kwargs', 'load_data_kwargs', 'model_kwargs', 'mode_test', 'device',
-                    'log_name', 'log_level', 'world_size', 'rank', 'gpus_per_node', 'local_rank', 'num_workers'
-                    ]:
-                    value = getattr(self, key, None)
-                    if value is not None:
-                        config[key] = value
-                self.__dict__.update(**config) # Update the Trainer object's attributes with the loaded config
-            else:
-                config = copy.deepcopy(self.__dict__)
-                logger.info(f"Creating a new configuration file: {config_file}")
-                try:
-                    with open(config_file, 'w') as f:
-                        f.write(json.dumps(config, indent=4))
-                except Exception as e:
-                    logger.error(f"Error saving configuration file: {e}")
-
-        self.config = copy.deepcopy(self.__dict__) # to save the configuration of the Trainer object
-
-        if not torch.cuda.is_available():
-            self.device = torch.device('cpu')
-
-        if self.work_dir is not None:
-            self.f_handler = self.set_logger(f'{self.work_dir}/{self.log_name}')
-
+        # Handle configuration file management
+        self._handle_config_file()
         
-        self.dataset_kwargs.pop('samples_file',None)  # guardrails against 
-            # passing samples_file to DataFrameDataset  
-        train_sample = self.dataset_kwargs.pop('train_sample')
-        val_sample = self.dataset_kwargs.pop('val_sample')
-        test_sample = self.dataset_kwargs.pop('test_sample')
-
-        if not self.mode_test:
-            self.train_dataset = datasets.DataFrameDataset(datalabel="train", 
-                        samples_file=train_sample, norm_folder=self.work_dir, **self.dataset_kwargs)
-            self.val_dataset = datasets.DataFrameDataset(datalabel="val",
-                        samples_file=val_sample, norm_folder=self.work_dir, **self.dataset_kwargs)
-                                                       
-        self.test_dataset = datasets.DataFrameDataset(datalabel="test",
-                        samples_file=test_sample, norm_folder=self.work_dir, **self.dataset_kwargs)
+        # Set up device and logging
+        self._setup_device_and_logging()
         
+        # Initialize datasets
+        self._initialize_datasets()
+        
+        # Initialize model and data loaders
         self.comprehend_config()
+
+    def fit(self, config=None):
+        """
+        Fits the model to the training data and returns the best loss, while saving the products 
+        of the training process to disk. Note that if you want to use subfolder `runs` you need to provide
+        the `run` key in the config dictionary, and call `trainer.fit(config=config)`
+        Args:
+            config (dict): A dictionary containing the configuration parameters for the training process. 
+            If provided, the original config will be updated with the new config. If dataset_kwargs are
+            not consistent between the original and new config warning will be raised 
+            (see comprehend_config method).
+        Returns:
+            float: The best loss achieved during the training process.
+
+        Raises:
+            FileExistsError: If the config file already exists and overwriting is not allowed.
+            Exception: If there is an error saving the configuration file.
+
+        Notes:
+            - If `config` is provided, the original configuration will be updated with the new 
+                configuration before training.
+            - If `self.run` is not empty, the new configuration will be saved to a subdirectory.
+        """
+        # Handle optuna trials
+        trial = None
+
+        if config is not None: 
+            # Process new configuration
+            new_config = copy.deepcopy(config) # to avoid changing the original dictionary
+            trial = new_config.pop('trial',None) # handling optuna trials # TODO: check that this is working in distributed mode
+
+            # Validate dataset consistency (all runs managed by the same Trainer should have the same dataset_kwargs)
+            self._validate_dataset_consistency(new_config)
+
+            logger.warning(f"============Updating the config with the new config============")
+            self.config = new_config
+            self.comprehend_config() # update the model and data loaders consistently with the new config
+
+            # Handle run-specific configurations (trainer folder contains subfolders for each run containg new config)
+            if self.run != '':
+                self._handle_run_config_save()
+
+        self._log_memory_usage("Prior to fit")
+
+        best_loss = self.model.fit(self.train_loader, self.val_loader, trial=trial)   
+
+        self._log_memory_usage("After fit")
+        # Save model and results (only on rank 0 in distributed training)
+        self._save_training_results()
+       
+        return best_loss
 
     def comprehend_config(self):
         """
@@ -326,77 +335,220 @@ class Trainer:
         else:
             raise FileNotFoundError(f"Config file {config_file} not found.")
         
-    def fit(self, config=None):
+    def _initialize_datasets(self):
+        """Initialize training, validation, and test datasets.
+        This method creates the datasets based on the provided dataset_kwargs.
+        It extracts the sample file paths for training, validation, and testing datasets,
+        and creates DataFrameDataset objects for each dataset.
+        If the mode_test is True, it will only create the test dataset (useful for inference mode testing).
+        If mode_test is False, it will create train and validation datasets as well."""
+        # Remove 'samples_file' from dataset_kwargs to prevent conflicts
+        self.dataset_kwargs.pop('samples_file', None)
+        
+        # Extract sample file paths
+        train_sample = self.dataset_kwargs.pop('train_sample')
+        val_sample = self.dataset_kwargs.pop('val_sample')
+        test_sample = self.dataset_kwargs.pop('test_sample')
+        
+        
+        # Create train and validation datasets only if not in test mode
+        if not self.mode_test:
+            self.train_dataset = datasets.DataFrameDataset(
+                datalabel="train",
+                samples_file=train_sample,
+                norm_folder=self.work_dir,
+                **self.dataset_kwargs
+            )
+            
+            self.val_dataset = datasets.DataFrameDataset(
+                datalabel="val",
+                samples_file=val_sample,
+                norm_folder=self.work_dir,
+                **self.dataset_kwargs
+            )
+        
+        # Always create test dataset
+        self.test_dataset = datasets.DataFrameDataset(
+            datalabel="test",
+            samples_file=test_sample,
+            norm_folder=self.work_dir,
+            **self.dataset_kwargs
+        )
+
+    def _handle_config_file(self):
+        """ Handle the configuration file for the Trainer.
+        This method checks if a configuration file already exists in the work directory.
+        If it does, it loads the existing configuration and updates it with any new values provided during
+        initialization of the Trainer. If the configuration file does not exist, it creates a new one with the current
+        configuration settings. The final configuration is stored in the `self.config` attribute of the Trainer.
         """
-        Fits the model to the training data and returns the best loss, while saving the products 
-        of the training process to disk. Note that if you want to use subfolder `runs` you need to provide
-        the `run` key in the config dictionary, and call `trainer.fit(config=config)`
-        Args:
-            config (dict): A dictionary containing the configuration parameters for the training process. 
-            If provided, the original config will be updated with the new config. If dataset_kwargs are
-            not consistent between the original and new config warning will be raised 
-            (see comprehend_config method).
-        Returns:
-            float: The best loss achieved during the training process.
+        if self.work_dir is None:
+            self.config = copy.deepcopy(self.__dict__)
+            return
+        
+        # Ensure work directory exists
+        os.makedirs(os.path.dirname(self.work_dir), exist_ok=True)
+        config_file = os.path.join(self.work_dir, 'config.json')
+        
+        if os.path.exists(config_file):
+            self._load_existing_config(config_file)
+        else:
+            self._create_new_config(config_file)
+        
+        # Store final configuration
+        self.config = copy.deepcopy(self.__dict__)
 
-        Raises:
-            FileExistsError: If the config file already exists and overwriting is not allowed.
-            Exception: If there is an error saving the configuration file.
+    def _load_existing_config(self, config_file):
+        """Load existing configuration file and update with new values
+        that were provided to the constructer of the Trainer class."""
+        try:
+            with open(config_file, 'r') as f:
+                config = json.load(f)
+            
+            logger.warning(f"Config file {config_file} found -> loading configuration")
+            
+            # Update config with any new values provided during initialization
+            updatable_keys = [
+                'dataset_kwargs', 'load_data_kwargs', 'model_kwargs', 'mode_test', 'device',
+                'log_name', 'log_level', 'world_size', 'rank', 'gpus_per_node', 'local_rank', 'num_workers'
+            ]
+            
+            for key in updatable_keys:
+                value = getattr(self, key, None)
+                if value is not None:
+                    config[key] = value
+            
+            # Update trainer object attributes with loaded config
+            self.__dict__.update(**config)
+            
+        except Exception as e:
+            logger.error(f"Error loading configuration file {config_file}: {e}")
+            raise
 
-        Notes:
-            - If `config` is provided, the original configuration will be updated with the new 
-                configuration before training.
-            - If `self.run` is not empty, the new configuration will be saved to a subdirectory.
+    def _create_new_config(self, config_file):
+        """Save configuration file to disk."""
+        config = copy.deepcopy(self.__dict__)
+        logger.info(f"Creating a new configuration file: {config_file}")
+        
+        try:
+            with open(config_file, 'w') as f:
+                f.write(json.dumps(config, indent=4))
+        except Exception as e:
+            logger.error(f"Error saving configuration file: {e}")
+            raise
+
+    def _setup_device_and_logging(self):
+        """Set up device selection and logging (cpu or cuda)."""
+        # Force CPU if CUDA is not available
+        if not torch.cuda.is_available():
+            self.device = torch.device('cpu')
+        
+        # Set up logging if work directory is provided
+        if self.work_dir is not None:
+            self.f_handler = self.set_logger(f'{self.work_dir}/{self.log_name}')
+    
+    def _validate_dataset_consistency(self, new_config):
+        """Validate that dataset_kwargs are consistent between configs to avoid re-using wrong X.pkl normalization.
+        all runs managed by the same Trainer should have the same dataset_kwargs.
         """
-        trial = None # handling optuna trials
-        if config is not None:
-            new_config = copy.deepcopy(config) # to avoid changing the original dictionary
-            trial = new_config.pop('trial',None) # handling optuna trials # TODO: check that this is working in distributed mode
-
-            for key in new_config['dataset_kwargs']:
-                if key in new_config['dataset_kwargs'] and new_config['dataset_kwargs'][key] != self.config['dataset_kwargs'][key]:
-                    logger.warning(f"{key} is inconsistent between self.config and new_config. Check that you are not mixing test/train/validation")
-            logger.warning(f"============Updating the config with the new config============")
-            self.config = new_config
-            self.comprehend_config()
-            if self.run != '': # if we are running a trial, we need to save config to subdirectory
-                if self.rank is None or self.rank == 0: # only rank 0 saves the config file 
-                    config_dir = os.path.join(self.work_dir, self.run)
-                    config_file = os.path.join(config_dir, 'config.json')
-                    if os.path.exists(f"{self.work_dir}/{self.run}/config.json"):
-                        if self.force:
-                            logger.warning(f"Config file {self.work_dir}/{self.run}/config.json already exists. Overwriting due to --force!")
-                            shutil.rmtree(f"{self.work_dir}/{self.run}/")
-                        else:
-                            raise FileExistsError(f"Config file {self.work_dir}/{self.run}/config.json already exists. Overwriting not allowed!")
-                    os.makedirs(config_dir, exist_ok=True)
-                    logger.info(f"Saving the new configuration to {config_file}")
-                    try:
-                        with open(config_file, 'w') as f:
-                            f.write(json.dumps(self.config, indent=4))
-                    except Exception as e:
-                        logger.error(f"Error saving configuration file: {e}")
+        for key in new_config['dataset_kwargs']:
+            if (key in new_config['dataset_kwargs'] and 
+                new_config['dataset_kwargs'][key] != self.config['dataset_kwargs'][key]):
+                logger.warning(
+                    f"{key} is inconsistent between self.config and new_config. "
+                    "Check that you are not mixing test/train/validation"
+                )
+    
+    def _handle_run_config_save(self):
+        """Handle saving configuration for specific runs.
+        This method handles the saving of the configuration file for a specific run.
+        It checks if the run directory already exists and whether to overwrite it based on the `force
+        flag. If the run directory does not exist, it creates it and saves the configuration file.
+        If the run directory exists and `force` is set to True, it will overwrite the
+            existing directory and save the new configuration file. If `force` is not set, it raises a
+            FileExistsError to prevent overwriting existing configurations.
+        It also sets up logging for the run, ensuring that logs are saved to a file in the run directory.
+            """
+        if self.rank is None or self.rank == 0:  # Only rank 0 saves the config file
+            config_dir = os.path.join(self.work_dir, self.run)
+            config_file = os.path.join(config_dir, 'config.json')
+            
+            # Check if config already exists
+            if os.path.exists(config_file):
+                if self.force:
+                    logger.warning(
+                        f"Config file {config_file} already exists. "
+                        "Overwriting due to --force!"
+                    )
+                    shutil.rmtree(os.path.join(self.work_dir, self.run))
                 else:
-                    if not os.path.exists(f"{self.work_dir}/{self.run}/config.json"):
-                        logger.warning(f"Config file {self.work_dir}/{self.run}/config.json not found, which means that the rank=0 did not yet save the configuration file")
-                if self.work_dir is not None:
-                    os.makedirs(os.path.dirname(f"{self.work_dir}/{self.run}/"), exist_ok=True)
-                    self.set_logger(f'{self.work_dir}/{self.run}/run.log')
+                    raise FileExistsError(
+                        f"Config file {config_file} already exists. "
+                        "Overwriting not allowed!"
+                    )
+            
+            # Create directory and save config
+            os.makedirs(config_dir, exist_ok=True)
+            logger.info(f"Saving the new configuration to {config_file}")
+            
+            try:
+                with open(config_file, 'w') as f:
+                    f.write(json.dumps(self.config, indent=4))
+            except Exception as e:
+                logger.error(f"Error saving configuration file: {e}")
+        else:
+            # Non-rank-0 processes check if config exists
+            config_file = os.path.join(self.work_dir, self.run, 'config.json')
+            if not os.path.exists(config_file):
+                logger.warning(
+                    f"Config file {config_file} not found, which means that "
+                    "rank=0 did not yet save the configuration file"
+                )
+        
+        # Set up logging for the run
+        if self.work_dir is not None:
+            os.makedirs(os.path.dirname(f"{self.work_dir}/{self.run}/"), exist_ok=True)
+            self.set_logger(f'{self.work_dir}/{self.run}/run.log')
 
-        logger.info(f'Prior to fit: RAM memory % used: {psutil.virtual_memory()[2]}, RAM Used (GB):, {psutil.virtual_memory()[3]/1000000000}, process RAM usage (GB): {psutil.Process(os.getpid()).memory_info().rss / 1024 ** 3}')
-        best_loss = self.model.fit(self.train_loader, self.val_loader, trial=trial)   
-        logger.info(f'After fit: RAM memory % used: {psutil.virtual_memory()[2]}, RAM Used (GB):, {psutil.virtual_memory()[3]/1000000000}, process RAM usage (GB): {psutil.Process(os.getpid()).memory_info().rss / 1024 ** 3}')
+    def _log_memory_usage(self, phase):
+        """Log current memory usage."""
+        memory_percent = psutil.virtual_memory()[2]
+        memory_gb = psutil.virtual_memory()[3] / 1000000000
+        process_memory_gb = psutil.Process(os.getpid()).memory_info().rss / 1024 ** 3
+        
+        logger.info(
+            f'{phase}: RAM memory % used: {memory_percent}, '
+            f'RAM Used (GB): {memory_gb}, '
+            f'process RAM usage (GB): {process_memory_gb}'
+        )
+
+    def _save_training_results(self):
+        """Save model weights and training history.
+        This method saves the model weights and training history to a specified directory.
+        It checks if the local rank is None or 0 to ensure that only one process saves the results.
+        If the work directory is specified, it creates a subdirectory for the run and
+        saves the model weights and loss history in that directory."""
         if self.local_rank is None or self.local_rank == 0:
             if self.work_dir is not None:
-                logger.info(f"Saving the model weights and loss history to {self.work_dir}/{self.run}/")
-                os.makedirs(os.path.dirname(f"{self.work_dir}/{self.run}/"), exist_ok=True)
-                model_path = f"{self.work_dir}/{self.run}/model.pth"
+                save_dir = os.path.join(self.work_dir, self.run)
+                logger.info(f"Saving the model weights and loss history to {save_dir}/")
+                
+                # Create directory
+                os.makedirs(save_dir, exist_ok=True)
+                
+                # Save model weights
+                model_path = os.path.join(save_dir, 'model.pth')
                 torch.save(self.model.model.state_dict(), model_path)
-                loss_path = f"{self.work_dir}/{self.run}/loss_dict.pkl"
+                
+                # Save loss history
+                loss_path = os.path.join(save_dir, 'loss_dict.pkl')
+                loss_data = {
+                    'train_loss': self.model.train_loss_,
+                    'val_loss': self.model.val_loss_,
+                    'time': self.model.total_time
+                }
                 with open(loss_path, 'wb') as f:
-                    pickle.dump( {'train_loss': self.model.train_loss_,'val_loss': self.model.val_loss_,'time': self.model.total_time}, f)
-       
-        return best_loss
+                    pickle.dump(loss_data, f)
 
     def _get_device(self, device):
         """

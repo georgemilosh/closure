@@ -120,83 +120,117 @@ class PyNet:
             Additional keyword arguments to be passed to the model class constructor, by default None
         
         """
-        model_class =  globals() [model] #getattr(__name__, model)
+        # Store distributed training configuration
         self.local_rank = local_rank
         self.rank = rank
-        logger.info(f"{torch.cuda.is_available() = }")
+        
+        # Initialize model
+        self._initialize_model(model, model_seed, **kwargs)
+        
+        # Configure training components
+        self._configure_training_components(optimizer_kwargs, scheduler_kwargs, logger_kwargs)
+        
+        # Load pre-trained weights if provided
+        if init_path is not None:
+            self.load(init_path)
+    
+    def _initialize_model(self, model_name, model_seed, **kwargs):
+        """Initialize the neural network model with optional distributed training support."""
+        # Get model class from global scope
+        model_class = globals()[model_name]
+        
+        # Set random seed for reproducible weight initialization
+        if model_seed is not None:
+            torch.manual_seed(model_seed)
+        
+        # Create model instance and move to appropriate device
+        logger.info(f"CUDA available: {torch.cuda.is_available()}")
         self.model_ = model_class(**kwargs).to(self.local_rank)
-        logger.info(f"Initializing model {self.model_}")
+        logger.info(f"Initialized model: {self.model_}")
+        
+        # Wrap model for distributed training if possible
         try:
             self.model = DDP(self.model_, device_ids=[self.local_rank])
+            logger.info("Model wrapped with DistributedDataParallel")
         except Exception:
             self.model = self.model_
-            logger.info(f"DDP not available, initializing model using single GPU {self.local_rank = }")
-        if optimizer_kwargs is None:
-            self.optimizer_kwargs = {}
-        else:
-            self.optimizer_kwargs = optimizer_kwargs
-        if scheduler_kwargs is None:
-            self.scheduler_kwargs = {}
-        else:
-            self.scheduler_kwargs = scheduler_kwargs
+            logger.info(f"DDP not available, using single GPU: {self.local_rank}")
+
+    def _configure_training_components(self, optimizer_kwargs, scheduler_kwargs, logger_kwargs):
+        """Configure optimizer, scheduler, and logging components."""
+        # Store configuration dictionaries
+        self.optimizer_kwargs = optimizer_kwargs or {}
+        self.scheduler_kwargs = scheduler_kwargs or {}
+        self.logger_kwargs = logger_kwargs or {}
+        
+        # Extract scheduler-specific parameters
         self.early_stopping = self.scheduler_kwargs.pop('early_stopping', None)
         self.epochs = self.scheduler_kwargs.pop('epochs')
         self.save_every = self.scheduler_kwargs.pop('save_every', None)
-        self.logger_kwargs = logger_kwargs
         
-
-        if model_seed is not None:
-            torch.manual_seed(model_seed) # set the seed for the weights
-        self.define_optimizer_sheduler()
-        #logger.info(f"Successfully parsed the {model_name} class")
-        logger.info(f"Creating object: {self} which contains {self.model} as the model")
-        if init_path is not None:
-            self.load(init_path)
-
-    def define_optimizer_sheduler(self):
-        """
-        Defines the optimization criterion, optimizer, and scheduler for the model. 
-
-        This method handles the following steps:
-        1. Sets the optimization criterion based on the provided criterion name.
-        2. Sets the metrics to track during optimization.
-        3. Sets the optimizer based on the provided optimizer name and parameters.
-        4. Sets the scheduler based on the provided scheduler name and parameters.
-
-        Raises:
-            NotImplementedError: If the provided scheduler name is not recognized.
-
-        """
-        # === Deal with the criterion #
-        criterion = self.optimizer_kwargs.pop('criterion')
+        # Initialize optimizer, scheduler, and criterion
+        self.define_optimizer_scheduler()
+        
+        logger.info(f"Training configuration complete for: {self}")
+    
+    def define_optimizer_scheduler(self):
+        """Configure loss function, optimizer, learning rate scheduler, and metrics."""
+        # Configure loss function (criterion)
+        self._setup_criterion()
+        
+        # Configure additional metrics
+        self._setup_metrics()
+        
+        # Configure optimizer
+        self._setup_optimizer()
+        
+        # Configure learning rate scheduler
+        self._setup_scheduler()
+    
+    def _setup_criterion(self):
+        """Setup the loss function from torch.nn."""
+        criterion_name = self.optimizer_kwargs.pop('criterion')
         try:
-            criterion = getattr(torch.nn, criterion)()
-            self.criterion = criterion
-        except Exception as e:
-            logger.error(f"Criterion {criterion} not recognized. Please use a valid criterion from torch.nn.")
+            self.criterion = getattr(torch.nn, criterion_name)()
+            logger.info(f"Loss function: {self.criterion}")
+        except AttributeError as e:
+            logger.error(f"Unknown criterion: {criterion_name}. Use valid torch.nn criterion.")
             raise e
-        logger.info(f"Optimization criterion {self.criterion}")
-
-        # === Deal with the optimizer === #
-        metrics = self.optimizer_kwargs.pop('metrics', None)
-        self.metrics = metrics
-        if metrics is not None:
-            self.metrics = [getattr(torch.nn, metric)() for metric in metrics]
-            logger.info(f"Tracking metrics {self.metrics}")
+    
+    def _setup_metrics(self):
+        """Setup additional metrics to track during training."""
+        metrics_names = self.optimizer_kwargs.pop('metrics', None)
         
-         # === Deal with the optimizer === #
-        optimizer_name = self.optimizer_kwargs.pop('optimizer')
-        if isinstance(optimizer_name, str):
-            self.optimizer = getattr(torch.optim, optimizer_name)(self.model.parameters(), **self.optimizer_kwargs)
+        if metrics_names is not None:
+            self.metrics = [getattr(torch.nn, metric)() for metric in metrics_names]
+            logger.info(f"Tracking metrics: {[m.__class__.__name__ for m in self.metrics]}")
         else:
-            self.optimizer = optimizer_name # assuming that optimizer is already passed, e.g. optimizer = torch.optim.Adam(model.parameters())
+            self.metrics = None
+    
+    def _setup_optimizer(self):
+        """Setup the optimizer from torch.optim."""
+        optimizer_name = self.optimizer_kwargs.pop('optimizer')
         
-        # === Deal with the scheduler === #
-        scheduler_name = self.scheduler_kwargs.pop('scheduler')
+        if isinstance(optimizer_name, str):
+            optimizer_class = getattr(torch.optim, optimizer_name)
+            self.optimizer = optimizer_class(self.model.parameters(), **self.optimizer_kwargs)
+            logger.info(f"Optimizer: {optimizer_name} with params: {self.optimizer_kwargs}")
+        else:
+            # Assume pre-configured optimizer instance
+            self.optimizer = optimizer_name
+            logger.info("Using pre-configured optimizer instance")
+    
+    def _setup_scheduler(self):
+        """Setup the learning rate scheduler from torch.optim.lr_scheduler."""
+        scheduler_name = self.scheduler_kwargs.pop('scheduler', None)
+        
         if scheduler_name is not None:
-            self.scheduler = getattr(torch.optim.lr_scheduler, scheduler_name)(self.optimizer, **self.scheduler_kwargs)
+            scheduler_class = getattr(torch.optim.lr_scheduler, scheduler_name)
+            self.scheduler = scheduler_class(self.optimizer, **self.scheduler_kwargs)
+            logger.info(f"Scheduler: {scheduler_name} with params: {self.scheduler_kwargs}")
         else:
             self.scheduler = None
+            logger.info("No learning rate scheduler configured")
 
     @property
     def device(self):
@@ -262,24 +296,38 @@ class PyNet:
 
     def _compute_loss(self, prediction, ground_truth, criterion):
         """
-        Compute the loss between the ground_truth and prediction values using the provided criterion.        
+        Compute loss between predictions and ground truth.
+        
+        Args:
+            prediction: Model predictions
+            ground_truth: Target values
+            criterion: Loss function
+            
+        Returns:
+            torch.Tensor: Computed loss
         """
+        # Ensure inputs are tensors
         if not isinstance(prediction, torch.Tensor):
-            logger.warning(f'Object target is not a tensor. Casting to tensor of {self.targets_dtype}.')
+            logger.warning("Converting prediction to tensor")
             prediction = torch.tensor(prediction, dtype=self.targets_dtype)
+        
         if not isinstance(ground_truth, torch.Tensor):
-            logger.warning(f'Object ground_truth is not a tensor. Casting to tensor of {self.targets_dtype}.')
+            logger.warning("Converting ground truth to tensor")
             ground_truth = torch.tensor(ground_truth, dtype=self.targets_dtype)
+        
+        # Compute loss
         try:
-            loss = criterion(prediction.to(self.device), ground_truth.to(self.device))
+            loss = criterion(
+                prediction.to(self.device), 
+                ground_truth.to(self.device)
+            )
+            return loss
         except Exception as e:
-            logger.info(f"{ground_truth.shape =  }, {prediction.shape = }, {criterion = }, {prediction.dtype = }, {ground_truth.dtype = }")
-            logger.error(f"Error in computing loss: {e}")
+            logger.error(f"Loss computation failed:")
+            logger.error(f"  Prediction shape: {prediction.shape}")
+            logger.error(f"  Ground truth shape: {ground_truth.shape}")
+            logger.error(f"  Criterion: {criterion}")
             raise e
-
-        # apply regularization if any
-        # loss += penalty.item() 
-        return loss
     
     def _forward_pass(self, loader, phase='test'):
         """

@@ -214,7 +214,7 @@ def build_XY(files_path,choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, ch
 
 
 def read_features_targets(files_path, filenames, fields_to_read=None, request_features = None, request_targets = None, 
-               choose_species=None,choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, choose_z=DEFAULT_CHOOSE_Z, feature_dtype = np.float32, target_dtype = np.float32,  verbose=DEFAULT_VERBOSE):
+               choose_species=None,choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, choose_z=DEFAULT_CHOOSE_Z, features_dtype = np.float32, targets_dtype = np.float32,  verbose=DEFAULT_VERBOSE):
     """
     Reads and extracts features and targets from simulation data files.
         # Read qom, Lx, Ly, Lz, nxc, nyc, nzc and dt from the SimulationData.txt file.
@@ -229,8 +229,8 @@ def read_features_targets(files_path, filenames, fields_to_read=None, request_fe
         choose_x (tuple, optional): The range of x-coordinates to choose from. If None, all x-coordinates will be considered.
         choose_y (tuple, optional): The range of y-coordinates to choose from. If None, all y-coordinates will be considered.
         choose_z (tuple, optional): The range of z-coordinates to choose from. If None, all z-coordinates will be considered.
-        feature_dtype (dtype, optional): The data type to use for the extracted features.
-        target_dtype (dtype, optional): The data type to use for the extracted targets.
+        features_dtype (dtype, optional): The data type to use for the extracted features.
+        targets_dtype (dtype, optional): The data type to use for the extracted targets.
         verbose (bool, optional): Whether to print verbose output during the extraction process.
 
     Returns:
@@ -274,13 +274,13 @@ def read_features_targets(files_path, filenames, fields_to_read=None, request_fe
         for i in range(len(choose_x)): # deal with the situation where the user wants to extract multiple regions
             assert len(choose_x) == len(choose_y), "choose_x and choose_y must have the same length"
             
-            features.append(read_files(files_path, filenames, fields_to_read, qom, feature_dtype, 
+            features.append(read_files(files_path, filenames, fields_to_read, qom, features_dtype, 
                           extract_fields=ut.species_to_list(request_features), choose_species=choose_species, 
                           choose_x=choose_x[i], choose_y=choose_y[i], choose_z=choose_z[i], verbose=verbose))
             if verbose:
                 logger.info(f"{features[-1].shape =}")
             
-            targets.append(read_files(files_path, filenames, fields_to_read, qom, target_dtype,
+            targets.append(read_files(files_path, filenames, fields_to_read, qom, targets_dtype,
                             extract_fields=ut.species_to_list(request_targets), choose_species=choose_species, 
                             choose_x=choose_x[i], choose_y=choose_y[i], choose_z=choose_z[i], verbose=verbose)) 
             if verbose:
@@ -288,10 +288,10 @@ def read_features_targets(files_path, filenames, fields_to_read=None, request_fe
         features = np.concatenate(features,axis=2)
         targets = np.concatenate(targets,axis=2) 
     else:
-        features = read_files(files_path, filenames, fields_to_read, qom, feature_dtype, 
+        features = read_files(files_path, filenames, fields_to_read, qom, features_dtype, 
                             extract_fields=ut.species_to_list(request_features), choose_species=choose_species, 
                             choose_x=choose_x, choose_y=choose_y, choose_z=choose_z, verbose=verbose)
-        targets = read_files(files_path, filenames, fields_to_read, qom, target_dtype, 
+        targets = read_files(files_path, filenames, fields_to_read, qom, targets_dtype, 
                             extract_fields=ut.species_to_list(request_targets), choose_species=choose_species, 
                             choose_x=choose_x, choose_y=choose_y, choose_z=choose_z, verbose=verbose)
 

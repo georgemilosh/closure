@@ -274,66 +274,6 @@ class ChannelDataLoader(DataLoader):
                  subsample_rate=None, subsample_seed=None, patch_dim=None, sampler_type='serial', 
                  world_size = None, rank = None, gpus_per_node = None, local_rank = None,
                  **kwargs):
-        self.request_features = dataset.request_features
-        self.request_targets = dataset.request_targets
-        self.sampler_type = sampler_type  # 'serial' or 'distributed'
-        self.world_size = world_size # TODO: add this line here >>> 
-            # if world_size is not None else dist.get_world_size() if dist.is_available() else 1
-        self.rank = rank
-        self.gpus_per_node = gpus_per_node
-        self.local_rank = local_rank
-        if feature_channel_names is not None:
-            self.feature_channels = [self.request_features.index(channel) for channel in feature_channel_names]
-        else:
-            self.feature_channels = None
-        if target_channel_names is not None:
-            self.target_channels = [self.request_targets.index(channel) for channel in target_channel_names]
-        else:
-            self.target_channels = None
-        logger.info(f"ChannelDataLoader.feature_channels: {self.feature_channels}")
-        logger.info(f"ChannelDataLoader.target_channels: {self.target_channels}")
-        
-        self.subsample_rate = subsample_rate
-        self.subsample_seed = subsample_seed
-        if kwargs['batch_size'] is not None:
-            if self.subsample_rate is not None:
-                assert kwargs['batch_size'] <= self.subsample_rate*len(dataset), "Batch size must be less than the number of samples in the dataset times subsample rate (ideally several times). Try increasing the latter"
-            else:
-                assert kwargs['batch_size'] <= len(dataset), "Batch size must be less than the number of samples in the dataset"
-        if self.subsample_seed is not None:
-            np.random.seed(self.subsample_seed)
-        
-        self.patch_dim = patch_dim
-        if self.patch_dim is not None: # custom cropping if needed
-            logger.info(f"Using {self.patch_dim = }")
-            assert len(self.patch_dim) == 2, "Patch dimensions must be a list of length 2"
-            assert dataset.flatten == False, "Patch sampling only works with non-flattened data"
-            assert self.patch_dim[0] <= dataset.features.shape[2], "Patch width must be less than or equal to the image width"
-            assert self.patch_dim[1] <= dataset.features.shape[3], "Patch height must be less than or equal to the image height"
-
-        seed = kwargs.pop('seed', None) # these are only needed if subsample_rate is not None
-        shuffle = kwargs.pop('shuffle', False) # these are only needed if subsample_rate is not None
-
-        if self.subsample_rate is None: # By default use the full dataset
-            self.subsample_rate = 1
-
-        
-        logger.info(f"{len(dataset.features)}, {len(dataset.targets) = } samples before subsampling")
-        self.subset = np.random.permutation(int(len(dataset.features)*self.subsample_rate))
-        if self.subsample_rate > 1:
-            self.subset = self.subset % len(dataset.features)  # if subsample_rate > 1, then we want to loop over the dataset multiple times
-            
-        logger.info(f"{len(self.subset) = } samples after subsampling")
-        
-        if sampler_type == 'distributed':
-            self.sampler = DistributedSampler(self.subset, num_replicas=self.world_size, rank=self.rank)
-        elif sampler_type == 'serial':
-            self.sampler = SubSampler(self.subset, seed=seed, shuffle=shuffle)
-        else:
-            raise ValueError(f"Sampler type {sampler_type} not recognized")
-        super().__init__(dataset, sampler=self.sampler, **kwargs)
-    
-    def __iter__(self):
         """
         Args:
             dataset (Dataset): The dataset to load the data from.
@@ -357,55 +297,225 @@ class ChannelDataLoader(DataLoader):
                 Another option is 'distributed'.
             **kwargs: Additional keyword arguments to be passed to the parent DataLoader class.
         """
+        self.request_features = dataset.request_features
+        self.request_targets = dataset.request_targets
+
+        self.world_size = world_size
+        self.rank = rank
+        self.gpus_per_node = gpus_per_node
+        self.local_rank = local_rank
+        self.sampler_type = sampler_type
+        
+        # Convert channel names to indices
+        self.feature_channels = self._get_channel_indices(feature_channel_names, self.request_features)
+        self.target_channels = self._get_channel_indices(target_channel_names, self.request_targets)
+        
+        # Log channel selection
+        logger.info(f"Selected feature channels: {self.feature_channels}")
+        logger.info(f"Selected target channels: {self.target_channels}")
+        
+        # Configure subsampling
+        self._configure_subsampling(subsample_rate, subsample_seed, dataset, kwargs)
+        
+        # Configure patch extraction
+        self._configure_patch_extraction(patch_dim, dataset)
+        
+        # Create sampler and initialize parent DataLoader
+        self._create_sampler_and_initialize(dataset, kwargs)
+    
+    def __iter__(self):
+        """
+        Iterate through the dataset with channel selection and patch extraction.
+        
+        Yields:
+            Tuple[torch.Tensor, torch.Tensor]: (features, targets) with applied transformations
+        """
         for features, targets in super().__iter__():
-            if self.feature_channels is not None or self.target_channels is not None:
-                patched_features = features[:, self.feature_channels, ...]
-                patched_targets = targets[:, self.target_channels, ...]
-            else:
-                patched_features = features
-                patched_targets = targets
+            # Apply channel selection
+            processed_features, processed_targets = self._apply_channel_selection(features, targets)
+            
+            # Apply patch extraction if configured
+            if self.patch_dim is not None:
+                processed_features, processed_targets = self._extract_patches(
+                    processed_features, processed_targets
+                )
+            
+            # Ensure proper tensor dimensions
+            processed_features = self._ensure_batch_dimension(processed_features)
+            processed_targets = self._ensure_batch_dimension(processed_targets)
+            
+            yield processed_features, processed_targets
 
-            if self.patch_dim is not None:  # custom cropping
-                # Generate random start points for patches
-                if len(features.shape) == 4:
-                    x_starts = np.random.randint(0, features.shape[-2] - self.patch_dim[0], size=features.shape[0])
-                    y_starts = np.random.randint(0, features.shape[-1] - self.patch_dim[1], size=features.shape[0])
-                elif len(features.shape) == 3:
-                    x_starts = np.random.randint(0, features.shape[-2] - self.patch_dim[0])
-                    y_starts = np.random.randint(0, features.shape[-1] - self.patch_dim[1])
-                else:
-                    raise ValueError(f"Features and targets must have either 3 or 4 dimensions, but got {features.shape = }, {targets.shape = }")
-                features_shape = list(features.shape)
-                features_shape[-2] = self.patch_dim[0]
-                features_shape[-1] = self.patch_dim[1]
-                features_shape = tuple(features_shape)
-                targerts_shape = list(targets.shape)
-                targerts_shape[-2] = self.patch_dim[0]
-                targerts_shape[-1] = self.patch_dim[1]
-                targerts_shape = tuple(targerts_shape)
-                patched_features = torch.empty(features_shape)
-                patched_targets = torch.empty(targerts_shape)
+    def _get_channel_indices(self, channel_names, available_channels):
+        """Convert channel names to indices for data selection."""
+        if channel_names is None:
+            return None
+        return [available_channels.index(channel) for channel in channel_names]
+
+    def _configure_subsampling(self, subsample_rate, subsample_seed, dataset, kwargs):
+        """Configure dataset subsampling parameters and validate batch size."""
+        self.subsample_rate = subsample_rate if subsample_rate is not None else 1.0
+        self.subsample_seed = subsample_seed
+        
+        # Set random seed for reproducibility
+        if subsample_seed is not None:
+            np.random.seed(subsample_seed)
+        
+        # Validate batch size against dataset size
+        if kwargs.get('batch_size') is not None:
+            max_samples = int(self.subsample_rate * len(dataset))
+            batch_size = kwargs['batch_size']
+            
+            if batch_size > max_samples:
+                raise ValueError(
+                    f"Batch size ({batch_size}) must be less than dataset size × subsample_rate "
+                    f"({max_samples}). Consider increasing subsample_rate or decreasing batch_size."
+                )
+
+    def _configure_patch_extraction(self, patch_dim, dataset):
+        """Configure random patch extraction from images, e.g. 
+        for selecting patches from images for training."""
+        self.patch_dim = patch_dim
+        
+        if patch_dim is None:
+            return
+        
+        # Validate patch dimensions
+        if len(patch_dim) != 2:
+            raise ValueError("Patch dimensions must be [width, height]")
+        
+        if dataset.flatten:
+            raise ValueError("Patch sampling requires non-flattened data (set flatten=False)")
+        
+        # Validate patch size against image dimensions
+        image_height, image_width = dataset.features.shape[2], dataset.features.shape[3]
+        patch_width, patch_height = patch_dim
+        
+        if patch_width > image_width or patch_height > image_height:
+            raise ValueError(
+                f"Patch size ({patch_width}×{patch_height}) cannot exceed "
+                f"image size ({image_width}×{image_height})"
+            )
+        
+        logger.info(f"Patch extraction enabled: {patch_width}×{patch_height} patches")
+
+    def _create_sampler_and_initialize(self, dataset, kwargs):
+        """Create appropriate sampler and initialize parent DataLoader."""
+        # Extract sampler-specific parameters
+        seed = kwargs.pop('seed', None)
+        shuffle = kwargs.pop('shuffle', False)
+        
+        # Create subset indices for subsampling
+        total_samples = len(dataset.features)
+        subset_size = int(total_samples * self.subsample_rate)
+        
+        logger.info(f"Dataset size: {total_samples} samples before subsampling")
+        
+        # Generate subset indices
+        self.subset = np.random.permutation(subset_size)
+        if self.subsample_rate > 1.0:
+            # Handle oversampling by cycling through indices
+            self.subset = self.subset % total_samples
+        
+        logger.info(f"Subset size: {len(self.subset)} samples after subsampling")
+        
+        # Create appropriate sampler
+        if self.sampler_type == 'distributed':
+            self.sampler = DistributedSampler(
+                self.subset, 
+                num_replicas=self.world_size, 
+                rank=self.rank
+            )
+        elif self.sampler_type == 'serial':
+            self.sampler = SubSampler(
+                self.subset, 
+                seed=seed, 
+                shuffle=shuffle
+            )
+        else:
+            raise ValueError(f"Unknown sampler type: {self.sampler_type}")
+        
+        # Initialize parent DataLoader
+        super().__init__(dataset, sampler=self.sampler, **kwargs)
+
+   
+
+    def _apply_channel_selection(self, features, targets):
+        """Select specific channels from features and targets
+             using self.feature_channels and self.target_channels."""
+        if self.feature_channels is not None:
+            selected_features = features[:, self.feature_channels, ...]
+        else:
+            selected_features = features
+        
+        if self.target_channels is not None:
+            selected_targets = targets[:, self.target_channels, ...]
+        else:
+            selected_targets = targets
+        
+        return selected_features, selected_targets
+
+    def _extract_patches(self, features, targets):
+        """Extract random patches from features and targets.
+        The method presupposes that you have run _configure_patch_extraction prior to this call."""
+        batch_size = features.shape[0]
+        patch_width, patch_height = self.patch_dim
+        
+        if len(features.shape) == 4:  # Batch of images
+            # Generate random patch positions for each sample in batch
+            max_x = features.shape[-2] - patch_width
+            max_y = features.shape[-1] - patch_height
+            
+            x_starts = np.random.randint(0, max_x, size=batch_size)
+            y_starts = np.random.randint(0, max_y, size=batch_size)
+            
+            # Pre-allocate output tensors
+            patch_features = torch.empty(
+                (batch_size, features.shape[1], patch_width, patch_height),
+                dtype=features.dtype
+            )
+            patch_targets = torch.empty(
+                (batch_size, targets.shape[1], patch_width, patch_height),
+                dtype=targets.dtype
+            )
+            
+            # Extract patches for each sample
+            for i, (x_start, y_start) in enumerate(zip(x_starts, y_starts)):
+                x_end = x_start + patch_width
+                y_end = y_start + patch_height
                 
-                # Extract patches using advanced indexing
-                if len(features.shape) == 4:
-                    for i, (x, y) in enumerate(zip(x_starts, y_starts)):
-                        patched_features[i] = features[i, ..., x:x+self.patch_dim[0], y:y+self.patch_dim[1]]
-                        patched_targets[i] = targets[i, ..., x:x+self.patch_dim[0], y:y+self.patch_dim[1]]
-                elif len(features.shape) == 3:
-                    try:
-                        patched_features = features[..., x_starts:x_starts+self.patch_dim[0], y_starts:y_starts+self.patch_dim[1]]
-                        patched_targets = targets[..., x_starts:x_starts+self.patch_dim[0], y_starts:y_starts+self.patch_dim[1]]
-                    except Exception as e:
-                        logger.error(f"{features.shape = }, {x_starts = }, {y_starts = }, {self.patch_dim = }")
-                        raise e
-                else:
-                    raise ValueError(f"Features and targets must have either 3 or 4 dimensions, but got {features.shape = }, {targets.shape = }")
-            if len(patched_features.shape) == 3:
-                patched_features = patched_features.unsqueeze(0)
-            if len(patched_targets.shape) == 3:
-                patched_targets = patched_targets.unsqueeze(0)
+                patch_features[i] = features[i, :, x_start:x_end, y_start:y_end]
+                patch_targets[i] = targets[i, :, x_start:x_end, y_start:y_end]
+            
+            return patch_features, patch_targets
+        
+        elif len(features.shape) == 3:  # Single image
+            max_x = features.shape[-2] - patch_width
+            max_y = features.shape[-1] - patch_height
+            
+            x_start = np.random.randint(0, max_x)
+            y_start = np.random.randint(0, max_y)
+            
+            x_end = x_start + patch_width
+            y_end = y_start + patch_height
+            
+            patch_features = features[:, x_start:x_end, y_start:y_end]
+            patch_targets = targets[:, x_start:x_end, y_start:y_end]
+            
+            return patch_features, patch_targets
+        
+        else:
+            raise ValueError(
+                f"Expected 3D or 4D tensors, got features: {features.shape}, targets: {targets.shape}"
+            )
 
-            yield patched_features, patched_targets
+    def _ensure_batch_dimension(self, tensor):
+        """Ensure tensor has batch dimension.
+        If tensor is 3D, add a batch dimension at the front.
+        If tensor is already 4D, return it as is."""
+        if len(tensor.shape) == 3:
+            return tensor.unsqueeze(0)
+        return tensor
 
 class DataFrameDataset(torch.utils.data.Dataset):
     
@@ -427,10 +537,10 @@ class DataFrameDataset(torch.utils.data.Dataset):
     See constructor of this class for the Args.
 
     Attributes:
-        target_dtype (torch.dtype):             The data type of the targets when __getitem__ is called by data loader
-        target_dtype_numpy (numpy.dtype):       The original pre-processed data type of the targets in numpy format
-        feature_dtype (torch.dtype):            The data type of the features when __getitem__ is called by data loader
-        feature_dtype_numpy (numpy.dtype):      The original pre-processed data type of the features in numpy format.
+        targets_dtype (torch.dtype):             The data type of the targets when __getitem__ is called by data loader
+        targets_dtype_numpy (numpy.dtype):       The original pre-processed data type of the targets in numpy format
+        features_dtype (torch.dtype):            The data type of the features when __getitem__ is called by data loader
+        features_dtype_numpy (numpy.dtype):      The original pre-processed data type of the features in numpy format.
         scaler_features (tuple or None):        The scaler (normalization) applied after pre-scaler to features.
         scaler_targets (tuple or None):         The scaler (normalization) applied after pre-scaler to targets.
         prescaler_features (list or None):      The pre-scaler functions (such as log) to apply to the features.
@@ -473,8 +583,8 @@ class DataFrameDataset(torch.utils.data.Dataset):
             data_folder='/path/to/data',
             norm_folder='/path/to/norm',
             samples_file='/path/to/samples.csv',
-            feature_dtype='float32',
-            target_dtype='float32',
+            features_dtype='float32',
+            targets_dtype='float32',
             scaler_features=None,
             scaler_targets=None,
             transform={'RandomCrop': {'size': (16, 16)}, 'apply': ['train']},
@@ -490,34 +600,29 @@ class DataFrameDataset(torch.utils.data.Dataset):
         __getitem__(idx): Returns the features and targets for a given index.
 
     """
-    def __init__(self, data_folder: str,  # where the images are stored
-                 norm_folder: str, # where to save the normalization parameters
-                 feature_dtype = 'float32', # data type of the features when __getitem__ is called
-                 target_dtype = 'float32', # data type of the targets when __getitem__ is called
-                 feature_dtype_numpy = 'float64', # data type of the features
-                 target_dtype_numpy = 'float64', # data type of the targets
-                 samples_file = None,
-                 prescaler_features: str = None,
-                 prescaler_targets: str = None,
-                 scaler_features = None,
-                 scaler_targets = None,
-                 datalabel = 'train',
-                 flatten = True,
-                 image_file_name_column='filenames',
-                 read_features_targets_kwargs = None,
-                 filter_features = None, # filter to apply to the features
-                 filter_targets = None, # filter to apply to the targets
-                 transform = None, # transform to apply to the features and targets
-                 ):
+    def __init__(self, data_folder: str, norm_folder: str, samples_file: str = None,
+                 features_dtype: str = 'float32', targets_dtype: str = 'float32',
+                 features_dtype_numpy: str = 'float64', targets_dtype_numpy: str = 'float64',
+                 prescaler_features: list = None, prescaler_targets: list = None,
+                 scaler_features: bool = None, scaler_targets: bool = None,
+                 datalabel: str = 'train', flatten: bool = True,
+                 image_file_name_column: str = 'filenames',
+                 read_features_targets_kwargs: dict = None,
+                 filter_features: dict = None, filter_targets: dict = None,
+                 transform: dict = None):
         """
         Args:
             data_folder (str): The folder where the images are stored.
             norm_folder (str): The folder to save the normalization parameters.
-            feature_dtype (str, optional): The data type of the features when __getitem__ is called. 
+            samples_file: CSV file with sample filenames and metadata
+            features_dtype (str, optional): The data type of the features when __getitem__ is called. 
                 Defaults to 'float32'.
-            target_dtype (str, optional): The data type of the targets when __getitem__ is called. 
+            targets_dtype (str, optional): The data type of the targets when __getitem__ is called. 
                 Defaults to 'float32'.
-            feature_dtype_numpy (str, optional): The data type of the features. Defaults to 'float32'.
+            datalabel: Dataset split label ('train', 'val', 'test')
+            flatten: If True, flatten spatial dimensions for pixel-wise processing
+            image_file_name_column: Column name in CSV containing filenames
+            features_dtype_numpy (str, optional): The data type of the features. Defaults to 'float32'.
             target_dtype_numpy (str, optional): The data type of the targets. Defaults to 'float32'.
             samples_file (str, optional): The file containing the sample filenames. Defaults to None.
             prescaler_features (str, optional): The pre-scaler function to apply to the features. Defaults to None.
@@ -532,126 +637,85 @@ class DataFrameDataset(torch.utils.data.Dataset):
                 `read_features_targets` function. Defaults to None.
             filter_features (str, optional): The filter to apply to the features. Defaults to None.
             filter_targets (str, optional): The filter to apply to the targets. Defaults to None.
+            transform: Data augmentation transforms (applied only to specified splits)
         """
-        self.features_mean = None  # TODO: check that this doesn't break something
-        self.features_std = None
-        self.flatten = flatten
-        
-        self.target_dtype = getattr(torch, target_dtype) # parsing: convert string to torch.dtype object
-        self.target_dtype_numpy = getattr(numpy, target_dtype_numpy)
-        self.feature_dtype = getattr(torch, feature_dtype)
-        self.feature_dtype_numpy = getattr(numpy, feature_dtype_numpy)
-        self.scaler_features = scaler_features
-        self.scaler_targets = scaler_targets
-
-        self.prescaler_targets = prescaler_targets
-        if prescaler_features is not None:
-            self.prescaler_features = [getattr(numpy, prescaler_features) 
-                                       if prescaler_features is not None else None for 
-                                       prescaler_features in prescaler_features] #assuming some single variable function like numpy.log
-        else:
-            self.prescaler_features = prescaler_features
-        
-        self.filter_featuers_kwargs = None
-        
-        if filter_features is not None:
-            filter_features_copy = filter_features.copy()
-            logger.info("Filtering features")
-            if not isinstance(filter_features, dict):
-                self.filter_features = getattr(nd, filter_features_copy)
-            else:
-                filter_features_name = filter_features_copy.pop("name", None)
-                self.filter_features = getattr(nd, filter_features_name)
-                self.filter_featuers_kwargs = filter_features_copy
-                if isinstance(self.filter_featuers_kwargs['axes'], list):
-                    self.filter_featuers_kwargs['axes'] = tuple(self.filter_featuers_kwargs['axes'])
-                if self.filter_featuers_kwargs['axes'] is None or self.filter_featuers_kwargs['axes'] != (1,2):
-                    logger.warning(f"Filtering features should be aplied to only spatial dimensions. {self.filter_featuers_kwargs['axes'] = } and it should be (1.2)")
-        else:
-            self.filter_features = None
-        self.filter_targets_kwargs = None
-        if filter_targets is not None:
-            filter_targets_copy = filter_targets.copy()  # to avoid overwriting filters for later use
-            logger.info("Filtering targets")
-            if not isinstance(filter_targets, dict):
-                self.filter_targets = getattr(nd, filter_targets_copy)
-            else:
-                filter_targets_name = filter_targets_copy.pop("name", None)
-                self.filter_targets = getattr(nd, filter_targets_name)
-                self.filter_targets_kwargs = filter_targets_copy
-                if isinstance(self.filter_targets_kwargs['axes'], list):
-                    self.filter_targets_kwargs['axes'] = tuple(self.filter_targets_kwargs['axes'])
-                if self.filter_targets_kwargs['axes'] is None or self.filter_targets_kwargs['axes'] != (1,2):
-                    logger.warning("Filtering targets should be aplied to only spatial dimensions")
-        else:
-            self.filter_targets = None
-
-        if prescaler_targets is not None:
-            self.prescaler_targets = [getattr(numpy, prescaler_targets) 
-                                      if prescaler_targets is not None else None for 
-                                      prescaler_targets in prescaler_targets] #assuming some single variable function like numpy.log
-        else:
-            self.prescaler_targets = prescaler_targets
-        self.datalabel = datalabel
-        logger.info(f" This is {self.datalabel} set")
-        self.samples_file = samples_file
-        self.image_file_name_column = image_file_name_column
+         # Store basic configuration
         self.data_folder = data_folder
         self.norm_folder = norm_folder
-        if read_features_targets_kwargs is None:
-            self.read_features_targets_kwargs = {}
-        else:
-            self.read_features_targets_kwargs = read_features_targets_kwargs
-
-        if transform is not None: 
-            transform_copy = copy.deepcopy(transform)
-            if self.datalabel in transform_copy.pop('apply', None): # if the transform is to be applied to this dataset (e.g. train)
-                from torchvision.transforms import v2
-                logger.info(f"Transforms applied to {self.datalabel} set are {transform_copy.keys()}")
-                self.transform = v2.Compose([getattr(v2, name)(**params) for name, params in transform_copy.items()])
-            else:
-                logger.info(f"Transforms not applied to {self.datalabel} set")
-        else:
-            self.transform = None
-            
+        self.samples_file = samples_file
+        self.datalabel = datalabel
+        self.flatten = flatten
+        self.image_file_name_column = image_file_name_column
         self.logger = logger
+        # Extract feature and target channel names
+        self.read_features_targets_kwargs = read_features_targets_kwargs or {}
+        self.request_features = self.read_features_targets_kwargs.get('request_features', None)
+        self.request_targets = self.read_features_targets_kwargs.get('request_targets', None)
+
+        logger.info(f" This is {self.datalabel} set")
+        
+        # Configure data types
+        self._setup_data_types(features_dtype, targets_dtype, features_dtype_numpy, targets_dtype_numpy)
+        
+        # Configure preprocessing options
+        self._setup_preprocessing(prescaler_features, prescaler_targets, scaler_features, scaler_targets)
+        
+        # Configure filtering
+        self._setup_filtering(filter_features, filter_targets)
+        
+        # Configure transforms
+        self._setup_transforms(transform)
+        
+        # Load and process data
+        self.load_original()
+        self.scale_data()
 
         self.load_original()
         self.scale_data()
     
     def load_original(self):
-        """
-        Loads the datarame from a file containing filenames which will be used to create this dataset. 
-        Prepares the features and targets for further processing based on this dataframe.
-
-        """
-        logger.info(f"Datasplit performed according to {self.samples_file}")
+        """Load data from files specified in the CSV samples file, which splits 
+        the data into train, validation, and test sets. Request to load features and targets
+        specified in read_features_targets_kwargs and reshape according to flatten condition."""
+        logger.info(f"Loading data split from: {self.samples_file}")
+        
+        # Load sample metadata
         self.dataframe = pd.read_csv(self.samples_file)
-        self.dataframe = self.dataframe.reset_index(drop=True, inplace=False)
-        
-        
+        self.dataframe = self.dataframe.reset_index(drop=True)
         self.filenames = self.dataframe[self.image_file_name_column].tolist()
-
-        self.request_features = self.read_features_targets_kwargs.get('request_features', None)
-        self.request_targets = self.read_features_targets_kwargs.get('request_targets', None)
-        self.features, self.targets = rp.read_features_targets(self.data_folder, self.filenames, 
-                    feature_dtype = self.feature_dtype_numpy, 
-                    target_dtype = self.target_dtype_numpy,**self.read_features_targets_kwargs)
+        
+        
+        # Load features and targets from files
+        self.features, self.targets = rp.read_features_targets(
+            self.data_folder, self.filenames,
+            features_dtype=self.features_dtype_numpy,
+            targets_dtype=self.targets_dtype_numpy,
+            **self.read_features_targets_kwargs
+        )
+        
+        # Apply filtering if configured
         if self.filter_features is not None:
-            self.features = self.filter_features(self.features, **self.filter_featuers_kwargs)
+            self.features = self.filter_features(self.features, **self.filter_features_kwargs)
+        
         if self.filter_targets is not None:
             self.targets = self.filter_targets(self.targets, **self.filter_targets_kwargs)
+        
+        # Store original shapes
         self.features_shape = self.features.shape
         self.targets_shape = self.targets.shape
+        
+        # Reshape data based on processing mode
         if self.flatten:
+            # Flatten for pixel-wise processing (MLP models)
             self.features = self.features.reshape(-1, self.features.shape[-1])
             self.targets = self.targets.reshape(-1, self.targets.shape[-1])
         else:
+            # Convert to channel-first format for CNN models (NCHW)
             self.features = self.features.transpose(0, 3, 1, 2)
             self.targets = self.targets.transpose(0, 3, 1, 2)
-        logger.info(f"Features shape: {self.features.shape}, Targets shape: {self.targets.shape}")
-
-        self.samples = self.targets.shape[0]
+        
+        logger.info(f"Data shape - Features: {self.features.shape}, Targets: {self.targets.shape}")
+        self.samples = self.features.shape[0]
 
     def scale_data(self): 
         """
@@ -669,75 +733,17 @@ class DataFrameDataset(torch.utils.data.Dataset):
         
         Repeat 1-3 for the targets.
         """
-        # === dealing with features ======
-        if self.prescaler_features is not None and self.prescaler_features is not False:
-            for channel in range(self.features.shape[1]):
-                if self.prescaler_features[channel] is not None:
-                    self.features[:,channel,...] = self.prescaler_features[channel](self.features[:,channel,...])
-                    logger.info(f"Prescaling { self.prescaler_features[channel]} applied to features")
-        if self.scaler_features is not None and self.scaler_features is not False:
-            #processing_folder, samples_file_name = self.samples_file.rsplit('/', 1)
-            name = f'{self.norm_folder}/X.pkl' #_{samples_file_name}_{str(self.prescaler_features)}.pkl' # X_{samples_file_name}_{str(self.prescaler_features)}.pkl'
-            if os.path.exists(name):
-                self.features_mean, self.features_std = joblib.load(name)
-                logger.info(f"Loaded self.features_mean, self.features_std from {name}")
-            else:
-                if self.datalabel == 'train':
-                    if len(self.features.shape) > 2:
-                        self.features_mean = np.asarray(np.mean(self.features, axis=(0, 2, 3)), dtype=self.feature_dtype_numpy)
-                        self.features_std = np.asarray(np.std(self.features, axis=(0, 2, 3)), dtype=self.feature_dtype_numpy)
-                    else:
-                        self.features_mean = np.asarray(np.mean(self.features, axis=0), dtype=self.feature_dtype_numpy)
-                        self.features_std = np.asarray(np.std(self.features, axis=0), dtype=self.feature_dtype_numpy)
-                    joblib.dump((self.features_mean, self.features_std), name)
-                    logger.info(f"Saved self.features_mean, self.features_std to {name}")
-                else:
-                    raise ValueError(f"Scalers for features are not provided and the file {name} does not exist. Please provide the scalers or ensure that the file exists.")
-            logger.info("Normalization applied to features")
-            for channel in range(self.features.shape[1]):
-                try:
-                    self.features[:,channel,...] -= self.features_mean[channel]
-                except Exception as e:
-                    logger.info(f"{self.features.shape = }, {self.features_mean = }")
-                    raise e
-                self.features[:,channel,...] /= self.features_std[channel]
-        else:
-            self.features_mean = None
-            self.features_std = None
-        # === dealing with targets ======
-        if self.prescaler_targets is not None and self.prescaler_targets is not False:
-            for channel in range(self.targets.shape[1]):
-                if self.prescaler_targets[channel] is not None:
-                    self.targets[:,channel,...] = self.prescaler_targets[channel](self.targets[:,channel,...])
-                    logger.info(f"Prescaling { self.prescaler_targets[channel]} applied to targets")    
-        if self.scaler_targets is not None and self.scaler_targets is not False:
-            #processing_folder, samples_file_name = self.samples_file.rsplit('/', 1)
-            name = f'{self.norm_folder}/y.pkl' #y_{samples_file_name}_{str(self.prescaler_targets)}.pkl'
-            if os.path.exists(name):
-                self.targets_mean, self.targets_std = joblib.load(name)
-                logger.info(f"Loaded self.targets_mean, self.targets_std from {name}")
-            else:
-                if self.datalabel == 'train':
-                    if len(self.targets.shape) > 2:
-                        self.targets_mean = np.asarray(np.mean(self.targets, axis=(0, 2, 3)), dtype=self.target_dtype_numpy)
-                        self.targets_std = np.asarray(np.std(self.targets, axis=(0, 2, 3)), dtype=self.target_dtype_numpy)
-                    else:
-                        self.targets_mean = np.asarray(np.mean(self.targets, axis=0), dtype=self.target_dtype_numpy)
-                        self.targets_std = np.asarray(np.std(self.targets, axis=0), dtype=self.target_dtype_numpy)
-                    joblib.dump((self.targets_mean, self.targets_std), name)
-                    logger.info(f"Saved self.targets_mean, self.targets_std to {name}")
-                else:
-                    raise ValueError(f"Scalers for targets are not provided and the file {name} does not exist. Please provide the scalers or ensure that the file exists")
-            logger.info("Normalization applied to targets")
-            for channel in range(self.targets.shape[1]):
-                self.targets[:,channel,...] -= self.targets_mean[channel]
-                self.targets[:,channel,...] /= self.targets_std[channel]
-        else:
-            self.targets_mean = None
-            self.targets_std = None
-        self.features = torch.tensor(self.features, dtype=self.feature_dtype)
-        self.targets = torch.tensor(self.targets, dtype=self.target_dtype)    
-
+        # Process features
+        self._apply_prescaling(self.features, self.prescaler_features, "features")
+        self._apply_normalization(self.features, "features")
+        
+        # Process targets
+        self._apply_prescaling(self.targets, self.prescaler_targets, "targets")
+        self._apply_normalization(self.targets, "targets")
+        
+        # Convert to PyTorch tensors
+        self.features = torch.tensor(self.features, dtype=self.features_dtype)
+        self.targets = torch.tensor(self.targets, dtype=self.targets_dtype)
 
     def __len__(self):
         """
@@ -761,3 +767,167 @@ class DataFrameDataset(torch.utils.data.Dataset):
             torch.set_rng_state(state) # to make sure that the same transform is applied to both features and targets in case of randomness
             targets = self.transform(targets)
         return features, targets
+    
+    def _apply_prescaling(self, data, prescaler_functions, data_type):
+        """Apply pre-scaling functions (e.g., log transform) to each channel."""
+        if prescaler_functions is None:
+            return
+        
+        for channel in range(data.shape[1]):
+            if prescaler_functions[channel] is not None:
+                data[:, channel, ...] = prescaler_functions[channel](data[:, channel, ...])
+                logger.info(f"Applied {prescaler_functions[channel].__name__} to {data_type} channel {channel}")
+    
+    def _apply_normalization(self, data, data_type):
+        """Apply mean-std normalization to each channel."""
+        scaler_enabled = getattr(self, f'scaler_{data_type}')
+        
+        if not scaler_enabled:
+            return
+        
+        # Load or compute normalization parameters
+        mean, std = self._get_normalization_params(data, data_type)
+        
+        # Apply normalization
+        logger.info(f"Applying normalization to {data_type}")
+        for channel in range(data.shape[1]):
+            try:
+                data[:, channel, ...] -= mean[channel]
+                data[:, channel, ...] /= std[channel]
+            except Exception as e:
+                logger.error(f"Normalization failed for {data_type} channel {channel}")
+                logger.error(f"Data shape: {data.shape}, Mean shape: {mean.shape}")
+                raise e
+        
+        # Store normalization parameters
+        setattr(self, f'{data_type}_mean', mean)
+        setattr(self, f'{data_type}_std', std)
+    
+    def _get_normalization_params(self, data, data_type):
+        """Load existing normalization parameters or compute new ones."""
+        dtype_numpy = getattr(self, f'{data_type}_dtype_numpy')
+        filename = f'{self.norm_folder}/{"X" if data_type == "features" else "y"}.pkl'
+        
+        if os.path.exists(filename):
+            mean, std = joblib.load(filename)
+            logger.info(f"Loaded normalization parameters for {data_type} from {filename}")
+            return mean, std
+        
+        if self.datalabel != 'train':
+            raise ValueError(
+                f"Normalization parameters for {data_type} not found at {filename}. "
+                "Parameters must be computed on training data first."
+            )
+        
+        # Compute normalization parameters
+        if len(data.shape) > 2:
+            # For image data, compute statistics across batch and spatial dimensions
+            mean = np.mean(data, axis=(0, 2, 3)).astype(dtype_numpy)
+            std = np.std(data, axis=(0, 2, 3)).astype(dtype_numpy)
+        else:
+            # For flattened data, compute statistics across batch dimension
+            mean = np.mean(data, axis=0).astype(dtype_numpy)
+            std = np.std(data, axis=0).astype(dtype_numpy)
+        
+        # Save parameters
+        os.makedirs(self.norm_folder, exist_ok=True)
+        joblib.dump((mean, std), filename)
+        logger.info(f"Computed and saved normalization parameters for {data_type} to {filename}")
+        
+        return mean, std
+
+    def _setup_data_types(self, features_dtype, targets_dtype, features_dtype_numpy, targets_dtype_numpy):
+        """Configure PyTorch and NumPy data types for features and targets."""
+        self.features_dtype = getattr(torch, features_dtype)
+        self.targets_dtype = getattr(torch, targets_dtype)
+        self.features_dtype_numpy = getattr(numpy, features_dtype_numpy)
+        self.targets_dtype_numpy = getattr(numpy, targets_dtype_numpy)
+    
+    def _setup_preprocessing(self, prescaler_features, prescaler_targets, scaler_features, scaler_targets):
+        """Configure pre-scaling and normalization options."""
+        self.scaler_features = scaler_features
+        self.scaler_targets = scaler_targets
+        
+        # Initialize normalization parameters
+        self.features_mean = None
+        self.features_std = None
+        self.targets_mean = None
+        self.targets_std = None
+
+        # If prescaler_features is None, convert it to a list of None's with length equal to number of features
+        if prescaler_features is None:
+            if self.request_features is not None:
+                prescaler_features = [None] * len(self.request_features)
+            else:
+                prescaler_features = [None]
+        if prescaler_targets is None:
+            if self.request_targets is not None:
+                prescaler_targets = [None] * len(self.request_targets)
+            else:
+                prescaler_targets = [None]
+        
+        # Setup pre-scaling functions (e.g., log transform)
+        self.prescaler_features = self._setup_prescaler_functions(prescaler_features)
+        self.prescaler_targets = self._setup_prescaler_functions(prescaler_targets)
+    
+    def _setup_prescaler_functions(self, prescaler_list):
+        """Convert prescaler function names to actual numpy functions."""
+        if prescaler_list is None:
+            return None
+        
+        return [getattr(numpy, func_name) if func_name is not None else None 
+                for func_name in prescaler_list]
+    
+    def _setup_filtering(self, filter_features, filter_targets):
+        """Configure spatial filtering for features and targets."""
+        self.filter_features, self.filter_features_kwargs = self._setup_filter(filter_features, "features")
+        self.filter_targets, self.filter_targets_kwargs = self._setup_filter(filter_targets, "targets")
+    
+    def _setup_filter(self, filter_config, data_type):
+        """Setup filtering configuration for features or targets."""
+        if filter_config is None:
+            return None, None
+        
+        logger.info(f"Setting up filtering for {data_type}")
+        filter_config = filter_config.copy()
+        
+        if isinstance(filter_config, dict):
+            filter_name = filter_config.pop("name", None)
+            filter_func = getattr(nd, filter_name)
+            filter_kwargs = filter_config
+            
+            # Ensure axes parameter is a tuple
+            if 'axes' in filter_kwargs and isinstance(filter_kwargs['axes'], list):
+                filter_kwargs['axes'] = tuple(filter_kwargs['axes'])
+            
+            # Validate axes for spatial filtering
+            if filter_kwargs.get('axes') not in [None, (1, 2)]:
+                logger.warning(
+                    f"Filter axes for {data_type} should be (1,2) for spatial dimensions. "
+                    f"Got: {filter_kwargs['axes']}"
+                )
+            
+            return filter_func, filter_kwargs
+        else:
+            return getattr(nd, filter_config), None
+    
+    def _setup_transforms(self, transform):
+        """Configure data augmentation transforms."""
+        if transform is None:
+            self.transform = None
+            return
+        
+        transform = copy.deepcopy(transform)
+        apply_to_splits = transform.pop('apply', [])
+        
+        if self.datalabel in apply_to_splits:
+            from torchvision.transforms import v2
+            logger.info(f"Applying transforms to {self.datalabel} set: {list(transform.keys())}")
+            
+            transform_list = [getattr(v2, name)(**params) for name, params in transform.items()]
+            self.transform = v2.Compose(transform_list)
+        else:
+            logger.info(f"No transforms applied to {self.datalabel} set")
+            self.transform = None
+
+    
