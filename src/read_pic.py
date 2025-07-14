@@ -96,6 +96,46 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
                 logger.info(f"Resulting shape {a.shape}")
     return a
 
+def apply_filters(field, filters, fieldname=None, filename=None, verbose=DEFAULT_VERBOSE):
+    """
+    Apply a sequence of scipy.ndimage filters to a numpy array.
+
+    Parameters:
+    - field (np.ndarray): The array to filter.
+    - fieldname (str, optional): Name of the field (for logging).
+    - filename (str, optional): Name of the file (for logging).
+    - verbose (bool): Whether to log filter application.
+    - filters (dict, optional): A dictionary containing the name of the filter to apply and the arguments to pass to the filter.
+        Usage: filters = {'name': 'gaussian_filter', 'sigma': 1, 'axes': (0,1)}
+                filters = [{'name': 'gaussian_filter', 'sigma': 1, 'axes': (0,1)},
+                           {'name': 'zoom', 'zoom': (0.25, 0.25), 'mode' : 'grid-wrap'}]
+    Example usage:
+    Bz_filtered = data['Bz'] - rp.apply_filters(data['Bz'], filters=[{'name': 'gaussian_filter', 'sigma': 10, 'axes': (0,1)}])
+    TODO: merge with function read_fieldname
+
+    Returns:
+    - np.ndarray: The filtered array.
+    """
+    if filters is None:
+        return field
+    if not isinstance(filters, list):
+        filters = [filters]
+    a = field
+    for filteri in filters:
+        if verbose and fieldname is not None and filename is not None:
+            logger.info(f"Filtering {fieldname} from {filename} with {filteri['name']}")
+        filters_copy = filteri.copy()
+        filters_name = filters_copy.pop("name", None)
+        filters_object = getattr(nd, filters_name)
+        # Convert list arguments to tuples for axes, etc.
+        for k, v in filters_copy.items():
+            if isinstance(v, list):
+                filters_copy[k] = tuple(v)
+        a = filters_object(a, **filters_copy)
+        if verbose and fieldname is not None and filename is not None:
+            logger.info(f"Resulting shape {a.shape}")
+    return a
+
 
 def build_XY(files_path,choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, choose_z=DEFAULT_CHOOSE_Z, indexing=DEFAULT_INDEXING):
     # Read qom, Lx, Ly, Lz, nxc, nyc, nzc and dt from the SimulationData.txt file.
