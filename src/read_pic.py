@@ -2,12 +2,10 @@ import numpy as np
 import os
 import re
 from . import utilities as ut
-import logging
 import scipy.ndimage as nd
 import pickle
-#logger = logging.getLogger('trainers')
-logging.basicConfig(level=logging.INFO)
-logging.captureWarnings(True)
+
+import logging
 logger = logging.getLogger(__name__)
 
 # Define global default values

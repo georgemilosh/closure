@@ -54,8 +54,6 @@ import scipy.ndimage as nd
 from  . import read_pic as rp
 
 import logging
-logging.basicConfig(level=logging.INFO)
-logging.captureWarnings(True)
 logger = logging.getLogger(__name__)
 
 from torch.utils.data import DataLoader

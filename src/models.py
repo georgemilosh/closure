@@ -24,11 +24,7 @@ import sys
 import pickle
 
 import logging
-logging.basicConfig(level=logging.INFO)
-logging.captureWarnings(True)
 logger = logging.getLogger(__name__)
-#optuna.logging.get_logger(__name__).addHandler(logging.StreamHandler(sys.stdout))
-#optuna.logging.enable_propagation()  # Propagate logs to the root logger.
 
 class PyNet:
     
