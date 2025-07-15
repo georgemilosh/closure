@@ -24,6 +24,36 @@ import pickle
 import scipy.ndimage as nd
 import logging
 import ast
+import traceback
+
+class ExceptionFormattingHandler(logging.Handler):
+    """Custom handler that automatically formats exceptions with full traceback"""
+    
+    def __init__(self, base_handler, auto_traceback=True):
+        super().__init__()
+        self.base_handler = base_handler
+        self.auto_traceback = auto_traceback
+        self.setLevel(base_handler.level)
+        if hasattr(base_handler, 'formatter') and base_handler.formatter:
+            self.setFormatter(base_handler.formatter)
+    
+    def emit(self, record):
+        # Only modify the message if we want auto traceback and there's exception info
+        if self.auto_traceback and record.exc_info:
+            # Don't duplicate traceback if it's already in the message
+            if "Traceback" not in str(record.msg):
+                record.msg = f"{record.msg}\nException traceback:\n{''.join(traceback.format_exception(*record.exc_info))}"
+        
+        # Forward to the actual handler
+        self.base_handler.emit(record)
+    
+    def setFormatter(self, formatter):
+        super().setFormatter(formatter)
+        self.base_handler.setFormatter(formatter)
+    
+    def addFilter(self, filter):
+        super().addFilter(filter)
+        self.base_handler.addFilter(filter)
 
 class SafeFormatter(logging.Formatter):
     def format(self, record):

@@ -153,9 +153,9 @@ class Trainer:
         
         # Store initialization parameters
         self.work_dir = work_dir
-        self.dataset_kwargs = dataset_kwargs or {}
-        self.load_data_kwargs = load_data_kwargs or {}
-        self.model_kwargs = model_kwargs or {}
+        self.dataset_kwargs = dataset_kwargs
+        self.load_data_kwargs = load_data_kwargs
+        self.model_kwargs = model_kwargs
         self.device = device
         self.mode_test = mode_test
         self.force = force
@@ -587,6 +587,10 @@ class Trainer:
             logging.FileHandler: The file handler used for logging to the specified file, or None if 
             log_dir is not provided.
         """
+        # Initialize handlers as None
+        f_handler = None
+        error_handler = None
+        stream_handler = None
 
         if log_dir is not None:
             # Remove all handlers associated with the root logger object.
@@ -596,67 +600,88 @@ class Trainer:
             # Set the log level to CRITICAL for the root logger
             logging.root.setLevel(self.log_level)
             
-            f_handler = logging.FileHandler(log_dir)
-            f_handler.setLevel(self.log_level)
+            # Create base file handler for main log
+            base_f_handler = logging.FileHandler(log_dir)
+            base_f_handler.setLevel(self.log_level)
+            
+            # Create error-specific log file handler (ERROR and above only)
+            error_log_path = log_dir.replace('.log', '_errors.log')
+            base_error_handler = logging.FileHandler(error_log_path)
+            base_error_handler.setLevel(logging.ERROR)  # Only ERROR and CRITICAL
+            
             warnings_logger = logging.getLogger("py.warnings")
             job_id = ""
             if "SLURM_JOB_ID" in os.environ:
                 job_id = f'job:{os.environ["SLURM_JOB_ID"]}'
+            
+            # Shared formatter for both handlers
             f_format = ut.SafeFormatter('%(job_id)s | %(nodename)s | @rank: %(rank)s | @local: %(local_rank)s at %(asctime)s | %(levelname)s | %(name)s  | \t %(message)s')
-            f_handler.setFormatter(f_format)
+            base_f_handler.setFormatter(f_format)
+            base_error_handler.setFormatter(f_format)
 
-            # Add the custom filter to the handler
+            # Add the custom filter to both handlers
             custom_filter = ut.CustomFilter(job_id, self.rank, self.local_rank, os.uname().nodename)
-            f_handler.addFilter(custom_filter)
+            base_f_handler.addFilter(custom_filter)
+            base_error_handler.addFilter(custom_filter)
 
+            # Wrap handlers - main log without auto traceback, error log with auto traceback
+            f_handler = ut.ExceptionFormattingHandler(base_f_handler, auto_traceback=False)
+            error_handler = ut.ExceptionFormattingHandler(base_error_handler, auto_traceback=True)
+
+            # Add handlers to main logger
             logger.addHandler(f_handler)
+            logger.addHandler(error_handler)
             warnings_logger.addHandler(f_handler)
+            warnings_logger.addHandler(error_handler)
             logger.setLevel(self.log_level)
+            
             logger.info(f" ")
             logger.info(f"===Logging to {log_dir} on level {self.log_level}, @ {self.rank=}, {self.local_rank=}, {self.device=} ===") 
+            logger.info(f"===Error logs with full tracebacks will be written to {error_log_path} ===")
             logger.info(f"host: {os.uname().nodename}")
             logger.info(f" ")
-            # Define the extra loggers and add the same FileHandler to them
-            datasets_logger = logging.getLogger(__name__) # TODO: Fix the names 
-            self.apply_handler(datasets_logger, f_handler, self.log_level) 
-            models_logger = logging.getLogger(models.__name__)
+            
+            # Define the extra loggers and add both handlers to them
+            datasets_logger = logging.getLogger('src.datasets')
+            self.apply_handler(datasets_logger, f_handler, self.log_level)
+            self.apply_handler(datasets_logger, error_handler, self.log_level)
+            
+            models_logger = logging.getLogger('src.models')
             self.apply_handler(models_logger, f_handler, self.log_level)
-            read_pic_logger = logging.getLogger(datasets.__name__)
+            self.apply_handler(models_logger, error_handler, self.log_level)
+            
+            read_pic_logger = logging.getLogger('src.read_pic')
             self.apply_handler(read_pic_logger, f_handler, self.log_level)
-        # Add a StreamHandler to also output logs to the console (and thus to the notebook)
-        stream_format = ut.SafeFormatter('%(asctime)s | %(levelname)s | %(name)s | \t %(message)s')
+            self.apply_handler(read_pic_logger, error_handler, self.log_level)
+        
+        # Add a StreamHandler for console output (only if console_stream=True)
         if console_stream:
-            stream_handler = logging.StreamHandler()
-            stream_handler.setLevel(self.log_level)
-            stream_handler.setFormatter(stream_format)
-        
-        
+            base_stream_handler = logging.StreamHandler()
+            base_stream_handler.setLevel(self.log_level)
+            stream_format = ut.SafeFormatter('%(asctime)s | %(levelname)s | %(name)s | \t %(message)s')
+            base_stream_handler.setFormatter(stream_format)
+            stream_handler = ut.ExceptionFormattingHandler(base_stream_handler, auto_traceback=False)
 
-        # Optionally, set propagate to False for your main loggers
+        # Set propagate to False for your main loggers to avoid duplicates
         logger.propagate = False
-        datasets_logger.propagate = False
-        models_logger.propagate = False
-        read_pic_logger.propagate = False
-        #logger.addHandler(stream_handler)
-        #warnings_logger.addHandler(stream_handler)
-        #datasets_logger.addHandler(stream_handler)
-        #models_logger.addHandler(stream_handler)
-        #read_pic_logger.addHandler(stream_handler)
-         
-        ## Attach handlers to the root logger
-        #logging.root.addHandler(f_handler)
-        #logging.root.addHandler(stream_handler)
-
-        # Attach to all known loggers
-        for logger_name in logging.Logger.manager.loggerDict:
-            log = logging.getLogger(logger_name)
-            self.add_handler_once(log, f_handler)
-            self.add_handler_once(log, stream_handler)
-            log.setLevel(self.log_level)
         
-       
+        # Only attach to known loggers to avoid spam
+        known_loggers = ['src.datasets', 'src.read_pic', 'src.models', 'src.trainers']
+        for logger_name in known_loggers:
+            log = logging.getLogger(logger_name)
+            log.propagate = False  # Prevent propagation to root
+            
+            # Only add handlers that exist
+            if log_dir is not None and f_handler is not None:
+                self.add_handler_once(log, f_handler)
+            if log_dir is not None and error_handler is not None:
+                self.add_handler_once(log, error_handler)
+            if console_stream and stream_handler is not None:
+                self.add_handler_once(log, stream_handler)
+            
+            log.setLevel(self.log_level)
 
-        return f_handler
+        return f_handler if log_dir is not None else None
     
     def add_handler_once(self,logger, handler):
         if handler not in logger.handlers:
