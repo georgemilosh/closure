@@ -33,6 +33,7 @@ import json
 from socket import gethostname
 
 from . import datasets
+from . import dataloaders
 from . import models
 from . import utilities as ut
 
@@ -150,10 +151,11 @@ class Trainer:
         self.num_workers = num_workers or os.cpu_count()
         
         # Store initialization parameters
+        # Deepcopy to avoid modifying input arguments
         self.work_dir = work_dir
-        self.dataset_kwargs = dataset_kwargs
-        self.load_data_kwargs = load_data_kwargs
-        self.model_kwargs = model_kwargs
+        self.dataset_kwargs = copy.deepcopy(dataset_kwargs) if dataset_kwargs is not None else None
+        self.load_data_kwargs = copy.deepcopy(load_data_kwargs) if load_data_kwargs is not None else None
+        self.model_kwargs = copy.deepcopy(model_kwargs) if model_kwargs is not None else None
         self.device = device
         self.mode_test = mode_test
         self.force = force
@@ -289,11 +291,11 @@ class Trainer:
                     loader_kwargs = load_data_kwargs[f"{phase}_loader_kwargs"]
                 if 'num_workers' in loader_kwargs:
                     logger.info(f"Config file contains num_workers in {phase}_loader_kwargs so ignoring the number of actual cpus")
-                    loader = datasets.ChannelDataLoader(dataset, sampler_type=sampler_type, 
+                    loader = dataloaders.ChannelDataLoader(dataset, sampler_type=sampler_type, 
                             world_size=self.world_size, rank=self.rank, gpus_per_node=self.gpus_per_node, 
                             local_rank=self.local_rank, **loader_kwargs)
                 else:
-                    loader = datasets.ChannelDataLoader(dataset, sampler_type=sampler_type, 
+                    loader = dataloaders.ChannelDataLoader(dataset, sampler_type=sampler_type, 
                             world_size=self.world_size, rank=self.rank, gpus_per_node=self.gpus_per_node, 
                             local_rank=self.local_rank, num_workers=self.num_workers, **loader_kwargs)
                 setattr(self, f"{phase}_loader", loader)
@@ -593,6 +595,7 @@ class Trainer:
             logconfig.add_file_logger("src.trainers", log_dir, level=self.log_level, rank=self.rank, local_rank=self.local_rank)
             logconfig.add_file_logger("src.models",   log_dir, level=self.log_level, rank=self.rank, local_rank=self.local_rank)
             logconfig.add_file_logger("src.datasets", log_dir, level=self.log_level, rank=self.rank, local_rank=self.local_rank)
+            logconfig.add_file_logger("src.dataloaders", log_dir, level=self.log_level, rank=self.rank, local_rank=self.local_rank)
             logconfig.add_file_logger("src.read_pic", log_dir, level=self.log_level, rank=self.rank, local_rank=self.local_rank)
 
 def main():
