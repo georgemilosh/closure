@@ -85,8 +85,10 @@ def set_nested_config(config, key, value):
                             items = [item.strip() for item in inner.split(',')]
                             parsed_items = []
                             for item in items:
-                                # Try to convert to number, otherwise keep as string
-                                if item.isdigit():
+                                # Try to convert to number, None, or keep as string
+                                if item == 'None':
+                                    parsed_items.append(None)
+                                elif item.isdigit():
                                     parsed_items.append(int(item))
                                 else:
                                     try:
@@ -98,6 +100,9 @@ def set_nested_config(config, key, value):
                             value = []
                     except:
                         pass  # Keep original string value if parsing fails
+                # Handle standalone 'None' string
+                elif value == 'None':
+                    value = None
     
     d[keys[-1]] = value
 
