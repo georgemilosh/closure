@@ -142,77 +142,88 @@ class DataFrameDataset(torch.utils.data.Dataset):
 
     """
     def __init__(self, data_folder: str, norm_folder: str, samples_file: str = None,
-                 features_dtype: str = 'float32', targets_dtype: str = 'float32',
-                 features_dtype_numpy: str = 'float64', targets_dtype_numpy: str = 'float64',
-                 prescaler_features: list = None, prescaler_targets: list = None,
-                 scaler_features: bool = None, scaler_targets: bool = None,
-                 datalabel: str = 'train', flatten: bool = True,
-                 image_file_name_column: str = 'filenames',
-                 read_features_targets_kwargs: dict = None,
-                 filter_features: dict = None, filter_targets: dict = None,
-                 transform: dict = None):
-        """
-        Args:
-            data_folder (str): The folder where the images are stored.
-            norm_folder (str): The folder to save the normalization parameters.
-            samples_file: CSV file with sample filenames and metadata
-            features_dtype (str, optional): The data type of the features when __getitem__ is called. 
-                Defaults to 'float32'.
-            targets_dtype (str, optional): The data type of the targets when __getitem__ is called. 
-                Defaults to 'float32'.
-            datalabel: Dataset split label ('train', 'val', 'test')
-            flatten: If True, flatten spatial dimensions for pixel-wise processing
-            image_file_name_column: Column name in CSV containing filenames
-            features_dtype_numpy (str, optional): The data type of the features. Defaults to 'float32'.
-            target_dtype_numpy (str, optional): The data type of the targets. Defaults to 'float32'.
-            samples_file (str, optional): The file containing the sample filenames. Defaults to None.
-            prescaler_features (str, optional): The pre-scaler function to apply to the features. Defaults to None.
-            prescaler_targets (str, optional): The pre-scaler function to apply to the targets. Defaults to None.
-            scaler_features (tuple or None, optional): The scaler for features. If a tuple is provided, 
-                it should contain the mean and standard deviation of the features. Defaults to None.
-            scaler_targets (tuple or None, optional): The scaler for targets. If a tuple is provided, 
-                it should contain the mean and standard deviation of the targets. Defaults to None.
-            image_file_name_column (str, optional): The column name in the DataFrame that contains the image filenames. 
-                Defaults to 'filenames'.
-            read_features_targets_kwargs (dict, optional): Additional keyword arguments to pass to the 
-                `read_features_targets` function. Defaults to None.
-            filter_features (str, optional): The filter to apply to the features. Defaults to None.
-            filter_targets (str, optional): The filter to apply to the targets. Defaults to None.
-            transform: Data augmentation transforms (applied only to specified splits)
-        """
-         # Store basic configuration
-        self.data_folder = data_folder
-        self.norm_folder = norm_folder
-        self.samples_file = samples_file
-        self.datalabel = datalabel
-        self.flatten = flatten
-        self.image_file_name_column = image_file_name_column
-        self.logger = logger
-        # Extract feature and target channel names
-        self.read_features_targets_kwargs = read_features_targets_kwargs or {}
-        self.request_features = self.read_features_targets_kwargs.get('request_features', None)
-        self.request_targets = self.read_features_targets_kwargs.get('request_targets', None)
+                     features_dtype: str = 'float32', feature_dtype: str = None,  # Accept both names
+                     targets_dtype: str = 'float32', target_dtype: str = None,  # Accept both names
+                     features_dtype_numpy: str = 'float64', feature_dtype_numpy: str = None, # Accept both names
+                     targets_dtype_numpy: str = 'float64', target_dtype_numpy: str = None,  # Accept both names
+                     prescaler_features: list = None, prescaler_targets: list = None,
+                     scaler_features: bool = None, scaler_targets: bool = None,
+                     datalabel: str = 'train', flatten: bool = True,
+                     image_file_name_column: str = 'filenames',
+                     read_features_targets_kwargs: dict = None,
+                     filter_features: dict = None, filter_targets: dict = None,
+                     transform: dict = None):
+            """
+            Args:
+                data_folder (str): The folder where the images are stored.
+                norm_folder (str): The folder to save the normalization parameters.
+                samples_file: CSV file with sample filenames and metadata
+                features_dtype (str, optional): The data type of the features when __getitem__ is called. 
+                    Defaults to 'float32'.
+                feature_dtype (str, optional): Alternative name for features_dtype.
+                targets_dtype (str, optional): The data type of the targets when __getitem__ is called. 
+                    Defaults to 'float32'.
+                datalabel: Dataset split label ('train', 'val', 'test')
+                flatten: If True, flatten spatial dimensions for pixel-wise processing
+                image_file_name_column: Column name in CSV containing filenames
+                features_dtype_numpy (str, optional): The data type of the features. Defaults to 'float32'.
+                feature_dtype_numpy (str, optional): Alternative name for features_dtype_numpy.
+                target_dtype_numpy (str, optional): The data type of the targets. Defaults to 'float32'.
+                samples_file (str, optional): The file containing the sample filenames. Defaults to None.
+                prescaler_features (str, optional): The pre-scaler function to apply to the features. Defaults to None.
+                prescaler_targets (str, optional): The pre-scaler function to apply to the targets. Defaults to None.
+                scaler_features (tuple or None, optional): The scaler for features. If a tuple is provided, 
+                    it should contain the mean and standard deviation of the features. Defaults to None.
+                scaler_targets (tuple or None, optional): The scaler for targets. If a tuple is provided, 
+                    it should contain the mean and standard deviation of the targets. Defaults to None.
+                image_file_name_column (str, optional): The column name in the DataFrame that contains the image filenames. 
+                    Defaults to 'filenames'.
+                read_features_targets_kwargs (dict, optional): Additional keyword arguments to pass to the 
+                    `read_features_targets` function. Defaults to None.
+                filter_features (str, optional): The filter to apply to the features. Defaults to None.
+                filter_targets (str, optional): The filter to apply to the targets. Defaults to None.
+                transform: Data augmentation transforms (applied only to specified splits)
+            """
+            # Accept both features_dtype and feature_dtype, with feature_dtype taking precedence if provided
+            if feature_dtype is not None:
+                features_dtype = feature_dtype
+            if feature_dtype_numpy is not None:
+                features_dtype_numpy = feature_dtype_numpy
+            if target_dtype is not None:
+                targets_dtype = target_dtype
+            if target_dtype_numpy is not None:
+                targets_dtype_numpy = target_dtype_numpy
 
-        logger.info(f" This is {self.datalabel} set")
-        
-        # Configure data types
-        self._setup_data_types(features_dtype, targets_dtype, features_dtype_numpy, targets_dtype_numpy)
-        
-        # Configure preprocessing options
-        self._setup_preprocessing(prescaler_features, prescaler_targets, scaler_features, scaler_targets)
-        
-        # Configure filtering
-        self._setup_filtering(filter_features, filter_targets)
-        
-        # Configure transforms
-        self._setup_transforms(transform)
-        
-        # Load and process data
-        self.load_original()
-        self.scale_data()
+            # Store basic configuration
+            self.data_folder = data_folder
+            self.norm_folder = norm_folder
+            self.samples_file = samples_file
+            self.datalabel = datalabel
+            self.flatten = flatten
+            self.image_file_name_column = image_file_name_column
+            self.logger = logger
+            # Extract feature and target channel names
+            self.read_features_targets_kwargs = read_features_targets_kwargs or {}
+            self.request_features = self.read_features_targets_kwargs.get('request_features', None)
+            self.request_targets = self.read_features_targets_kwargs.get('request_targets', None)
 
-        self.load_original()
-        self.scale_data()
+            logger.info(f" This is {self.datalabel} set")
+            
+            # Configure data types
+            self._setup_data_types(features_dtype, targets_dtype, features_dtype_numpy, targets_dtype_numpy)
+            
+            # Configure preprocessing options
+            self._setup_preprocessing(prescaler_features, prescaler_targets, scaler_features, scaler_targets)
+            
+            # Configure filtering
+            self._setup_filtering(filter_features, filter_targets)
+            
+            # Configure transforms
+            self._setup_transforms(transform)
+            
+            # Load and process data
+            self.load_original()
+            self.scale_data()
     
     def load_original(self):
         """Load data from files specified in the CSV samples file, which splits 
