@@ -53,6 +53,9 @@ def set_nested_config(config, key, value):
         
         set_nested_config(config, 'a.f', '[1.1, 2.2, 3.3]')
         # config is now {'a': {'b': {'c': 123, 'd': 45.67}, 'e': [1, 2, 3], 'f': [1.1, 2.2, 3.3]}}
+        
+        set_nested_config(config, 'a.g', '[ReLU,ReLU,ReLU,ReLU]')
+        # config is now {'a': {'b': {'c': 123, 'd': 45.67}, 'e': [1, 2, 3], 'f': [1.1, 2.2, 3.3], 'g': ['ReLU', 'ReLU', 'ReLU', 'ReLU']}}
     """
 
     keys = key.split('.')
@@ -68,12 +71,33 @@ def set_nested_config(config, key, value):
             value = float(value)
         except ValueError:
             try:
-                # Attempt to parse list
+                # Attempt to parse list using ast.literal_eval first
                 value = ast.literal_eval(value)
                 if isinstance(value, list):
-                    value = [float(v) if '.' in str(v) else int(v) for v in value]
+                    value = [float(v) if isinstance(v, (int, float)) and '.' in str(v) else int(v) if isinstance(v, (int, float)) else v for v in value]
             except (ValueError, SyntaxError):
-                pass
+                # If ast.literal_eval fails, try manual parsing for lists with unquoted strings
+                if value.startswith('[') and value.endswith(']'):
+                    try:
+                        # Remove brackets and split by comma
+                        inner = value[1:-1].strip()
+                        if inner:
+                            items = [item.strip() for item in inner.split(',')]
+                            parsed_items = []
+                            for item in items:
+                                # Try to convert to number, otherwise keep as string
+                                if item.isdigit():
+                                    parsed_items.append(int(item))
+                                else:
+                                    try:
+                                        parsed_items.append(float(item))
+                                    except ValueError:
+                                        parsed_items.append(item)
+                            value = parsed_items
+                        else:
+                            value = []
+                    except:
+                        pass  # Keep original string value if parsing fails
     
     d[keys[-1]] = value
 

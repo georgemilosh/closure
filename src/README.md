@@ -45,6 +45,12 @@ trainer = Trainer(
 trainer.fit()
 ```
 
+Assuming you ran a series of experiments you may now run the following line to compute the metrics over all the runs in the `work_dir`:
+```bash
+python -m src.run_compare_runs --work_dir /volume1/scratch/georgem/closure/models/peppe/sigma0_haydn/FCNN/P
+```
+This allows us to precompute the prediction skills over the range of training runs in this folder
+
 ## Key Features
 
 - **Flexible configuration**: Easily update configs via command line or Python.
