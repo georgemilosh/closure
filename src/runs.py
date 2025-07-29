@@ -80,9 +80,10 @@ import torch
 import torch.distributed as dist
 
 from . import trainers
-from . import utils as ut
+from . import utilities as ut
 from . import logconfig
-
+import logging
+logger = logging.getLogger(__name__)
 
 def parse_config_value(value):
     """Parse config value, trying JSON first, then fallback to string."""
@@ -141,7 +142,6 @@ def create_grid_search(param_grid):
 
 def main():
     logconfig.setup_logging(console_level=logging.INFO)
-    
     # Training settings
     parser = argparse.ArgumentParser(description='Enhanced Multi-Run Training')
     parser.add_argument('--force', action=argparse.BooleanOptionalAction,
@@ -272,13 +272,21 @@ def main():
             # Apply run-specific config updates
             if 'config' in run_spec:
                 for key, value in run_spec['config'].items():
-                    ut.set_nested_config(config, key, value)
+                    # For JSON runs, values are already parsed, so we need to set them directly
+                    # rather than using ut.set_nested_config which expects strings
+                    keys = key.split('.')
+                    current = config
+                    for k in keys[:-1]:
+                        if k not in current:
+                            current[k] = {}
+                        current = current[k]
+                    current[keys[-1]] = value
             
             print(f"\n{'='*60}")
             print(f"Starting run {i+1}/{len(runs_config)}: {run_spec['run']}")
             print(f"{'='*60}")
             for key, value in run_spec.get('config', {}).items():
-                print(f"  {key} = {value}")
+                print(f"Setting  {key} = {value}")
             print()
             
             trainer.fit(config=config)
@@ -299,9 +307,8 @@ def main():
 
     try:
         dist.destroy_process_group()
-    except Exception as e:
-        print(f"Error destroying process group, possibly because it didn't exist?")
-        print(e)
+    except Exception:
+        print(f"Destroying process group not possible, possibly because you were training on a single node")
 
 
 if __name__ == '__main__':

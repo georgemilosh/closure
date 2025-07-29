@@ -670,9 +670,8 @@ def main():
 
     try:
         dist.destroy_process_group()
-    except Exception as e:
-        print(f"Error destroying process group, possibly because it didn't exist?")
-        print(e)
+    except Exception:
+        print(f"Destroying process group not possible, possibly because you were training on a single node")
 
 if __name__ == '__main__':
     main()
