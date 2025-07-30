@@ -51,7 +51,14 @@ def setup_logging(console_level=logging.INFO):
             # Let keyboard interrupts pass through without logging
             sys.__excepthook__(exc_type, exc_value, exc_traceback)
             return
-        root_logger.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+        
+        # Log to the main logger only - it will appear in all log files due to file handlers
+        main_logger = logging.getLogger("__main__")
+        if main_logger.handlers:
+            main_logger.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+        else:
+            # Fallback to root logger if main logger has no handlers
+            root_logger.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
 
     sys.excepthook = handle_uncaught_exception
 
@@ -62,11 +69,17 @@ def add_file_logger(logger_name, file_path, level=logging.DEBUG, rank=0, local_r
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
     logger = logging.getLogger(logger_name)
+    
+    # Check if this specific logger already has a FileHandler for this file
+    for handler in logger.handlers:
+        if isinstance(handler, logging.FileHandler) and handler.baseFilename == os.path.abspath(file_path):
+            return  # FileHandler for this file already exists
+    
     logger.setLevel(logging.DEBUG)
     job_id = ""
     if "SLURM_JOB_ID" in os.environ:
         job_id = f'job:{os.environ["SLURM_JOB_ID"]}'
-    file_handler = logging.FileHandler(file_path, mode='w')
+    file_handler = logging.FileHandler(file_path, mode='a')
     formatter = SafeFormatter('%(job_id)s | %(nodename)s | @rank: %(rank)s | @local: %(local_rank)s at %(asctime)s | %(levelname)s | %(name)s  | \t %(message)s')
     custom_filter = CustomFilter(job_id, rank, local_rank, os.uname().nodename)
     file_handler.setFormatter(formatter)

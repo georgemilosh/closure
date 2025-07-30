@@ -223,7 +223,8 @@ class Trainer:
         self._log_memory_usage("Prior to fit")
 
         best_loss = self.model.fit(self.train_loader, self.val_loader, trial=trial)   
-
+        # Deliberately cause an exception by referencing an undefined variable
+        undefined_variable += 1
         self._log_memory_usage("After fit")
         # Save model and results (only on rank 0 in distributed training)
         self._save_training_results()
@@ -587,16 +588,17 @@ class Trainer:
             logging.FileHandler: The file handler used for logging to the specified file, or None if 
             log_dir is not provided.
         """
-        if log_dir is not None and not any(isinstance(h, logging.FileHandler) for h in logger.handlers):
-            logger.info(f" ")
-            logger.info(f"===Logging to {log_dir} on level {self.log_level}, @ {self.rank=}, {self.local_rank=}") 
-            logger.info(f"host: {os.uname().nodename}, {self.device=} ===")
-            logger.info(f" ")
+        if log_dir is not None:
+            logconfig.add_file_logger("__main__", log_dir, level=self.log_level, rank=self.rank, local_rank=self.local_rank) 
             logconfig.add_file_logger("src.trainers", log_dir, level=self.log_level, rank=self.rank, local_rank=self.local_rank)
             logconfig.add_file_logger("src.models",   log_dir, level=self.log_level, rank=self.rank, local_rank=self.local_rank)
             logconfig.add_file_logger("src.datasets", log_dir, level=self.log_level, rank=self.rank, local_rank=self.local_rank)
             logconfig.add_file_logger("src.dataloaders", log_dir, level=self.log_level, rank=self.rank, local_rank=self.local_rank)
             logconfig.add_file_logger("src.read_pic", log_dir, level=self.log_level, rank=self.rank, local_rank=self.local_rank)
+            logger.info(f" ")
+            logger.info(f"===Logging to {log_dir} on level {self.log_level}, @ {self.rank=}, {self.local_rank=}") 
+            logger.info(f"host: {os.uname().nodename}, {self.device=} ===")
+            logger.info(f" ")
 
 def main():
     logconfig.setup_logging(console_level=logging.INFO)
