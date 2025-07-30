@@ -224,7 +224,7 @@ class Trainer:
 
         best_loss = self.model.fit(self.train_loader, self.val_loader, trial=trial)   
         # Deliberately cause an exception by referencing an undefined variable
-        undefined_variable += 1
+        #undefined_variable += 1
         self._log_memory_usage("After fit")
         # Save model and results (only on rank 0 in distributed training)
         self._save_training_results()
