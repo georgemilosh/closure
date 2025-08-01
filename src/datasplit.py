@@ -35,9 +35,9 @@ import os
 import sys
 import ast
 
-def append_files_to_csv(folders, csv_filename, pattern="T2D-Fields_*", root_folder=""):
+def create_files_csv(folders, csv_filename, pattern="T2D-Fields_*", root_folder=""):
     """
-    Glob files matching pattern from predefined folders and append to CSV.
+    Glob files matching pattern from predefined folders and write to CSV (overwrite if exists).
     
     Args:
         folders: List of folder paths to search
@@ -46,15 +46,12 @@ def append_files_to_csv(folders, csv_filename, pattern="T2D-Fields_*", root_fold
         root_folder: Root directory to prepend to folder paths
     """
     
-    # Check if CSV exists to determine if we need header
-    file_exists = os.path.exists(csv_filename)
-    
-    with open(csv_filename, 'a', newline='') as csvfile:
+    # Open CSV in write mode (overwrite if exists)
+    with open(csv_filename, 'w', newline='') as csvfile:
         writer = csv.writer(csvfile)
         
-        # Write header if file doesn't exist
-        if not file_exists:
-            writer.writerow(['filenames'])
+        # Write header
+        writer.writerow(['filenames'])
         
         # Process each folder
         for folder in folders:
@@ -82,7 +79,7 @@ def append_files_to_csv(folders, csv_filename, pattern="T2D-Fields_*", root_fold
                 else:
                     writer.writerow([file_path])
     
-    print(f"Added files from {len(folders)} folders to {csv_filename}")
+    print(f"Created {csv_filename} with files from {len(folders)} folders")
 
 def parse_arguments():
     """Parse command line arguments in key=value format."""
@@ -159,10 +156,10 @@ def main():
         print(f"Warning: The following folders do not exist: {missing_folders}")
     
     # Run the function
-    append_files_to_csv(folders, csv_filename, pattern, root_folder)
+    create_files_csv(folders, csv_filename, pattern, root_folder)
     
     # Print summary
-    print(f"\nFiles added to {csv_filename}:")
+    print(f"\nFiles written to {csv_filename}:")
     try:
         with open(csv_filename, 'r') as f:
             reader = csv.reader(f)
@@ -176,7 +173,7 @@ def main():
                 print(f"  ... and {count - 10} more files")
             print(f"Total: {count} files")
     except FileNotFoundError:
-        print("No files were added.")
+        print("No files were written.")
 
 if __name__ == "__main__":
     main()

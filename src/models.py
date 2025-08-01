@@ -264,31 +264,53 @@ class PyNet:
         """
         Load the model from the specified path.
         """
-        #self.model.load_state_dict(torch.load(path))
-        model_file = f"{path}/model.pth"    # < ======= TODO: Add multiple models here
+        model_file = f"{path}/model.pth"
         loss_file = f"{path}/loss_dict.pkl"
         logger.info(f"Loading model weights from {model_file}")
+        
         try:
-            self.model.load_state_dict(torch.load(model_file, map_location=self.device))
-        except RuntimeError:
-            # torch.nn.parallel.DistributedDataParallel, which prefixes the keys with "module.".
-            # Load the state dictionary
-            try:
-                state_dict = torch.load(model_file, map_location=self.device)
-            except Exception as e:
-                logger.error(f"Error loading model weights with {self.device = }")
-                raise e
-            # Remove 'module.' prefix from keys
-            new_state_dict = {}
-            for k, v in state_dict.items():
-                new_key = k.replace('module.', '')
-                new_state_dict[new_key] = v
-            # Load the modified state dictionary
-            self.model.load_state_dict(new_state_dict)
-        with open(loss_file, 'rb') as f:
-            logger.info(f"Loading loss dictionary from {loss_file}")
-            loss_dict = pickle.load(f)
-        self.train_loss_, self.val_loss_ = loss_dict['train_loss'], loss_dict['val_loss']
+            state_dict = torch.load(model_file, map_location=self.device)
+        except Exception as e:
+            logger.error(f"Error loading model file: {e}")
+            raise e
+        
+        # Handle DDP prefix mismatch
+        if isinstance(self.model, DDP):
+            # Current model has DDP wrapper, check if state_dict needs module. prefix
+            if not any(key.startswith('module.') for key in state_dict.keys()):
+                # Add 'module.' prefix to all keys
+                new_state_dict = {}
+                for k, v in state_dict.items():
+                    new_state_dict[f'module.{k}'] = v
+                state_dict = new_state_dict
+        else:
+            # Current model doesn't have DDP wrapper, check if state_dict has module. prefix
+            if any(key.startswith('module.') for key in state_dict.keys()):
+                # Remove 'module.' prefix from all keys
+                new_state_dict = {}
+                for k, v in state_dict.items():
+                    new_key = k.replace('module.', '')
+                    new_state_dict[new_key] = v
+                state_dict = new_state_dict
+        
+        try:
+            self.model.load_state_dict(state_dict, strict=False)
+            logger.warning("Loaded model with strict=False due to architecture mismatch")
+        except RuntimeError as e:
+            logger.error(f"Failed to load model state dict: {e}")
+            raise e
+        
+        # Load loss history
+        try:
+            with open(loss_file, 'rb') as f:
+                logger.info(f"Loading loss dictionary from {loss_file}")
+                loss_dict = pickle.load(f)
+            self.train_loss_, self.val_loss_ = loss_dict['train_loss'], loss_dict['val_loss']
+        except FileNotFoundError:
+            logger.warning(f"Loss file {loss_file} not found, skipping loss history")
+        except Exception as e:
+            logger.error(f"Error loading loss dictionary: {e}")
+            raise e
 
     def _compute_loss(self, prediction, ground_truth, criterion):
         """
