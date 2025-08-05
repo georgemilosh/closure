@@ -41,6 +41,13 @@ from . import logconfig
 import logging
 logger = logging.getLogger(__name__)
 
+import stat
+
+def remove_readonly(func, path, _):
+    """Clear the readonly bit and reattempt the removal"""
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
 class Trainer:
     """
     A trainer class that manages configs/logging/datasets/dataloaders/models. 
@@ -481,6 +488,12 @@ class Trainer:
                         f"Config file {config_file} already exists. "
                         "Overwriting due to --force!"
                     )
+                    target_dir = os.path.join(self.work_dir, self.run)
+                    try:
+                        if os.path.exists(target_dir):
+                            shutil.rmtree(target_dir, onerror=remove_readonly)
+                    except OSError as e:
+                        logger.warning(f"Could not remove directory {target_dir}: {e}")
                     shutil.rmtree(os.path.join(self.work_dir, self.run))
                 else:
                     raise FileExistsError(
