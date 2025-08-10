@@ -495,9 +495,14 @@ def transform_targets(trainer, rescale=True, renorm=True, verbose=True, reshape=
             ground_truth_scaled[:,channel] = invfunc(ground_truth_scaled[:,channel])
     
     if reshape:
-        prediction_scaled = prediction_scaled.reshape((-1,)+trainer.test_dataset.targets_shape[1:]).cpu().numpy()
-        ground_truth_scaled = ground_truth_scaled.reshape((-1,)+trainer.test_dataset.targets_shape[1:]).cpu().numpy()
-
+        if trainer.test_dataset.flatten:
+            prediction_scaled = prediction_scaled.reshape((-1,)+trainer.test_dataset.targets_shape[1:])
+            ground_truth_scaled = ground_truth_scaled.reshape((-1,)+trainer.test_dataset.targets_shape[1:])
+        #else:
+        #    prediction_scaled = (prediction_scaled.reshape(trainer.test_dataset.targets_shape[1:] + (-1,))).permute(3, 2, 0, 1)
+        #    ground_truth_scaled = (ground_truth_scaled.reshape(trainer.test_dataset.targets_shape[1:] + (-1,))).permute(3, 2, 0, 1)
+    prediction_scaled = prediction_scaled.cpu().numpy()
+    ground_truth_scaled = ground_truth_scaled.cpu().numpy()
     return ground_truth_scaled, prediction_scaled 
 
 def compute_loss(ground_truth, prediction, criterion):
@@ -801,6 +806,7 @@ def pred_unnormalize(data, test_features, trainer, scaler_targets=None, prescale
     if trainer.test_dataset.flatten:
         # Flatten for pixel-wise processing (MLP models)
         prediction_scaled = (prediction_scaled.reshape(trainer.test_dataset.targets_shape[1:] + (-1,))).permute(3, 2, 0, 1)
+    print(f"{prediction_scaled.shape = }")
     for i, key in enumerate(trainer.test_dataset.request_targets):
         if '_' in key:
             key1, key2 = key.split('_')
@@ -826,10 +832,16 @@ def prediction2data(data, trainer, prediction_scaled):
         if '_' in key:
             key1, key2 = key.split('_')
             if key1 in data and key2 in data[key1]:
-                data[key1][key2] = prediction_scaled[...,i].transpose([1, 2, 0])
+                if trainer.test_dataset.flatten:
+                    data[key1][key2] = prediction_scaled[...,i].transpose([1, 2, 0])
+                else:
+                    data[key1][key2] = prediction_scaled[:,i, ...].transpose([1, 2, 0])
         else:
             if key in data:
-                data[key] = prediction_scaled[...,i].transpose([1, 2, 0])
+                if trainer.test_dataset.flatten:
+                    data[key] = prediction_scaled[...,i].transpose([1, 2, 0])
+                else:
+                    data[key] = prediction_scaled[:,i, ...].transpose([1, 2, 0])
     return data
 
 # The scripts below are adapted from G. Arrò
