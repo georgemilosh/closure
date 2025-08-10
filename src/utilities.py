@@ -24,6 +24,26 @@ import pickle
 import scipy.ndimage as nd
 import ast
 
+def alias(*names):
+    """
+    A decorator that assigns multiple global aliases to a function. It allows conveniently renaming functions without breaking backward compatibility
+    Args:
+        *names: One or more strings representing the alias names to assign to the decorated function.
+    Returns:
+        decorator: A decorator that, when applied to a function, adds the function to the global namespace under each specified alias.
+    Example:
+        @alias('foo', 'bar')
+        def my_function():
+            pass
+        # Now, my_function can be accessed as foo or bar in the global namespace.
+    """
+
+    def decorator(func):
+        globals_ = globals()
+        for name in names:
+            globals_[name] = func
+        return func
+    return decorator
 
 def set_nested_config(config, key, value):
     """
@@ -419,7 +439,7 @@ def transform_features(trainer, rescale=True, renorm=True, verbose=True):
                 ground_truth_scaled[:,channel] = invfunc(ground_truth_scaled[:,channel])
     return ground_truth_scaled
 
-def transform_targets(trainer, rescale=True, renorm=True, verbose=True):
+def transform_targets(trainer, rescale=True, renorm=True, verbose=True, reshape=False, test_features=None):
     """
     Transforms the predicted and ground truth targets based on the trainer's configuration.
     Args:
@@ -427,12 +447,19 @@ def transform_targets(trainer, rescale=True, renorm=True, verbose=True):
         rescale (bool): Whether to rescale the targets.
         renorm (bool): Whether to renormalize the targets.
         verbose (bool): Whether to print the loss values.
+        reshape (bool): Whether to reshape the targets for visualization. Defaults to False
+            reshape = False is how the function was intended to be used in past with functions such as
+            graph_pred_targets and plot_pred_targets, which expect the targets to not be reshaped
+        test_features (torch.Tensor, optional): If provided, uses these features for prediction 
+        instead of the test dataset's features.
     Returns:
         prediction_scaled: The scaled predicted targets.
         ground_truth_scaled: The scaled ground truth targets.
     """
-
-    prediction = trainer.model.predict(trainer.test_dataset.features).cpu()
+    if test_features is None:
+        prediction = trainer.model.predict(trainer.test_dataset.features).cpu()
+    else:
+        prediction = trainer.model.predict(test_features).cpu()
     ground_truth = trainer.test_dataset.targets[:,trainer.test_loader.target_channels].squeeze()
     pred_shape = [1 for _ in prediction.shape]
     pred_shape[1] = -1
@@ -466,6 +493,11 @@ def transform_targets(trainer, rescale=True, renorm=True, verbose=True):
                 print(f"{invfunc = }")
             prediction_scaled[:,channel] = invfunc(prediction_scaled[:,channel])
             ground_truth_scaled[:,channel] = invfunc(ground_truth_scaled[:,channel])
+    
+    if reshape:
+        prediction_scaled = prediction_scaled.reshape((-1,)+trainer.test_dataset.targets_shape[1:]).cpu().numpy()
+        ground_truth_scaled = ground_truth_scaled.reshape((-1,)+trainer.test_dataset.targets_shape[1:]).cpu().numpy()
+
     return ground_truth_scaled, prediction_scaled 
 
 def compute_loss(ground_truth, prediction, criterion):
@@ -506,7 +538,7 @@ def evaluate_loss(trainer, ground_truth, prediction, criterion, verbose=True):
             print(f'Loss for channel {channel}:  {trainer.test_dataset.request_targets[channel]}, loss = {loss[label]}')
     return loss
 
-def graph_pred_targets(trainer, target_name: str, ground_truth_scaled, prediction_scaled):
+def graph_pred_targets(trainer, target_name: str, ground_truth_scaled, prediction_scaled, reshape=True):
     """
     Generate and display a grid of subplots showing the ground truth, predictions, and error for a specific target variable.
     Parameters:
@@ -514,20 +546,24 @@ def graph_pred_targets(trainer, target_name: str, ground_truth_scaled, predictio
     - target_name: The name of the target variable to visualize.
     - ground_truth_scaled: The scaled ground truth values for the target variable.
     - prediction_scaled: The scaled predicted values for the target variable.
+    - reshape (bool): Whether to reshape the data for visualization. Defaults to True, set to False if already reshaped.
     Returns:
     None
     """
-    print("The function graph_pred_targets is deprecated. Use pred_ground_targets instead.")
     channel = trainer.test_dataset.request_targets.index(target_name)
-    prediction_reshaped = prediction_scaled[:,channel].reshape(trainer.test_dataset.targets_shape[:-1]+(1,)).cpu().numpy()
-    ground_truth_reshaped = ground_truth_scaled[:,channel].reshape(trainer.test_dataset.targets_shape[:-1]+(1,)).cpu().numpy()
+    if reshape:
+        prediction_reshaped = prediction_scaled[:,channel].reshape(trainer.test_dataset.targets_shape[:-1]+(1,)).cpu().numpy()
+        ground_truth_reshaped = ground_truth_scaled[:,channel].reshape(trainer.test_dataset.targets_shape[:-1]+(1,)).cpu().numpy()
+    else:
+        prediction_reshaped = prediction_scaled[...,channel][...,np.newaxis]
+        ground_truth_reshaped = ground_truth_scaled[...,channel][...,np.newaxis]
 
     X, Y = rp.build_XY(f"{trainer.dataset_kwargs['data_folder']}/{trainer.test_dataset.filenames[0].rsplit('/',1)[0]}/",
                         choose_x=trainer.dataset_kwargs['read_features_targets_kwargs']['choose_x'],
                         choose_y = trainer.dataset_kwargs['read_features_targets_kwargs']['choose_y'])
     import os
     # Create a figure and subplots
-    fig, axs = plt.subplots(3, 3, figsize=(12, 6))
+    _, axs = plt.subplots(3, 3, figsize=(12, 6))
     if not os.path.exists('img'):
         # Create the directory
         os.makedirs('img')
@@ -548,7 +584,10 @@ def graph_pred_targets(trainer, target_name: str, ground_truth_scaled, predictio
                                             ['real', 'predict', 'error'])):
             f, ax = plt.subplots(1, 1, figsize=(6, 3))
             for axes in [ax, axs[i,j]]:
-                im = axes.pcolormesh(X, Y, data, vmax=vmax[j], vmin=vmin[j], cmap=cmaps[j])
+                try:
+                    im = axes.pcolormesh(X, Y, data, vmax=vmax[j], vmin=vmin[j], cmap=cmaps[j])
+                except Exception as e:
+                    print(f"Error plotting {label} {target_name}, {data.shape = }: {e}")
                 axes.set_title(f"{label} {target_name} @ {trainer.test_dataset.dataframe['filenames'].iloc[i].rsplit('_')[-1].rsplit('.')[0]}")
                 axes.set_xlabel('X')
                 axes.set_ylabel('Y')
@@ -670,7 +709,7 @@ def plot_pred_targets(trainer, target_name: str, prediction=None, ground_truth=N
     plt.tight_layout()
     plt.show()
 
-def normalize_input(data, trainer, prescaler_features=None, scaler_features=None):
+def normalize_input(data, trainer):
     """
     Normalize the input data based on the trainer's dataset settings.
 
@@ -690,30 +729,29 @@ def normalize_input(data, trainer, prescaler_features=None, scaler_features=None
         else:
             if key in data:
                 test_features.append(data[key])
-    if scaler_features is None:
-        scaler_features = trainer.test_dataset.scaler_features
-    if prescaler_features is None:
-        prescaler_features = trainer.test_dataset.prescaler_features
-    # Concatenate the selected data into one array
-    test_features = np.array(test_features).transpose([3, 0, 1, 2])
-    print("original std = ", np.std(test_features, axis=(0, 2, 3)))
-    if prescaler_features is not None and prescaler_features is not False and trainer.test_dataset.prescaler_features is not None:
-        for channel in range(trainer.test_dataset.features.shape[1]):
-            if trainer.test_dataset.prescaler_features[channel] is not None:
-                test_features[:,channel,...] =  trainer.test_dataset.prescaler_features[channel](test_features[:,channel,...])
-    if scaler_features:
-        for channel in range(trainer.test_dataset.features.shape[1]):
-            try:
-                test_features[:,channel,...] -= trainer.test_dataset.features_mean[channel]
-            except Exception as e:
-                print(f"{test_features.shape = }, {trainer.test_dataset.features_mean = }")
-                raise e
-            test_features[:,channel,...] /= trainer.test_dataset.features_std[channel]
-    print("after normalization std = ", np.std(test_features, axis=(0, 2, 3)))
-    test_features = torch.tensor(test_features, dtype=trainer.test_dataset.feature_dtype)
+    test_features = np.array(test_features, dtype=trainer.test_dataset.features_dtype_numpy).transpose(3,1,2,0)
+    if trainer.test_dataset.filter_features is not None:
+        test_features = trainer.filter_features(test_features, **trainer.filter_features_kwargs)
+
+    if trainer.test_dataset.flatten:
+        # Flatten for pixel-wise processing (MLP models)
+        test_features = test_features.reshape(-1, test_features.shape[-1])
+    else:
+        # Convert to channel-first format for CNN models (NCHW)
+        test_features = test_features.transpose(0, 3, 1, 2)
+
+    print(f"{test_features.shape = }")
+    trainer.test_dataset._apply_prescaling(test_features, trainer.test_dataset.prescaler_features, "features")
+    trainer.test_dataset._apply_normalization(test_features, "features")
+    test_features = torch.tensor(test_features, dtype=trainer.test_dataset.features_dtype)
+
+
     return test_features
 
-def unnormalize_output(data, test_features, trainer, scaler_targets=None, prescaler_targets=None):
+
+
+@alias('unnormalize_output') 
+def pred_unnormalize(data, test_features, trainer, scaler_targets=None, prescaler_targets=None):
     """
     Unnormalize the output predictions based on the trainer's dataset settings.
 
@@ -760,6 +798,9 @@ def unnormalize_output(data, test_features, trainer, scaler_targets=None, presca
                 invfunc = torch.sinh
             prediction_scaled[:,channel] = invfunc(prediction_scaled[:,channel])
 
+    if trainer.test_dataset.flatten:
+        # Flatten for pixel-wise processing (MLP models)
+        prediction_scaled = (prediction_scaled.reshape(trainer.test_dataset.targets_shape[1:] + (-1,))).permute(3, 2, 0, 1)
     for i, key in enumerate(trainer.test_dataset.request_targets):
         if '_' in key:
             key1, key2 = key.split('_')
@@ -768,8 +809,28 @@ def unnormalize_output(data, test_features, trainer, scaler_targets=None, presca
         else:
             if key in data:
                 data[key] = prediction_scaled[:, i, ...].numpy().transpose([1, 2, 0])
-                
 
+def prediction2data(data, trainer, prediction_scaled):
+    """
+    Convert the model's predictions into a format suitable for analysis.
+
+    Parameters:
+    data (dict): The data dictionary containing the model's predictions.
+    trainer (Trainer): The trainer object containing the model and dataset information.
+    prediction_scaled (torch.Tensor): The scaled predictions from the model.
+
+    Returns:
+    None: The function updates the `data` dictionary in place.
+    """
+    for i, key in enumerate(trainer.test_dataset.request_targets):
+        if '_' in key:
+            key1, key2 = key.split('_')
+            if key1 in data and key2 in data[key1]:
+                data[key1][key2] = prediction_scaled[...,i].transpose([1, 2, 0])
+        else:
+            if key in data:
+                data[key] = prediction_scaled[...,i].transpose([1, 2, 0])
+    return data
 
 # The scripts below are adapted from G. Arrò
 
