@@ -1011,6 +1011,10 @@ def get_PS_2D_field(data, x, y):
         data['P'][species]=(data['Pxx'][species]+\
                                 data['Pyy'][species]+\
                                     data['Pzz'][species])/3
+        data['Ppar'][species] = (data['Pxx'][species]*data['Bx']**2 + data['Pyy'][species]*data['By']**2  + data['Pzz'][species]*data['Bz']**2 + \
+                                        2*data['Pxy'][species]*data['Bx']*data['By']+2*data['Pxz'][species]*data['Bx']*data['Bz'] + \
+                                            2*data['Pyz'][species]*data['By']*data['Bz'])/(data['By']**2+data['Bx']**2+data['Bz']**2)
+        data['Pperp'][species] = (data['Pxx'][species] + data['Pyy'][species] + data['Pzz'][species] - data['Ppar'][species])/2
         data['theta'][species]=uxx+uyy
         data['PS'][species]=-data['Pxx'][species]*uxx-\
             data['Pxy'][species]*uxy-data['Pxy'][species]*uyx-\
@@ -1184,23 +1188,25 @@ def get_T(data, qom):
         data['beta_par'][species] = 8*np.pi*data['T_par'][species]*(data['rho'][species]*np.sign(qom[i]))/(data['Bx']**2 + data['By']**2 + data['Bz']**2)
 
 def get_agyrotropy(data):
-	for experiment in data.keys():
-		data['agyrotropy'] = {}
-		for species in data['rho'].keys():
-			bx=data['Bx']/np.sqrt(data['Bx']**2+data['By']**2+data['Bz']**2)
-			by=data['By']/np.sqrt(data['Bx']**2+data['By']**2+data['Bz']**2)
-			bz=data['Bz']/np.sqrt(data['Bx']**2+data['By']**2+data['Bz']**2)
-			I1=data['Pxx'][species]+data['Pyy'][species]+data['Pzz'][species]
-			I2=data['Pxx'][species]*data['Pyy'][species]+\
-				data['Pxx'][species]*data['Pzz'][species]+\
-					data['Pyy'][species]*data['Pzz'][species]-\
-						(data['Pxy'][species]**2+data['Pxz'][species]**2+\
-	   data['Pyz'][species]**2)
-			P_par=data['Pxx'][species]*bx**2+data['Pyy'][species]*by**2+\
-				data['Pzz'][species]*bz**2+2*(data['Pxy'][species]*bx*by+\
-											  data['Pxz'][species]*bx*bz+\
-												data['Pyz'][species]*by*bz)
-			data['agyrotropy'][species]=1-4*I2/((I1-P_par)*(I1+3*P_par))
+    """
+    Compute agyrotropy for all species
+    """
+    data['agyrotropy'] = {}
+    for species in data['rho'].keys():
+        bx=data['Bx']/np.sqrt(data['Bx']**2+data['By']**2+data['Bz']**2)
+        by=data['By']/np.sqrt(data['Bx']**2+data['By']**2+data['Bz']**2)
+        bz=data['Bz']/np.sqrt(data['Bx']**2+data['By']**2+data['Bz']**2)
+        I1=data['Pxx'][species]+data['Pyy'][species]+data['Pzz'][species]
+        I2=data['Pxx'][species]*data['Pyy'][species]+\
+            data['Pxx'][species]*data['Pzz'][species]+\
+                data['Pyy'][species]*data['Pzz'][species]-\
+                    (data['Pxy'][species]**2+data['Pxz'][species]**2+\
+    data['Pyz'][species]**2)
+        P_par=data['Pxx'][species]*bx**2+data['Pyy'][species]*by**2+\
+            data['Pzz'][species]*bz**2+2*(data['Pxy'][species]*bx*by+\
+                                            data['Pxz'][species]*bx*bz+\
+                                            data['Pyz'][species]*by*bz)
+        data['agyrotropy'][species]=1-4*I2/((I1-P_par)*(I1+3*P_par))
 
 def highdiff(data, dx, dy, coeff = None, axis=0, **kwargs):
     """
