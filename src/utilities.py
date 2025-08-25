@@ -262,8 +262,12 @@ def compare_runs(work_dirs=['./'], runs=['./0'], metric=None, rescale=True, reno
             print(f"Loading run {run} ")
         trainer.load_run(run)
         ground_truth_scaled, prediction_scaled = transform_targets(trainer, rescale=rescale, renorm=renorm, verbose=verbose)
-        score_total = evaluate_loss(trainer, ground_truth_scaled, prediction_scaled, 
+        try:
+            score_total = evaluate_loss(trainer, ground_truth_scaled, prediction_scaled, 
                                           'MSELoss', verbose=verbose)
+        except Exception as e:
+            print(f"{ground_truth_scaled.shape = }, {prediction_scaled.shape = }")
+            raise e
         if metric is not None:
             for metric_name in metric:
                 score_total.update(evaluate_loss(trainer, ground_truth_scaled, prediction_scaled, 
@@ -512,7 +516,11 @@ def compute_loss(ground_truth, prediction, criterion):
         ss_residual = torch.sum((ground_truth - prediction) ** 2)
         loss = 1 - (ss_residual / ss_total)
     else:
-        loss = getattr(torch.nn, criterion)()(ground_truth,prediction).cpu().numpy()
+        try:
+            loss = getattr(torch.nn, criterion)()(ground_truth,prediction).cpu().numpy()
+        except Exception as e:
+            print(f"Error computing loss: with {criterion = }, {ground_truth.shape = }, {prediction.shape = }")
+            raise e
     return loss
 
 def evaluate_loss(trainer, ground_truth, prediction, criterion, verbose=True):
