@@ -995,6 +995,8 @@ def get_PS_2D_field(data, x, y):
     data['Dxy'] = {}
     data['Dxz'] = {}
     data['Dyz'] = {}
+    data['Ppar'] = {}
+    data['Pperp'] = {}
     data['P'] = {}
     data['J*(E+VxB)'] = {}
     data['Jtotx'] = np.sum([data['Jx'][species] for species in data['Jx'].keys()], axis=0)
