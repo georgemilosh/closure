@@ -476,16 +476,16 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                     data['Pperp'][species] = (data['Pxx'][species] + data['Pyy'][species] + data['Pzz'][species] - data['Ppar'][species])/2
                 except Exception as e:
                     logger.warning(f"Failed to calculate Pperp for {species} likely due to missing fields, see: {e}")
-            if "gyro_radius" in fields_to_read and fields_to_read["gyro_radius"]:
-                try:
-                    for species in data[f'P{component_1}{component_2}']:
-                        data['gyro_radius'] = {}
-                        i = choose_species.index(species)
-                        p = data['Pxx'][species]+data['Pyy'][species]+data['Pzz'][species]
-                        vth=np.sqrt(np.abs(p/(data['rho'][species]+small)*qom[i]))
-                        data['gyro_radius'][species] = np.abs(vth/(qom[i]*data['Bmagn']))
-                except Exception as e:
-                    logger.warning(f"Failed to calculate gyro_radius, see: {e}")
+        if "gyro_radius" in fields_to_read and fields_to_read["gyro_radius"]:
+            try:
+                data['gyro_radius'] = {}
+                for species in data['rho']:
+                    i = choose_species.index(species)
+                    p = data['Pxx'][species]+data['Pyy'][species]+data['Pzz'][species]
+                    vth=np.sqrt(np.abs(p/(data['rho'][species]+small)*qom[i]))
+                    data['gyro_radius'][species] = np.abs(vth/(qom[i]*data['Bmagn']))
+            except Exception as e:
+                logger.warning(f"Failed to calculate gyro_radius, see: {e}")
 
     # The heat flux is calculated (to do so you need to read rho, J and P first).
     if fields_to_read["Heat_flux"]:

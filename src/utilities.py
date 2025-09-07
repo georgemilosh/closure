@@ -262,8 +262,12 @@ def compare_runs(work_dirs=['./'], runs=['./0'], metric=None, rescale=True, reno
             print(f"Loading run {run} ")
         trainer.load_run(run)
         ground_truth_scaled, prediction_scaled = transform_targets(trainer, rescale=rescale, renorm=renorm, verbose=verbose)
-        score_total = evaluate_loss(trainer, ground_truth_scaled, prediction_scaled, 
+        try:
+            score_total = evaluate_loss(trainer, ground_truth_scaled, prediction_scaled, 
                                           'MSELoss', verbose=verbose)
+        except Exception as e:
+            print(f"{ground_truth_scaled.shape = }, {prediction_scaled.shape = }")
+            raise e
         if metric is not None:
             for metric_name in metric:
                 score_total.update(evaluate_loss(trainer, ground_truth_scaled, prediction_scaled, 
@@ -1002,6 +1006,8 @@ def get_PS_2D_field(data, x, y):
     data['Dxy'] = {}
     data['Dxz'] = {}
     data['Dyz'] = {}
+    data['Ppar'] = {}
+    data['Pperp'] = {}
     data['P'] = {}
     data['J*(E+VxB)'] = {}
     data['Jtotx'] = np.sum([data['Jx'][species] for species in data['Jx'].keys()], axis=0)
