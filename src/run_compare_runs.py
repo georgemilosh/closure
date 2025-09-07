@@ -17,7 +17,7 @@ Outputs:
     evaluation.pkl: A pickle file containing the loss dictionaries, configuration data, and comparison results.
 
 Example usage:
-    python run_compare_runs.py --work_dir /path/to/trainer/folder
+    python -m src.run_compare_runs.py --work_dir /path/to/trainer/folder
 """
 import pickle
 import argparse

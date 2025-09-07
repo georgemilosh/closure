@@ -506,13 +506,28 @@ def transform_targets(trainer, rescale=True, renorm=True, verbose=True, reshape=
     return ground_truth_scaled, prediction_scaled 
 
 def compute_loss(ground_truth, prediction, criterion):
+     # Convert to torch.Tensor if not already
+    if isinstance(ground_truth, np.ndarray):
+        ground_truth = torch.from_numpy(ground_truth)
+    if isinstance(prediction, np.ndarray):
+        prediction = torch.from_numpy(prediction)
     if criterion == 'r2':
         #loss = (1- torch.nn.MSELoss()(ground_truth,prediction)/torch.var(ground_truth)).cpu().numpy()
         ss_total = torch.sum((ground_truth - torch.mean(ground_truth)) ** 2)
         ss_residual = torch.sum((ground_truth - prediction) ** 2)
         loss = 1 - (ss_residual / ss_total)
     else:
-        loss = getattr(torch.nn, criterion)()(ground_truth,prediction).cpu().numpy()
+        try:
+            if isinstance(criterion, str):
+                loss = getattr(torch.nn, criterion)()(ground_truth,prediction).cpu().numpy()
+            elif hasattr(criterion, "__class__") and criterion.__class__.__module__.startswith("torch.nn"):
+                loss = criterion(ground_truth, prediction).cpu().numpy()
+            else:
+                raise ValueError(f"Invalid criterion type: {type(criterion)}")
+            loss = getattr(torch.nn, criterion)()(ground_truth,prediction).cpu().numpy()
+        except Exception as e:
+            print(f"Error computing loss with criterion {criterion = }, {ground_truth.shape = }, {prediction.shape = }, {type(ground_truth) = }, {type(prediction) = }")
+            raise e
     return loss
 
 def evaluate_loss(trainer, ground_truth, prediction, criterion, verbose=True):
