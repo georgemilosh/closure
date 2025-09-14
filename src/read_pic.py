@@ -308,9 +308,11 @@ def read_files(files_path, filenames, fields_to_read, qom, dtype, extract_fields
                 try:
                     out.append(data[extract_field_index[0]][extract_field_index[1]])
                 except Exception as e:
-                    logger.info(f"Failed to extract {extract_field_index = }")
-                    logger.info(f"Available fields are {data[extract_field_index[0]] = }")
+                    logger.info(f"Attempting to read {filename = }")
                     logger.info(f"Available data keys are {data.keys() = }")
+                    logger.info(f"Attempting to extract {extract_field_index = } which should a list of length 2,")
+                    logger.info(f"where the first element is the field name and the second element is the species name")
+                    logger.warning(f"The extracted field is {data[extract_field_index[0]] = }")
                     raise e
             else:
                 #logger.info(data[extract_field_index])
@@ -471,7 +473,7 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                                         2*data['Pxy'][species]*data['Bx']*data['By']+2*data['Pxz'][species]*data['Bx']*data['Bz'] + \
                                             2*data['Pyz'][species]*data['By']*data['Bz'])/(data['By']**2+data['Bx']**2+data['Bz']**2)
                 except Exception as e:
-                    logger.warning(f"Failed to calculate Ppar for {species} likely due to missing fields, see: {e}")
+                    logger.warning(f"Failed to calculate Ppar for {species = } likely due to missing fields, see: {e}")
                 try:
                     data['Pperp'][species] = (data['Pxx'][species] + data['Pyy'][species] + data['Pzz'][species] - data['Ppar'][species])/2
                 except Exception as e:
