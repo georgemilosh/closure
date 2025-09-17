@@ -1113,7 +1113,10 @@ def apply_filter(field, density=None, filters = {'name': 'uniform_filter', 'size
 def scale_filtering(data, x, y, qom, verbose=False,
                     filters = {'name': 'uniform_filter', 'size': 100, 'mode' : 'wrap', 'axes': (0,1)}):
     """
-    Applies various filters to the input data and computes several derived quantities.
+    Applies filters to the input data and computes following fitlered quantities
+        E2_bar, B2_bar, Ef_favre, PIuu, PIbb, PS, -Ptheta, and JdotE
+        which are appended to the dictionary `data`. Not that this will overwrite any existing keys 
+        in `data` with the same names.
     Parameters:
     data (dict): A dictionary containing the experimental data. 
     Returns:
