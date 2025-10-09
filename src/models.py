@@ -75,7 +75,7 @@ class PyNet:
         model : (torch.nn.Module) : The neural network model.
     """
     def __init__(self, model='FCNN', model_seed=None, optimizer_kwargs=None, scheduler_kwargs=None, logger_kwargs=None,
-                rank=None, local_rank=None, init_path=None, **kwargs): 
+                rank=None, local_rank=None, init_path=None, model_path=None, **kwargs): 
         """
         Args:
     
@@ -93,6 +93,8 @@ class PyNet:
             Local rank of the process, by default None
         init_path :                 str, optional
             Path to the model weights, by default None
+        model_path :                str, optional
+            Path for saving model checkpoints and outputs, by default None
     
         model :                     str, optional
             Name of the model class to be used, by default 'FCNN'.
@@ -119,6 +121,7 @@ class PyNet:
         # Store distributed training configuration
         self.local_rank = local_rank
         self.rank = rank
+        self.model_path = model_path
         
         # Initialize model
         self._initialize_model(model, model_seed, **kwargs)
@@ -435,6 +438,14 @@ class PyNet:
         if not hasattr(self, 'val_loss_'):
             self.val_loss_ = {} # validation history
 
+        # Setup checkpoint directory if model_path is available
+        checkpoint_dir = None
+        if self.model_path is not None and self.save_every is not None:
+            import os
+            checkpoint_dir = os.path.join(self.model_path, "checkpoints")
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            logger.info(f"Checkpoints will be saved to: {checkpoint_dir}")
+
         total_start_time = time.time() # track total training time
         best_loss = torch.inf  # track best loss
         epoch_best = 0
@@ -465,12 +476,38 @@ class PyNet:
             epoch_time = time.time() - epoch_start_time
             self.total_time["train+val"].append(epoch_time)
             if self.rank is None or self.rank == 0:
+                # Handle checkpoint saving
+                should_save_checkpoint = False
+                checkpoint_name = None
+                
                 if val_loss["criterion"] < best_loss:
-                    if self.save_every == 'best' or (isinstance(self.save_every, int) and epoch % self.save_every == 0):
-                        best_loss = val_loss["criterion"]
-                        best_weights = copy.deepcopy(self.model.state_dict()) # note that this operation may take some time
-                        epoch_best = epoch
-                    #torch.save(self.model.state_dict(), self.work_dir) # this saves every epoch if improvement
+                    best_loss = val_loss["criterion"]
+                    best_weights = copy.deepcopy(self.model.state_dict()) # note that this operation may take some time
+                    epoch_best = epoch
+                    
+                    if self.save_every == 'best':
+                        should_save_checkpoint = True
+                        checkpoint_name = "model.pth"  # Save best model as model.pth
+                
+                if isinstance(self.save_every, int) and epoch % self.save_every == 0:
+                    should_save_checkpoint = True
+                    checkpoint_name = f"checkpoint_epoch_{epoch+1}.pth"
+                
+                # Save checkpoint if needed
+                if should_save_checkpoint and checkpoint_dir is not None and checkpoint_name is not None:
+                    checkpoint_path = os.path.join(checkpoint_dir, checkpoint_name)
+                    torch.save({
+                        'epoch': epoch + 1,
+                        'model_state_dict': self.model.state_dict(),
+                        'optimizer_state_dict': self.optimizer.state_dict(),
+                        'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler is not None else None,
+                        'best_loss': best_loss,
+                        'train_loss': self.train_loss_,
+                        'val_loss': self.val_loss_,
+                        'lr': self.lr
+                    }, checkpoint_path)
+                    logger.info(f"Checkpoint saved: {checkpoint_path}")
+
                 self._logging(tr_loss, val_loss, epoch+1,self.epochs, epoch_time, epoch_time_train, **self.logger_kwargs)
 
                 if self.scheduler is not None:
@@ -495,7 +532,7 @@ class PyNet:
                 self._logging(tr_loss, None, epoch+1,self.epochs, epoch_time, epoch_time_train, **self.logger_kwargs)
                 
         if self.rank == 0:
-            if self.save_every is not None:
+            if self.save_every is not None and 'best_weights' in locals():
                 # restore model and return best accuracy
                 logger.info(f"Best loss: {best_loss} at epoch {epoch_best+1}, restoring the corresponding weights...")
                 self.model.load_state_dict(best_weights)
@@ -508,6 +545,49 @@ class PyNet:
         logger.info(f"""End of training on | {self.rank = }, {self.device = }. Total time: {round(total_time, 5)} seconds""")
         return best_loss
 
+    def load_checkpoint(self, checkpoint_path):
+        """
+        Load model from checkpoint file.
+        
+        Args:
+            checkpoint_path (str): Path to the checkpoint file
+            
+        Returns:
+            dict: Checkpoint information (epoch, best_loss, etc.)
+        """
+        logger.info(f"Loading checkpoint from {checkpoint_path}")
+        
+        try:
+            checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        except Exception as e:
+            logger.error(f"Error loading checkpoint: {e}")
+            raise e
+        
+        # Load model state
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        
+        # Load optimizer state
+        if 'optimizer_state_dict' in checkpoint and hasattr(self, 'optimizer'):
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
+        # Load scheduler state
+        if 'scheduler_state_dict' in checkpoint and hasattr(self, 'scheduler') and self.scheduler is not None:
+            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        
+        # Load training history
+        if 'train_loss' in checkpoint:
+            self.train_loss_ = checkpoint['train_loss']
+        if 'val_loss' in checkpoint:
+            self.val_loss_ = checkpoint['val_loss']
+        if 'lr' in checkpoint:
+            self.lr = checkpoint['lr']
+        
+        logger.info(f"Checkpoint loaded successfully from epoch {checkpoint.get('epoch', 'unknown')}")
+        
+        return {
+            'epoch': checkpoint.get('epoch'),
+            'best_loss': checkpoint.get('best_loss'),
+        }
         
     def _to_device(self, features, targets, device):
         """

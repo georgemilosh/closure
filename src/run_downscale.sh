@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=downscale_job
-#SBATCH --account=2024_109
+#SBATCH --account=2025_065
 #SBATCH --output=downscale_job_%j.log
 #SBATCH --error=downscale_job_%j.err
 #SBATCH --ntasks=1
@@ -24,8 +24,8 @@ module load matplotlib/3.7.2-gfbf-2023a
 READ_FOLDER=$1
 
 # Define the path and write folder
-PATH_TO_DATA="/dodrio/scratch/projects/2024_109/ecsim/peppe/"
+PATH_TO_DATA="/dodrio/scratch/projects/2025_012/georgem/ecsim/peppe/"
 WRITE_FOLDER="${READ_FOLDER}_filter2"
 
 # Run the downscale.py script with the provided arguments
-python /dodrio/scratch/projects/2024_109/closure/src/downscale.py --path $PATH_TO_DATA --read_folder $READ_FOLDER --write_folder $WRITE_FOLDER
+python /dodrio/scratch/projects/2025_065/georgem/2024_109/closure/src/downscale.py --path $PATH_TO_DATA --read_folder $READ_FOLDER --write_folder $WRITE_FOLDER

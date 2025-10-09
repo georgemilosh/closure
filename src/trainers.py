@@ -256,16 +256,27 @@ class Trainer:
         load_data_kwargs = config['load_data_kwargs']
         model_kwargs = config['model_kwargs']
         #device = config['device']
-        if 'run' in config:  # this is to handle optuna trials or other runs
+        # Determine the model path for the model (considering runs)
+        model_path = self.work_dir
+        if 'run' in config:
             self.run = config['run']
+            if self.work_dir is not None:
+                model_path = os.path.join(self.work_dir, str(self.run))
         else:
-            self.run = ''
+            self.run = ""
+
         if isinstance(model_kwargs, dict): # if model is not instantiated we create it
             logger.warning(f"Creating new model. Note this will replace any previous model")
-            self.model = models.PyNet(**model_kwargs, rank=self.rank, local_rank=self.local_rank) 
+            model_kwargs['model_path'] = model_path
+            model_kwargs['rank'] = self.rank
+            model_kwargs['local_rank'] = self.local_rank
+            self.model = models.PyNet(**model_kwargs) 
         else: # if model is already instantiated
             logger.info(f"Model provided as an input {model_kwargs =}")
             self.model = model_kwargs
+            # Set model_path on existing model if possible
+            if hasattr(self.model, 'model_path'):
+                self.model.model_path = model_path
 
         logger.info(f"{self.device = } on {self.local_rank = }")
         logger.info(f"Code version git hash: {ut.get_git_revision_hash()}") # TODO: add this to the config file and raise error if it doesn't coincide wiht the current version
