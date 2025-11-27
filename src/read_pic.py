@@ -316,9 +316,22 @@ def read_files(files_path, filenames, fields_to_read, qom, dtype, extract_fields
                     raise e
             else:
                 #logger.info(data[extract_field_index])
-                out.append(data[extract_field_index])
+                try:
+                    out.append(data[extract_field_index])
+                except Exception as e:
+                    logger.info(f"Attempting to read {filename = }")
+                    logger.info(f"Available data keys are {data.keys() = }")
+                    logger.info(f"Attempting to extract {extract_field_index = } which should be a field name")
+                    raise e
         out2.append(np.array(out))
     return np.array(out2, dtype=dtype).transpose(0,2,3,1)  # we want to have the time as the first index, then x, then y, then the field
+
+
+def do_dot(fx,fy,fz,gx,gy,gz):
+	return fx*gx+fy*gy+fz*gz
+	
+def do_cross(fx,fy,fz,gx,gy,gz):
+	return fy*gz-fz*gy, fz*gx-fx*gz, fx*gy-fy*gx	
 
 def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, 
               choose_z=DEFAULT_CHOOSE_Z, verbose=DEFAULT_VERBOSE, small=1e-10, **kwargs):
@@ -489,30 +502,30 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                     data['gyro_radius'][species] = np.abs(vth/(qom[i]*data['Bmagn']))
             except Exception as e:
                 logger.warning(f"Failed to calculate gyro_radius, see: {e}")
-    if fields_to_read["divP"] or fields_to_read["Ohm_res"]:
+    if "divP" in fields_to_read and fields_to_read["divP"] or "Ohmres" in fields_to_read and fields_to_read["Ohmres"]:
         if verbose:
-            logger.info(f"computing divP and or Ohm_res")
+            logger.info(f"computing divP and or Ohmres")
 
         dx = X[1,0]-X[0,0]
         dy = Y[0,1]-Y[0,0]
 
         if not 'e' in choose_species:
-            raise ValueError(f"Calculating divP_e or Ohm_res without electron species cannot be done")
+            raise ValueError(f"Calculating divP_e or Ohmres without electron species cannot be done")
 
-        data['EP_x'] = -(ut.highdiff(data['Pxx']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pxy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
-        data['EP_y'] = -(ut.highdiff(data['Pxy']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pyy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
-        data['EP_z'] = -(ut.highdiff(data['Pxz']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pyz']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
+        data['EPx'] = -(ut.highdiff(data['Pxx']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pxy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
+        data['EPy'] = -(ut.highdiff(data['Pxy']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pyy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
+        data['EPz'] = -(ut.highdiff(data['Pxz']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pyz']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
         
-        if fields_to_read["Ohm_res"]:
-
-            B = np.array([data['Bx'], data['By'], data['Bz']]).transpose(1,2,3,0)
+        if "Ohmres" in fields_to_read and fields_to_read["Ohmres"]:
+            #logger.info(f"{data['Bx'].shape = }")
+            #B = np.array([data['Bx'], data['By'], data['Bz']]).transpose(1,2,3,0)
             #E = np.array([data['Ex'], data['Ey'], data['Ez']]).transpose(1,2,3,0)
-    
             Jtotx = np.sum([data['Jx'][species] for species in data['Jx'].keys()], axis=0)
             Jtoty = np.sum([data['Jy'][species] for species in data['Jy'].keys()], axis=0)
             Jtotz = np.sum([data['Jz'][species] for species in data['Jz'].keys()], axis=0)
-            J = np.array([Jtotx, Jtoty, Jtotz]).transpose(1,2,3,0)
-            EHall_x, EHall_y, EHall_z = (np.cross(J,B)/(-data['rho']['e'])[...,np.newaxis]).transpose(3,0,1,2)
+
+            # = np.array([Jtotx, Jtoty, Jtotz]).transpose(1,2,3,0)
+            EHall_x, EHall_y, EHall_z = do_cross(Jtotx,Jtoty,Jtotz,data['Bx'],data['By'],data['Bz'])/(-data['rho']['e']) # EHx,EHy,EHz=do_cross(Jx,Jy,Jz,Bx,By,Bz)/(-rho_0)
             norm = 0
             uCMx = 0
             uCMy = 0
@@ -525,11 +538,10 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
             uCMx /= norm
             uCMy /= norm
             uCMz /= norm
-            uCM = np.array([uCMx, uCMy, uCMz]).transpose(1,2,3,0)
-            EMHD_x, EMHD_y, EMHD_z = - np.cross(uCM,B).transpose(3,0,1,2)
-            data['Ohm_res_x'] = data['Ex'] - EMHD_x - EHall_x - data['EP_x']
-            data['Ohm_res_y'] = data['Ey'] - EMHD_y - EHall_y - data['EP_y']
-            data['Ohm_res_z'] = data['Ez'] - EMHD_z - EHall_z - data['EP_z']
+            EMHD_x, EMHD_y, EMHD_z = do_cross(uCMx,uCMy,uCMz,data['Bx'],data['By'],data['Bz'])
+            data['Ohmresx'] = data['Ex'] + EMHD_x - EHall_x - data['EPx']
+            data['Ohmresy'] = data['Ey'] + EMHD_y - EHall_y - data['EPy']
+            data['Ohmresz'] = data['Ez'] + EMHD_z - EHall_z - data['EPz']
         
 
             
