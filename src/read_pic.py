@@ -368,7 +368,14 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
     - q: The heat flux.
     
     """
-    X, Y = build_XY(files_path,choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, choose_z=DEFAULT_CHOOSE_Z, indexing=DEFAULT_INDEXING)
+    #logger.info(f"{files_path = }")
+    #logger.info(f"{filenames = }")
+    if isinstance(filenames, list):
+        folder_path = files_path + "/" + filenames[0].rsplit("/", 1)[0] + "/"
+    else:
+        folder_path = files_path + "/" + filenames.rsplit("/", 1)[0] + "/"
+    #logger.info(f"Reading data from folder: {folder_path}")
+    X, Y = build_XY(folder_path,choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, choose_z=DEFAULT_CHOOSE_Z, indexing=DEFAULT_INDEXING)
     #choose_species_new = ut.append_index_to_duplicates(choose_species) 
     #dublicatespecies = ut.get_duplicate_indices(choose_species)
     data = {}
