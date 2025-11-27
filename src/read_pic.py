@@ -355,6 +355,7 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
     - q: The heat flux.
     
     """
+    X, Y = build_XY(files_path,choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, choose_z=DEFAULT_CHOOSE_Z, indexing=DEFAULT_INDEXING)
     #choose_species_new = ut.append_index_to_duplicates(choose_species) 
     #dublicatespecies = ut.get_duplicate_indices(choose_species)
     data = {}
@@ -488,6 +489,50 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                     data['gyro_radius'][species] = np.abs(vth/(qom[i]*data['Bmagn']))
             except Exception as e:
                 logger.warning(f"Failed to calculate gyro_radius, see: {e}")
+    if fields_to_read["divP"] or fields_to_read["Ohm_res"]:
+        if verbose:
+            logger.info(f"computing divP and or Ohm_res")
+
+        dx = X[1,0]-X[0,0]
+        dy = Y[0,1]-Y[0,0]
+
+        if not 'e' in choose_species:
+            raise ValueError(f"Calculating divP_e or Ohm_res without electron species cannot be done")
+
+        data['EP_x'] = -(ut.highdiff(data['Pxx']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pxy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
+        data['EP_y'] = -(ut.highdiff(data['Pxy']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pyy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
+        data['EP_z'] = -(ut.highdiff(data['Pxz']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pyz']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
+        
+        if fields_to_read["Ohm_res"]:
+
+            B = np.array([data['Bx'], data['By'], data['Bz']]).transpose(1,2,3,0)
+            #E = np.array([data['Ex'], data['Ey'], data['Ez']]).transpose(1,2,3,0)
+    
+            Jtotx = np.sum([data['Jx'][species] for species in data['Jx'].keys()], axis=0)
+            Jtoty = np.sum([data['Jy'][species] for species in data['Jy'].keys()], axis=0)
+            Jtotz = np.sum([data['Jz'][species] for species in data['Jz'].keys()], axis=0)
+            J = np.array([Jtotx, Jtoty, Jtotz]).transpose(1,2,3,0)
+            EHall_x, EHall_y, EHall_z = (np.cross(J,B)/(-data['rho']['e'])[...,np.newaxis]).transpose(3,0,1,2)
+            norm = 0
+            uCMx = 0
+            uCMy = 0
+            uCMz = 0
+            for i, species in enumerate(data['rho'].keys()):
+                uCMx += (data['rho'][species]/qom[i])*data['Vx'][species]
+                uCMy += (data['rho'][species]/qom[i])*data['Vy'][species]
+                uCMz += (data['rho'][species]/qom[i])*data['Vz'][species]
+                norm += data['rho'][species]/qom[i]
+            uCMx /= norm
+            uCMy /= norm
+            uCMz /= norm
+            uCM = np.array([uCMx, uCMy, uCMz]).transpose(1,2,3,0)
+            EMHD_x, EMHD_y, EMHD_z = - np.cross(uCM,B).transpose(3,0,1,2)
+            data['Ohm_res_x'] = data['Ex'] - EMHD_x - EHall_x - data['EP_x']
+            data['Ohm_res_y'] = data['Ey'] - EMHD_y - EHall_y - data['EP_y']
+            data['Ohm_res_z'] = data['Ez'] - EMHD_z - EHall_z - data['EP_z']
+        
+
+            
 
     # The heat flux is calculated (to do so you need to read rho, J and P first).
     if fields_to_read["Heat_flux"]:
