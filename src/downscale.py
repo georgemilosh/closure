@@ -119,12 +119,22 @@ shutil.copy(f'{path}{read_folder}/SimulationData.txt', simulation_data_path)
 with open(simulation_data_path, 'r') as file:
     lines = file.readlines()
 
-# Modify the specific lines
-for i, line in enumerate(lines):
-    if 'Number of cells (x)' in line:
-        lines[i] = 'Number of cells (x)      = 512\n' # TODO: change this to the correct value, which is consistent with the zoom
-    if 'Number of cells (y)' in line:
-        lines[i] = 'Number of cells (y)      = 512\n'
+if zoom == 0.25:
+    # Modify the specific lines
+    for i, line in enumerate(lines):
+        if 'Number of cells (x)' in line:
+            lines[i] = 'Number of cells (x)      = 512\n' # TODO: change this to the correct value, which is consistent with the zoom
+        if 'Number of cells (y)' in line:
+            lines[i] = 'Number of cells (y)      = 512\n'
+elif zoom == 0.5:
+    # Modify the specific lines
+    for i, line in enumerate(lines):
+        if 'Number of cells (x)' in line:
+            lines[i] = 'Number of cells (x)      = 1024\n' # TODO: change this to the correct value, which is consistent with the zoom
+        if 'Number of cells (y)' in line:
+            lines[i] = 'Number of cells (y)      = 1024\n'
+else:
+    raise ValueError("Zoom value not supported for modifying SimulationData.txt")
 
 # Write the modified lines back to the file
 with open(simulation_data_path, 'w') as file:
