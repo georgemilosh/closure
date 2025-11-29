@@ -749,8 +749,13 @@ class FCNN(torch.nn.Module):
             batch_norms = [None] * (len(channels) - 1)
         if dropouts is None:
             dropouts = [None] * (len(channels) - 1)
+        # For even kernels, need to add padding or use output_padding in upsampling
+        if kernels[i] % 2 == 0:
+            padding = kernels[i] // 2
+        else:
+            padding = (kernels[i] - 1) // 2
         for i in range(len(channels)-1):
-            seq_list.append(nn.Conv2d(channels[i], channels[i+1], kernels[i], padding=(kernels[i]-1)//2))
+            seq_list.append(nn.Conv2d(channels[i], channels[i+1], kernels[i], padding=padding))
             if activations[i] is not None:
                 seq_list.append(getattr(nn, activations[i])())
             if batch_norms[i] is not None and batch_norms[i]:
