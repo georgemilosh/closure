@@ -1362,7 +1362,7 @@ def get_Ohm(data,qom, x,y, coeff=None):
     data['Jtoty'] = np.sum([data['Jy'][species] for species in data['Jy'].keys()], axis=0)
     data['Jtotz'] = np.sum([data['Jz'][species] for species in data['Jz'].keys()], axis=0)
     J = np.array([data['Jtotx'], data['Jtoty'], data['Jtotz']]).transpose(1,2,3,0)
-    data['EHall_x'], data['EHall_y'], data['EHall_z'] = (np.cross(J,B)/(-data['rho']['e'])[...,np.newaxis]).transpose(3,0,1,2)
+    data['EHallx'], data['EHally'], data['EHallz'] = (np.cross(J,B)/(-data['rho']['e'])[...,np.newaxis]).transpose(3,0,1,2)
     norm = 0
     data['uCMx'] = 0
     data['uCMy'] = 0
@@ -1376,15 +1376,15 @@ def get_Ohm(data,qom, x,y, coeff=None):
     data['uCMy'] /= norm
     data['uCMz'] /= norm
     uCM = np.array([data['uCMx'], data['uCMy'], data['uCMz']]).transpose(1,2,3,0)
-    data['EMHD_x'], data['EMHD_y'], data['EMHD_z'] = - np.cross(uCM,B).transpose(3,0,1,2)
+    data['EMHDx'], data['EMHDy'], data['EMHDz'] = - np.cross(uCM,B).transpose(3,0,1,2)
     dx = x[1]-x[0]
     dy = y[1]-y[0]
     #data['EP_x'] = (np.gradient(data['Pxx']['e'],x,axis=0,edge_order=2)+np.gradient(data['Pxy']['e'],y,axis=1,edge_order=2))/data['rho']['e']
     #data['EP_y'] = (np.gradient(data['Pxy']['e'],x,axis=0,edge_order=2)+np.gradient(data['Pyy']['e'],y,axis=1,edge_order=2))/data['rho']['e']
     #data['EP_z'] = (np.gradient(data['Pxz']['e'],x,axis=0,edge_order=2)+np.gradient(data['Pyz']['e'],y,axis=1,edge_order=2))/data['rho']['e']
-    data['EP_x'] = -(highdiff(data['Pxx']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap') + highdiff(data['Pxy']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
-    data['EP_y'] = -(highdiff(data['Pxy']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap') + highdiff(data['Pyy']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
-    data['EP_z'] = -(highdiff(data['Pxz']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap') + highdiff(data['Pyz']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
+    data['EPx'] = -(highdiff(data['Pxx']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap') + highdiff(data['Pxy']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
+    data['EPy'] = -(highdiff(data['Pxy']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap') + highdiff(data['Pyy']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
+    data['EPz'] = -(highdiff(data['Pxz']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap') + highdiff(data['Pyz']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
     
 
 

@@ -400,7 +400,7 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                 logger.info(f"loading divB")
         data['divB'] = read_fieldname(files_path,filenames,'divB',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
     for fields in ['rho', 'N', 'Qrem']:
-        if fields_to_read[fields]:
+        if fields in fields_to_read and fields_to_read[fields]:
             if verbose:
                 logger.info(f"loading {fields}")
             data[fields] = {}
@@ -518,11 +518,16 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
 
         if not 'e' in choose_species:
             raise ValueError(f"Calculating divP_e or Ohmres without electron species cannot be done")
-
-        data['EPx'] = -(ut.highdiff(data['Pxx']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pxy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
-        data['EPy'] = -(ut.highdiff(data['Pxy']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pyy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
-        data['EPz'] = -(ut.highdiff(data['Pxz']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pyz']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
         
+        if 'get_Ohm' in fields_to_read and fields_to_read['get_Ohm']:
+            logger.info(f"Calculating all Ohm terms")
+            ut.get_Ohm(data, qom, X[:,0], Y[0,:])
+        else:
+
+            data['EPx'] = -(ut.highdiff(data['Pxx']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pxy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
+            data['EPy'] = -(ut.highdiff(data['Pxy']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pyy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
+            data['EPz'] = -(ut.highdiff(data['Pxz']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pyz']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
+            
         if "Ohmres" in fields_to_read and fields_to_read["Ohmres"]:
             #logger.info(f"{data['Bx'].shape = }")
             #B = np.array([data['Bx'], data['By'], data['Bz']]).transpose(1,2,3,0)
