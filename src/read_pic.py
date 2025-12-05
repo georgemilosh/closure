@@ -509,7 +509,7 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                     data['gyro_radius'][species] = np.abs(vth/(qom[i]*data['Bmagn']))
             except Exception as e:
                 logger.warning(f"Failed to calculate gyro_radius, see: {e}")
-    if "divP" in fields_to_read and fields_to_read["divP"] or "Ohmres" in fields_to_read and fields_to_read["Ohmres"]:
+    if "divP" in fields_to_read and fields_to_read["divP"] or "Ohmres" in fields_to_read and fields_to_read["Ohmres"] or 'get_Ohm' in fields_to_read and fields_to_read['get_Ohm']:
         if verbose:
             logger.info(f"computing divP and or Ohmres")
 
