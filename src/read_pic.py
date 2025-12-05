@@ -509,7 +509,7 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                     data['gyro_radius'][species] = np.abs(vth/(qom[i]*data['Bmagn']))
             except Exception as e:
                 logger.warning(f"Failed to calculate gyro_radius, see: {e}")
-    if "divP" in fields_to_read and fields_to_read["divP"] or "Ohmres" in fields_to_read and fields_to_read["Ohmres"] or 'get_Ohm' in fields_to_read and fields_to_read['get_Ohm']:
+    if "divP" in fields_to_read and fields_to_read["divP"] or "Ohmres" in fields_to_read and fields_to_read["Ohmres"]:
         if verbose:
             logger.info(f"computing divP and or Ohmres")
 
@@ -519,15 +519,12 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
         if not 'e' in choose_species:
             raise ValueError(f"Calculating divP_e or Ohmres without electron species cannot be done")
         
-        if 'get_Ohm' in fields_to_read and fields_to_read['get_Ohm']:
-            logger.info(f"Calculating all Ohm terms")
-            ut.get_Ohm(data, qom, X[:,0], Y[0,:])
-        else:
+        
 
-            data['EPx'] = -(ut.highdiff(data['Pxx']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pxy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
-            data['EPy'] = -(ut.highdiff(data['Pxy']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pyy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
-            data['EPz'] = -(ut.highdiff(data['Pxz']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pyz']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
-            
+        data['EPx'] = -(ut.highdiff(data['Pxx']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pxy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
+        data['EPy'] = -(ut.highdiff(data['Pxy']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pyy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
+        data['EPz'] = -(ut.highdiff(data['Pxz']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pyz']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
+        
         if "Ohmres" in fields_to_read and fields_to_read["Ohmres"]:
             #logger.info(f"{data['Bx'].shape = }")
             #B = np.array([data['Bx'], data['By'], data['Bz']]).transpose(1,2,3,0)
@@ -537,7 +534,7 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
             Jtotz = np.sum([data['Jz'][species] for species in data['Jz'].keys()], axis=0)
 
             # = np.array([Jtotx, Jtoty, Jtotz]).transpose(1,2,3,0)
-            EHall_x, EHall_y, EHall_z = do_cross(Jtotx,Jtoty,Jtotz,data['Bx'],data['By'],data['Bz'])/(-data['rho']['e']) # EHx,EHy,EHz=do_cross(Jx,Jy,Jz,Bx,By,Bz)/(-rho_0)
+            data['EHallx'], data['EHally'], data['EHallz'] = do_cross(Jtotx,Jtoty,Jtotz,data['Bx'],data['By'],data['Bz'])/(-data['rho']['e']) # EHx,EHy,EHz=do_cross(Jx,Jy,Jz,Bx,By,Bz)/(-rho_0)
             norm = 0
             uCMx = 0
             uCMy = 0
@@ -550,10 +547,10 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
             uCMx /= norm
             uCMy /= norm
             uCMz /= norm
-            EMHD_x, EMHD_y, EMHD_z = do_cross(uCMx,uCMy,uCMz,data['Bx'],data['By'],data['Bz'])
-            data['Ohmresx'] = data['Ex'] + EMHD_x - EHall_x - data['EPx']
-            data['Ohmresy'] = data['Ey'] + EMHD_y - EHall_y - data['EPy']
-            data['Ohmresz'] = data['Ez'] + EMHD_z - EHall_z - data['EPz']
+            data['EMHDx'], data['EMHDy'], data['EMHDz'] = do_cross(uCMx,uCMy,uCMz,data['Bx'],data['By'],data['Bz'])
+            data['Ohmresx'] = data['Ex'] + data['EMHDx'] - data['EHallx'] - data['EPx']
+            data['Ohmresy'] = data['Ey'] + data['EMHDy'] - data['EHally'] - data['EPy']
+            data['Ohmresz'] = data['Ez'] + data['EMHDz'] - data['EHally'] - data['EPz']
         
 
             
