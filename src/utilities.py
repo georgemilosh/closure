@@ -443,7 +443,7 @@ def transform_features(trainer, rescale=True, renorm=True, verbose=True):
                 ground_truth_scaled[:,channel] = invfunc(ground_truth_scaled[:,channel])
     return ground_truth_scaled
 
-def transform_targets(trainer, rescale=True, renorm=True, verbose=True, reshape=False, test_features=None):
+def transform_targets(trainer, rescale=True, renorm=True, verbose=True, reshape=False, test_features=None, dataset='test'):
     """
     Transforms the predicted and ground truth targets based on the trainer's configuration.
     Args:
@@ -454,39 +454,43 @@ def transform_targets(trainer, rescale=True, renorm=True, verbose=True, reshape=
         reshape (bool): Whether to reshape the targets for visualization. Defaults to False
             reshape = False is how the function was intended to be used in past with functions such as
             graph_pred_targets and plot_pred_targets, which expect the targets to not be reshaped
-        test_features (torch.Tensor, optional): If provided, uses these features for prediction 
-        instead of the test dataset's features.
+        test_features (torch.Tensor, optional): If provided, uses this features for prediction 
+            instead of the dataset's features.
+        dataset (str): Which dataset to use - 'test', 'val', or 'train'. Defaults to 'test'.
     Returns:
         prediction_scaled: The scaled predicted targets.
         ground_truth_scaled: The scaled ground truth targets.
     """
+    # Get the appropriate dataset
+    ds = getattr(trainer, f'{dataset}_dataset')
+    loader = getattr(trainer, f'{dataset}_loader')
+
     if test_features is None:
-        prediction = trainer.model.predict(trainer.test_dataset.features).cpu()
+        prediction = trainer.model.predict(ds.features).cpu()
     else:
         prediction = trainer.model.predict(test_features).cpu()
-    ground_truth = trainer.test_dataset.targets[:,trainer.test_loader.target_channels].squeeze()
+    ground_truth = ds.targets[:,loader.target_channels].squeeze()
     pred_shape = [1 for _ in prediction.shape]
     pred_shape[1] = -1
     pred_shape = tuple(pred_shape)
 
-    if trainer.test_loader.target_channels is None:
-        list_of_target_indices = range(len(trainer.test_dataset.prescaler_targets))
+    if loader.target_channels is None:
+        list_of_target_indices = range(len(ds.prescaler_targets))
     else:
-        list_of_target_indices = trainer.test_loader.target_channels
+        list_of_target_indices = loader.target_channels
 
     if renorm:
-        prediction_scaled = (prediction*trainer.test_dataset.targets_std[list_of_target_indices].reshape(pred_shape)+
-                            trainer.test_dataset.targets_mean[list_of_target_indices].reshape(pred_shape))
-        ground_truth_scaled = (ground_truth*trainer.test_dataset.targets_std[list_of_target_indices].reshape(pred_shape)+
-                                trainer.test_dataset.targets_mean[list_of_target_indices].reshape(pred_shape))
+        prediction_scaled = (prediction*ds.targets_std[list_of_target_indices].reshape(pred_shape)+
+                            ds.targets_mean[list_of_target_indices].reshape(pred_shape))
+        ground_truth_scaled = (ground_truth*ds.targets_std[list_of_target_indices].reshape(pred_shape)+
+                                ds.targets_mean[list_of_target_indices].reshape(pred_shape))
     if rescale:
-        for channel, _ in enumerate(trainer.test_dataset.request_targets):
-            if trainer.test_loader.target_channels is None:
-                list_of_target_indices = range(len(trainer.test_dataset.prescaler_targets))
+        for channel, _ in enumerate(ds.request_targets):
+            if loader.target_channels is None:
+                list_of_target_indices = range(len(ds.prescaler_targets))
             else:
-                list_of_target_indices = trainer.test_loader.target_channels
-
-            func = [trainer.test_dataset.prescaler_targets[i] for i in list_of_target_indices][channel]
+                list_of_target_indices = loader.target_channels
+            func = [ds.prescaler_targets[i] for i in list_of_target_indices][channel]
             if func == None:
                 invfunc = lambda a: a
             elif func.__name__ == 'log':
@@ -499,12 +503,12 @@ def transform_targets(trainer, rescale=True, renorm=True, verbose=True, reshape=
             ground_truth_scaled[:,channel] = invfunc(ground_truth_scaled[:,channel])
     
     if reshape:
-        if trainer.test_dataset.flatten:
-            prediction_scaled = prediction_scaled.reshape((-1,)+trainer.test_dataset.targets_shape[1:])
-            ground_truth_scaled = ground_truth_scaled.reshape((-1,)+trainer.test_dataset.targets_shape[1:])
+        if ds.flatten:
+            prediction_scaled = prediction_scaled.reshape((-1,)+ds.targets_shape[1:])
+            ground_truth_scaled = ground_truth_scaled.reshape((-1,)+ds.targets_shape[1:])
         #else:
-        #    prediction_scaled = (prediction_scaled.reshape(trainer.test_dataset.targets_shape[1:] + (-1,))).permute(3, 2, 0, 1)
-        #    ground_truth_scaled = (ground_truth_scaled.reshape(trainer.test_dataset.targets_shape[1:] + (-1,))).permute(3, 2, 0, 1)
+        #    prediction_scaled = (prediction_scaled.reshape(ds.targets_shape[1:] + (-1,))).permute(3, 2, 0, 1)
+        #    ground_truth_scaled = (ground_truth_scaled.reshape(ds.targets_shape[1:] + (-1,))).permute(3, 2, 0, 1)
     prediction_scaled = prediction_scaled.cpu().numpy()
     ground_truth_scaled = ground_truth_scaled.cpu().numpy()
     return ground_truth_scaled, prediction_scaled 
@@ -562,7 +566,7 @@ def evaluate_loss(trainer, ground_truth, prediction, criterion, verbose=True):
             print(f'Loss for channel {channel}:  {trainer.test_dataset.request_targets[channel]}, loss = {loss[label]}')
     return loss
 
-def graph_pred_targets(trainer, target_name: str, ground_truth_scaled, prediction_scaled, reshape=True):
+def graph_pred_targets(trainer, target_name: str, ground_truth_scaled, prediction_scaled, reshape=True, dataset='test'):
     """
     Generate and display a grid of subplots showing the ground truth, predictions, and error for a specific target variable.
     Parameters:
@@ -574,15 +578,22 @@ def graph_pred_targets(trainer, target_name: str, ground_truth_scaled, predictio
     Returns:
     None
     """
-    channel = trainer.test_dataset.request_targets.index(target_name)
+    # Get the appropriate dataset
+    ds = getattr(trainer, f'{dataset}_dataset')
+    # Convert to numpy if torch tensors
+    if torch.is_tensor(prediction_scaled):
+        prediction_scaled = prediction_scaled.cpu().numpy()
+    if torch.is_tensor(ground_truth_scaled):
+        ground_truth_scaled = ground_truth_scaled.cpu().numpy()
+    channel = ds.request_targets.index(target_name)
     if reshape:
-        prediction_reshaped = prediction_scaled[:,channel].reshape(trainer.test_dataset.targets_shape[:-1]+(1,)).cpu().numpy()
-        ground_truth_reshaped = ground_truth_scaled[:,channel].reshape(trainer.test_dataset.targets_shape[:-1]+(1,)).cpu().numpy()
+        prediction_reshaped = prediction_scaled[:,channel].reshape(ds.targets_shape[:-1]+(1,)) #.cpu().numpy()
+        ground_truth_reshaped = ground_truth_scaled[:,channel].reshape(ds.targets_shape[:-1]+(1,)) #.cpu().numpy()
     else:
         prediction_reshaped = prediction_scaled[...,channel][...,np.newaxis]
         ground_truth_reshaped = ground_truth_scaled[...,channel][...,np.newaxis]
 
-    X, Y = rp.build_XY(f"{trainer.dataset_kwargs['data_folder']}/{trainer.test_dataset.filenames[0].rsplit('/',1)[0]}/",
+    X, Y = rp.build_XY(f"{trainer.dataset_kwargs['data_folder']}/{ds.filenames[0].rsplit('/',1)[0]}/",
                         choose_x=trainer.dataset_kwargs['read_features_targets_kwargs']['choose_x'],
                         choose_y = trainer.dataset_kwargs['read_features_targets_kwargs']['choose_y'])
     import os
@@ -612,7 +623,7 @@ def graph_pred_targets(trainer, target_name: str, ground_truth_scaled, predictio
                     im = axes.pcolormesh(X, Y, data, vmax=vmax[j], vmin=vmin[j], cmap=cmaps[j])
                 except Exception as e:
                     print(f"Error plotting {label} {target_name}, {data.shape = }: {e}")
-                axes.set_title(f"{label} {target_name} @ {trainer.test_dataset.dataframe['filenames'].iloc[i].rsplit('_')[-1].rsplit('.')[0]}")
+                axes.set_title(f"{label} {target_name} @ {ds.dataframe['filenames'].iloc[i].rsplit('_')[-1].rsplit('.')[0]}")
                 axes.set_xlabel('X')
                 axes.set_ylabel('Y')
                 f.colorbar(im, ax=axes)
@@ -988,6 +999,80 @@ def do_dot(fx,fy,fz,gx,gy,gz):
 	
 def do_cross(fx,fy,fz,gx,gy,gz):
 	return fy*gz-fz*gy, fz*gx-fx*gz, fx*gy-fy*gx	
+
+def get_PS_3D_field(data, x, y, z):
+    """
+    Get the pressure-strain term and theta
+    """
+    data['QJ'] = {}
+    data['Qomega'] = {}
+    data['QD'] = {}
+    data['PiD'] = {}
+    data['Ptheta'] = {}
+    data['PS'] = {}
+    data['theta'] = {}
+    data['Dxx'] = {}
+    data['Dyy'] = {}
+    data['Dzz'] = {}
+    data['Dxy'] = {}
+    data['Dxz'] = {}
+    data['Dyz'] = {}
+    data['Ppar'] = {}
+    data['Pperp'] = {}
+    data['P'] = {}
+    data['J*(E+VxB)'] = {}
+    data['Jtotx'] = np.sum([data['Jx'][species] for species in data['Jx'].keys()], axis=0)
+    data['Jtoty'] = np.sum([data['Jy'][species] for species in data['Jy'].keys()], axis=0)
+    data['Jtotz'] = np.sum([data['Jz'][species] for species in data['Jz'].keys()], axis=0)
+    E = np.array([data['Ex'], data['Ey'], data['Ez']]).transpose(1,2,3,4,0)
+    B = np.array([data['Bx'], data['By'], data['Bz']]).transpose(1,2,3,4,0)
+    J2 = data['Jtotx']**2 + data['Jtoty']**2 + data['Jtotz']**2
+    data['QJ'] = 0.25*J2/np.mean(J2, axis=(0,1))
+    for species in data['rho'].keys():
+        J = np.array([data['Jx'][species], data['Jy'][species], data['Jz'][species]]).transpose(1,2,3,4,0)
+        V = np.array([data['Vx'][species], data['Vy'][species], data['Vz'][species]]).transpose(1,2,3,4,0)
+        data['J*(E+VxB)'][species] = np.sum(J*(E + np.cross(V, B)),axis=-1)
+        uxx = np.gradient(data['Vx'][species],x, axis=0, edge_order=2)
+        uxy = np.gradient(data['Vx'][species],y, axis=1, edge_order=2)
+        uyx = np.gradient(data['Vy'][species],x, axis=0, edge_order=2)
+        uyy = np.gradient(data['Vy'][species],y, axis=1, edge_order=2)
+        uzx = np.gradient(data['Vz'][species],x, axis=0, edge_order=2)
+        uzy = np.gradient(data['Vz'][species],y, axis=1, edge_order=2)
+        uxz = np.gradient(data['Vx'][species],z, axis=2, edge_order=2)
+        uyz = np.gradient(data['Vy'][species],z, axis=2, edge_order=2)
+        uzz = np.gradient(data['Vz'][species],z, axis=2, edge_order=2)
+        omega2 = (uzy-uyz)**2 + (uxz-uzx)**2 + (uyx-uxy)**2
+        data['Qomega'][species] = 0.25*omega2/np.mean(omega2, axis=(0,1,2))
+        data['P'][species]=(data['Pxx'][species]+\
+                                data['Pyy'][species]+\
+                                    data['Pzz'][species])/3
+        data['Ppar'][species] = (data['Pxx'][species]*data['Bx']**2 + data['Pyy'][species]*data['By']**2  + data['Pzz'][species]*data['Bz']**2 + \
+                                        2*data['Pxy'][species]*data['Bx']*data['By']+2*data['Pxz'][species]*data['Bx']*data['Bz'] + \
+                                            2*data['Pyz'][species]*data['By']*data['Bz'])/(data['By']**2+data['Bx']**2+data['Bz']**2)
+        data['Pperp'][species] = (data['Pxx'][species] + data['Pyy'][species] + data['Pzz'][species] - data['Ppar'][species])/2
+        data['theta'][species]=uxx+uyy+uzz
+        data['PS'][species]=-data['Pxx'][species]*uxx-\
+            data['Pxy'][species]*uxy-data['Pxy'][species]*uyx-\
+                data['Pyy'][species]*uyy-data['Pxz'][species]*uzx-\
+                    data['Pyz'][species]*uzy-data['Pxz'][species]*uxz-\
+                        data['Pyz'][species]*uyz-data['Pzz'][species]*uzz
+        data['Ptheta'][species]=data['P'][species]*data['theta'][species]
+        data['Dxx'][species] = uxx - data['theta'][species]/3
+        data['Dyy'][species] = uyy - data['theta'][species]/3
+        data['Dzz'][species] = uzz - data['theta'][species]/3
+        data['Dxy'][species] = (uxy + uyx)/2
+        data['Dxz'][species] = (uxz + uzx)/2
+        data['Dyz'][species] = (uyz + uzy)/2
+        Dsum = data['Dxx'][species]**2 + data['Dyy'][species]**2 + data['Dzz'][species]**2 +\
+            2*(data['Dxy'][species]**2 + data['Dxz'][species]**2 + data['Dyz'][species]**2) 
+        data['QD'][species] = 0.25*Dsum/np.mean(Dsum, axis=(0,1,2))
+        # Using PiD = - (Pij - Pdelta_ij)Dij
+        data['PiD'][species]=-(data['Pxx'][species]-data['P'][species])*(uxx-data['theta'][species]/3)-\
+                (data['Pyy'][species]-data['P'][species])*(uyy-data['theta'][species]/3)-\
+                        (data['Pzz'][species]-data['P'][species])*(uzz-data['theta'][species]/3)-\
+                                data['Pxy'][species]*(uyx+uxy)-\
+                                    data['Pxz'][species]*(uzx+uxz)-\
+                                        data['Pyz'][species]*(uzy+uyz)
 
 def get_PS_2D_field(data, x, y):
     """
