@@ -53,6 +53,9 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
             elif filename.endswith(".h5.pkl"):
                 with open(files_path + filename, "rb") as n:
                     field.append(pickle.load(n)[fieldname])
+            elif filename.endswith(".npz"):
+                with np.load(files_path + filename) as n:
+                    field.append(n[fieldname])
             else:
                 raise FileNotFoundError(f"Neither {filename} nor {filename}.pkl found in {files_path}")
             if choose_x is None:
@@ -650,7 +653,7 @@ def get_exp_times(experiments, files_path, fields_to_read, choose_species=None, 
         #dx = Lx/nxc
         #dy = Ly/nyc
         # sorted(os.listdir()) creates a sorted list containing the .h5 filenames, os.listdir() alone would put them in random order.
-        filenames = sorted([n for n in os.listdir(f"{files_path}{experiment}") if "-Fields_" in n and (n.endswith(".pkl") or n.endswith(".h5"))])
+        filenames = sorted([n for n in os.listdir(f"{files_path}{experiment}") if "-Fields_" in n and (n.endswith(".pkl") or n.endswith(".h5") or n.endswith(".npz"))])
         if choose_times is None:
             selected_filenames = filenames
         elif isinstance(choose_times, int):
@@ -662,7 +665,7 @@ def get_exp_times(experiments, files_path, fields_to_read, choose_species=None, 
                 logger.info(f"Inconsistent size: {len(filenames) = }  {len(choose_times) = }")
                 raise e
         try:
-            times = [int(n[-13:-7] if n.endswith(".h5.pkl") else n[-9:-3]) * dt for n in selected_filenames]
+            times = [int(n[-13:-7] if n.endswith(".h5.pkl") else (n[-9:-4] if n.endswith(".npz") else n[-9:-3])) * dt for n in selected_filenames]
         except Exception as e:
             logger.info(f"Failed to extract times from {n = }")
             logger.info(f"{selected_filenames=}")
