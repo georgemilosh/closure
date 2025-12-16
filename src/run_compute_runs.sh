@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=compare
-#SBATCH --account=2025_065
+#SBATCH --account=2025_112
 #SBATCH --error=down_%x_%j.err
 #SBATCH --output=down_%x_%j.out
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=12
-#SBATCH --mem 238G
+#SBATCH --mem 120G
 #SBATCH --time=06:00:00
 
 # Load necessary modules
@@ -22,8 +22,8 @@ module load matplotlib/3.7.2-gfbf-2023a
 
 # Get the argument for the read folder
 WORK_DIR=$1
-OUTPUT_DIR=$(pwd)/
-WORK_DIR="${OUTPUT_DIR}${WORK_DIR}"
+#OUTPUT_DIR=$(pwd)/
+#WORK_DIR="${OUTPUT_DIR}${WORK_DIR}"
 
 REPO_DIR="/dodrio/scratch/projects/2025_065/georgem/2024_109/closure/"
 
@@ -65,4 +65,5 @@ echo "pwd     : [$(pwd)]" >> ~/job_logs/job_${SLURM_JOB_ID}.log
 cd $REPO_DIR
 
 # Run the downscale.py script with the provided arguments
-python -m src.run_compare_runs.py --work_dir $WORK_DIR
+echo python -m src.run_compare_runs --work_dir $WORK_DIR
+python -m src.run_compare_runs --work_dir $WORK_DIR
