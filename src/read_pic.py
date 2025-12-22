@@ -507,8 +507,8 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                 data['gyro_radius'] = {}
                 for species in data['rho']:
                     i = choose_species.index(species)
-                    p = data['Pxx'][species]+data['Pyy'][species]+data['Pzz'][species]
-                    vth=np.sqrt(np.abs(p/(data['rho'][species]+small)*qom[i]))
+                    #p = data['Pxx'][species]+data['Pyy'][species]+data['Pzz'][species]
+                    vth=np.sqrt(np.abs(qom[i]*data['Pperp'][species]/(np.abs(data['rho'][species])+small)))
                     data['gyro_radius'][species] = np.abs(vth/(qom[i]*data['Bmagn']))
             except Exception as e:
                 logger.warning(f"Failed to calculate gyro_radius, see: {e}")
