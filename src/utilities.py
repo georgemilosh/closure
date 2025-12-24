@@ -391,9 +391,12 @@ def conserved_quantities(folder, verbose=True):
     ]
 
     # Read the data from the file
-    data = pd.read_csv(file_path, sep=r"\s+", header=None, names=column_names)
-    data = data.drop(columns=['Cycle'])
-    
+    data = pd.read_csv(file_path,  delim_whitespace=True, 
+                    comment='#', 
+                    header=None)
+    # Select only the first len(column_names) columns and assign the names
+    data = data.iloc[:, :len(column_names)]
+    data.columns = column_names
     if verbose:
         print("variables ", column_names[1:])
     

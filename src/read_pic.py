@@ -430,7 +430,7 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                         data[f'J{component}'][species] = read_fieldname(files_path,filenames,f'J{component}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
             if fields_to_read['rho']:
                 for species in data[f'J{component}'].keys():
-                    data[f'V{component}'][species] = data[f'J{component}'][species]/(data['rho'][species]+small)
+                    data[f'V{component}'][species] = data[f'J{component}'][species]/(data['rho'][species]+small*np.sign(qom[i]))
         data['Jmagn'] = {}
         data['Jtotx'] = np.sum([data['Jx'][species] for species in data['Jx'].keys()], axis=0)
         data['Jtoty'] = np.sum([data['Jy'][species] for species in data['Jy'].keys()], axis=0)
@@ -466,7 +466,7 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                 for species in data[f'PI{component_1}{component_2}']: # because now the number of species has potentially changed
                     i = choose_species.index(species)
                     data[f'P{component_1}{component_2}'][species]  = (data[f'PI{component_1}{component_2}'][species] - \
-                                data[f'J{component_1}'][species]*data[f'J{component_2}'][species]/(data[f'rho'][species]+small))/qom[i]
+                                data[f'J{component_1}'][species]*data[f'J{component_2}'][species]/(data[f'rho'][species]+small*np.sign(qom[i])))/qom[i]
 
                 if not fields_to_read["P"]:
                     del data[f'P{component_1}{component_2}']
@@ -550,7 +550,8 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
             uCMx /= norm
             uCMy /= norm
             uCMz /= norm
-            data['EMHDx'], data['EMHDy'], data['EMHDz'] = do_cross(uCMx,uCMy,uCMz,data['Bx'],data['By'],data['Bz'])
+            data['EMHDx'], data['EMHDy'], data['EMHDz'] = do_cross(uCMx,uCMy,uCMz,data['Bx'],data['By'],data['Bz']) # TODO: fix sign, should be minus
+            # data['EMHDx'], data['EMHDy'], data['EMHDz'] = -do_cross(uCMx,uCMy,uCMz,data['Bx'],data['By'],data['Bz']) 
             data['Ohmresx'] = data['Ex'] + data['EMHDx'] - data['EHallx'] - data['EPx']
             data['Ohmresy'] = data['Ey'] + data['EMHDy'] - data['EHally'] - data['EPy']
             data['Ohmresz'] = data['Ez'] + data['EMHDz'] - data['EHally'] - data['EPz']
@@ -576,9 +577,9 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                 for species in data[f'EF{component}'].keys():
                     i = choose_species.index(species)
                     data[f'q{component}'][species] =  data[f'EF{component}'][species] - \
-                        (data['Jx'][species]**2+data['Jy'][species]**2+data['Jz'][species]**2)*data[f'J{component}'][species]/(2*qom[i]*data[f'rho'][species]**2+small) - \
-                        (data['Pxx'][species] + data[f'Pyy'][species] + data[f'Pzz'][species])*data[f'J{component}'][species]/(2*data['rho'][species]+small) - \
-                        (data['Jx'][species]*data[f'Px{component}'][species] + data['Jy'][species]*data[f'Py{component}'][species] + data['Jz'][species]*data[f'Pz{component}'][species])/(data['rho'][species]+small)
+                        (data['Jx'][species]**2+data['Jy'][species]**2+data['Jz'][species]**2)*data[f'J{component}'][species]/(2*qom[i]*data[f'rho'][species]**2+small*np.sign(qom[i])) - \
+                        (data['Pxx'][species] + data[f'Pyy'][species] + data[f'Pzz'][species])*data[f'J{component}'][species]/(2*data['rho'][species]+small*np.sign(qom[i])) - \
+                        (data['Jx'][species]*data[f'Px{component}'][species] + data['Jy'][species]*data[f'Py{component}'][species] + data['Jz'][species]*data[f'Pz{component}'][species])/(data['rho'][species]+small*np.sign(qom[i]))
             except Exception as e:
                 logger.warning(f"Failed to calculate q{component} see: {e}")
                 #logger.info(f"{data[f'q{component}'].keys() = }")
