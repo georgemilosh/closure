@@ -16,7 +16,7 @@ import pandas as pd
 try:
     import torch
 except ImportError:
-    print("PyTorch is not installed. Some functions may not work.")
+    print("utilities: PyTorch is not installed. Some functions may not work.")
 #import torchmetrics
 import matplotlib.pyplot as plt
 import numpy as np

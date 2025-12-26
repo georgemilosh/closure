@@ -20,7 +20,10 @@ Usage in Command Line:
 
 """
 import logging
-import torch
+try:
+    import torch
+except ImportError:
+    print("trainers: PyTorch is not installed. Some functions may not work.") 
 import pickle
 import warnings
 import psutil
