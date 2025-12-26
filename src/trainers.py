@@ -22,6 +22,7 @@ Usage in Command Line:
 import logging
 try:
     import torch
+    import torch.distributed as dist
 except ImportError:
     print("trainers: PyTorch is not installed. Some functions may not work.") 
 import pickle
@@ -31,7 +32,6 @@ import argparse
 import copy
 import os
 import shutil
-import torch.distributed as dist
 import json
 from socket import gethostname
 
