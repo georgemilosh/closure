@@ -11,14 +11,17 @@ License:    MIT License
 """
 
 import subprocess
-from . import trainers as tr
+
 import pandas as pd
-import torch
+try:
+    import torch
+    from . import trainers as tr
+except ImportError:
+    print("utilities: PyTorch is not installed. Some functions may not work. Omitting trainer-dependent functions.")
 #import torchmetrics
 import matplotlib.pyplot as plt
 import numpy as np
 from . import read_pic as rp
-import re
 import os
 import pickle
 import scipy.ndimage as nd
