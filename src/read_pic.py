@@ -49,7 +49,10 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
             if filename.endswith(".h5"):
                 import h5py
                 with h5py.File(files_path + filename, "r") as n:
-                    field.append(np.array(n[f"/Step#0/Block/{fieldname}/0"]))
+                    try:
+                        field.append(np.array(n[f"/Step#0/Block/{fieldname}/0"]))
+                    except Exception as e:
+                        logger.error(f"Unable to open {fieldname = } from {files_path = } of {filename = }")
             elif filename.endswith(".h5.pkl"):
                 with open(files_path + filename, "rb") as n:
                     field.append(pickle.load(n)[fieldname])
