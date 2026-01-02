@@ -4,6 +4,7 @@ import re
 from . import utilities as ut
 import scipy.ndimage as nd
 import pickle
+import glob
 
 import logging
 logger = logging.getLogger(__name__)
@@ -14,6 +15,76 @@ DEFAULT_CHOOSE_Y = None
 DEFAULT_CHOOSE_Z = None
 DEFAULT_INDEXING = 'ij'
 DEFAULT_VERBOSE = False
+
+def read_ipic3d_field(files_path, cycles, fieldname, choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, 
+                      choose_z=DEFAULT_CHOOSE_Z, indexing=DEFAULT_INDEXING, verbose=DEFAULT_VERBOSE):
+    """
+    Read a specific field from multiple iPiC3D HDF5 files and return a subset of the field.
+
+    Parameters:
+    - files_path (str): The path to the directory containing the files.
+    - cycles (list): A list of cycle identifiers to read from.
+    - fieldname (str): The name of the field to read.
+    - choose_x (list, optional): A list specifying the range of indices to select along the x-axis. Defaults to None.
+    - choose_y (list, optional): A list specifying the range of indices to select along the y-axis. Defaults to None.
+    - choose_z (list, optional): A list specifying the range of indices to select along the z-axis. Defaults to None.
+    - indexing (string, defaults to 'ij'): A flag indicating how to transpose the field. If 'ij', the field is 
+        transposed to have the x-axis as the first index, the y-axis as the second index, and the z-axis as the third index. 
+        If 'xy', the field is transposed to have the x-axis as the second index, the y-axis as the first index, and the z-axis as the third index.
+    - verbose (bool, optional): A flag indicating whether to logger.info debug information.
+
+    Returns:
+    - numpy.ndarray: A subset of the field, with the z-dimension removed.
+
+    """
+    X, _ = build_XY(files_path)
+    sim_data = parse_simulation_data(files_path)
+    nxc = sim_data['nxc']
+    nyc = sim_data['nyc']
+    nzc = sim_data['nzc']
+    if choose_x is None:
+        choose_x = [0, nxc]
+    if choose_y is None:
+        choose_y = [0, nyc]
+    if choose_z is None:
+        choose_z = [0, nzc]
+    time_cycles = [f"cycle_{cycle}" for cycle in cycles]
+    field_times = []
+    all_hdf_files = sorted(glob.glob(os.path.join(files_path, "proc*.hdf")))
+    if "_" in fieldname:
+        field_name, species = fieldname.split("_", 1)  # splits at first underscore
+    else:
+        field_name, species = fieldname, None            # or handle however you need
+    for time_cycle in time_cycles:
+        field = np.zeros_like(X)
+        for file_path in all_hdf_files:
+            import h5py
+            rank_id = int(os.path.basename(file_path).replace("proc", "").replace(".hdf", ""))
+            with h5py.File(file_path, "r") as f:
+                if species is not None:
+                    field_data = np.array(f[f"moments/species_{species}/{field_name}/" + time_cycle])[:-1, :-1, :-1]
+                else:
+                    field_data = np.array(f[f"fields/{field_name}/" + time_cycle])[:-1, :-1, :-1]
+                x0, y0, z0 = field_data.shape[0]*f['topology']['cartesian_coord'][()]
+                nx_local, ny_local, nz_local = field_data.shape
+                
+                if rank_id != f['topology']['cartesian_rank'][()]:
+                    raise ValueError(f"Rank ID {rank_id} does not match cartesian rank {f['topology']['cartesian_rank'][()]} in file {file_path}")
+                #if verbose:
+                #    logger.info(f"Rank {rank_id} at position ({x0 = }, {y0 = }, {z0 = }) with {i = }, {j = }, {k = } processing file {file_path} ")
+                #    logger.info(f".   cartesian_coord: {f['topology']['cartesian_coord'][()]}")
+                #    logger.info(f" writing data to global arrays at indices x: {x0} to {x0 + nx_local}, y: {y0} to {y0 + ny_local}")
+                field[x0:x0 + nx_local, y0:y0 + ny_local] = field_data[:, :, 0]
+                #logger.info(f"Read {fieldname} from {file_path} with shape {field_data.shape}")
+        if verbose:
+            logger.info(f"Read {fieldname} at {time_cycle} with shape {field.shape} before slicing")    
+        field_times.append(field.transpose()[choose_x[0]:choose_x[1], choose_y[0]:choose_y[1]])
+    field_times = np.array(field_times)
+    if verbose:
+        logger.info(f"Extracted {field_times.shape = }")
+    
+    return np.transpose(field_times,(2,1,0))
+
 
 
 def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, 
@@ -50,37 +121,34 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
                 import h5py
                 with h5py.File(files_path + filename, "r") as n:
                     try:
-                        field.append(np.array(n[f"/Step#0/Block/{fieldname}/0"]))
+                        temp = np.array(n[f"/Step#0/Block/{fieldname}/0"])
                     except Exception as e:
                         logger.error(f"Unable to open {fieldname = } from {files_path = } of {filename = }")
             elif filename.endswith(".h5.pkl"):
                 with open(files_path + filename, "rb") as n:
-                    field.append(pickle.load(n)[fieldname])
+                    temp = pickle.load(n)[fieldname]
             elif filename.endswith(".npz"):
                 with np.load(files_path + filename) as n:
-                    field.append(n[fieldname])
+                    temp = n[fieldname]
             else:
                 raise FileNotFoundError(f"Neither {filename} nor {filename}.pkl found in {files_path}")
             if choose_x is None:
-                choose_x = [0,field[-1].shape[2]-1]
+                choose_x = [0,temp.shape[2]-1]
             if choose_y is None:
-                choose_y = [0,field[-1].shape[1]-1]
+                choose_y = [0,temp.shape[1]-1]
             if choose_z is None:
-                choose_z = [0,field[-1].shape[0]]
+                choose_z = [0,temp.shape[0]-1]
+            #logger.warning(f"{choose_x = }, {choose_y = }, {choose_z = } with shape {temp.shape}")
+            temp = np.transpose(temp[choose_z[0]:choose_z[1], choose_y[0]:choose_y[1], choose_x[0]:choose_x[1]], (2, 1, 0))  # to (z,y,x)
+            #logger.warning(f"Read {fieldname} from {filename} with shape {temp.shape} before squeeze")
+            temp = temp.squeeze()
+            field.append(temp)
         except Exception as e:
             if verbose:
                 logger.warning(f"Failed to read {fieldname} from {filename} using path {files_path}")
             raise e
-    if indexing == 'ij': 
-        a = np.transpose(np.array(field), (3, 2, 1, 0))[choose_x[0]:choose_x[1],choose_y[0]:choose_y[1],choose_z[0]:choose_z[1],:]
-    elif indexing == 'xy':
-        a = np.transpose(np.array(field), (2, 3, 1, 0))[choose_y[0]:choose_y[1],choose_x[0]:choose_x[1],choose_z[0]:choose_z[1],:]
-    else:
-        a = np.array(field)[choose_x[0]:choose_x[1],choose_y[0]:choose_y[1],choose_z[0]:choose_z[1],:]
-    if a.shape[2] <= 2: #  if z axis has length 2 or less it should be dropped
-        a = np.squeeze(a[...,0,:])
-    else:
-        a = np.squeeze(a) # transposing means swapping x and y and remove z
+    a = np.moveaxis(np.array(field), 0, -1)
+        
     #logger.info(f"{filename}, {fieldname}, {a.shape = }")
     if filters is not None:
         if not isinstance(filters, list):
@@ -140,76 +208,161 @@ def apply_filters(field, filters, fieldname=None, filename=None, verbose=DEFAULT
             logger.info(f"Resulting shape {a.shape}")
     return a
 
-
-def build_XY(files_path,choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, choose_z=DEFAULT_CHOOSE_Z, indexing=DEFAULT_INDEXING):
-    # Read qom, Lx, Ly, Lz, nxc, nyc, nzc and dt from the SimulationData.txt file.
+def parse_simulation_data(files_path):
+    """
+    Parse SimulationData.txt file that can be in either old or new format.
+    
+    Old format uses key patterns like "x-Length" and "Number of cells (x)"
+    New format uses "Simulation domain" and "Grid resolution" with comma-separated values
+    
+    Returns:
+    - dict: A dictionary containing Lx, Ly, Lz, nxc, nyc, nzc, dt, and qom values
+    """
     try:
-        f=open(files_path+"SimulationData.txt","r")
+        f = open(files_path + "SimulationData.txt", "r")
     except Exception:
         # Remove the last folder from files_path
         files_path = os.path.dirname(os.path.normpath(files_path)) + os.sep
         f = open(files_path + "SimulationData.txt", "r")
-    content=f.readlines()
+    
+    content = f.readlines()
     f.close()
-    # TODO: deal with qom in more serious way, so that it is readed from the correct folder if the filenames are from different folders
-    qom=[]
-    for n in content:
-        if "QOM" in n:
-            qom.append(float(re.split("=",re.sub(" |\n","",n))[-1]))
-        if "x-Length" in n:
-            Lx=float(re.split("=",re.sub(" |\n","",n))[1])
-        if "y-Length" in n:
-            Ly=float(re.split("=",re.sub(" |\n","",n))[1])
-        if "z-Length" in n:
-            Lz=float(re.split("=",re.sub(" |\n","",n))[1])
-        if "Number of cells (x)" in n:
-            nxc=int(re.split("=",re.sub(" |\n","",n))[1])
-        if "Number of cells (y)" in n:
-            nyc=int(re.split("=",re.sub(" |\n","",n))[1])
-        if "Number of cells (z)" in n:
-            nzc=int(re.split("=",re.sub(" |\n","",n))[1])
-        if "Time step" in n:
-            dt=float(re.split("=",re.sub(" |\n","",n))[1])
+    
+    # Initialize variables
+    result = {
+        'Lx': None, 'Ly': None, 'Lz': None,
+        'nxc': None, 'nyc': None, 'nzc': None,
+        'dt': None, 'qom': []
+    }
+    
+    # Try to detect format by checking for key indicators
+    content_str = ''.join(content)
+    is_new_format = "Simulation domain" in content_str and "Grid resolution" in content_str
+    
+    if is_new_format:
+        # Parse new format
+        for line in content:
+            line_clean = line.strip()
+            
+            # Parse Simulation domain (e.g., "Simulation domain = 30 x 30 x 1")
+            if line_clean.startswith("Simulation domain"):
+                parts = line_clean.split("=")[1].strip().split("x")
+                result['Lx'] = float(parts[0].strip())
+                result['Ly'] = float(parts[1].strip())
+                result['Lz'] = float(parts[2].strip())
+            
+            # Parse Grid resolution (e.g., "Grid resolution = 100 x 100 x 1")
+            elif line_clean.startswith("Grid resolution"):
+                parts = line_clean.split("=")[1].strip().split("x")
+                result['nxc'] = int(parts[0].strip())
+                result['nyc'] = int(parts[1].strip())
+                result['nzc'] = int(parts[2].strip())
+            
+            # Parse Time step size (e.g., "Time step size (dt) = 0.125")
+            elif "Time step size" in line_clean:
+                result['dt'] = float(line_clean.split("=")[1].strip())
+            
+            # Parse Charge-to-mass ratio
+            elif "Charge-to-mass ratio" in line_clean:
+                qom_val = float(line_clean.split("=")[1].strip())
+                result['qom'].append(qom_val)
+    else:
+        # Parse old format
+        for n in content:
+            if "QOM" in n:
+                result['qom'].append(float(re.split("=", re.sub(" |\n", "", n))[-1]))
+            if "x-Length" in n:
+                result['Lx'] = float(re.split("=", re.sub(" |\n", "", n))[1])
+            if "y-Length" in n:
+                result['Ly'] = float(re.split("=", re.sub(" |\n", "", n))[1])
+            if "z-Length" in n:
+                result['Lz'] = float(re.split("=", re.sub(" |\n", "", n))[1])
+            if "Number of cells (x)" in n:
+                result['nxc'] = int(re.split("=", re.sub(" |\n", "", n))[1])
+            if "Number of cells (y)" in n:
+                result['nyc'] = int(re.split("=", re.sub(" |\n", "", n))[1])
+            if "Number of cells (z)" in n:
+                result['nzc'] = int(re.split("=", re.sub(" |\n", "", n))[1])
+            if "Time step" in n:
+                result['dt'] = float(re.split("=", re.sub(" |\n", "", n))[1])
+    
+    return result
 
+
+def build_XY(files_path, choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, 
+             choose_z=DEFAULT_CHOOSE_Z, indexing=DEFAULT_INDEXING):
+    """
+    Read grid parameters from SimulationData.txt and build coordinate meshgrids.
+    Supports both old and new SimulationData.txt formats.
+    """
+    sim_data = parse_simulation_data(files_path)
+    
+    Lx = sim_data['Lx']
+    Ly = sim_data['Ly']
+    Lz = sim_data['Lz']
+    nxc = sim_data['nxc']
+    nyc = sim_data['nyc']
+    nzc = sim_data['nzc']
+    qom = sim_data['qom']
+    
     # The x, y and z axes are set.
-    x=np.linspace(0,Lx,nxc+1)
-    y=np.linspace(0,Ly,nyc+1)
-    z=np.linspace(0,Lz,nzc+1)
+    x = np.linspace(0, Lx, nxc + 1)
+    y = np.linspace(0, Ly, nyc + 1)
+    z = np.linspace(0, Lz, nzc + 1)
     
     if choose_x is None:
-        choose_x = [0,nxc]
+        choose_x = [0, nxc]
     if choose_y is None:
-        choose_y = [0,nyc]
+        choose_y = [0, nyc]
     if choose_z is None:
-        choose_z = [0,nzc]       
-    if isinstance(choose_x[0],list):
-        if isinstance(choose_y[0],list):
+        choose_z = [0, nzc]
+    
+    if isinstance(choose_x[0], list):
+        if isinstance(choose_y[0], list):
             raise ValueError("choose_x and choose_y must be of the same type")
         X = []
         Y = []
         if nzc > 1:
             Z = []
-        for i in range(len(choose_x)): # deal with the situation where the user wants to extract multiple regions
+        for i in range(len(choose_x)):  # deal with the situation where the user wants to extract multiple regions
             assert len(choose_x) == len(choose_y), "choose_x and choose_y must have the same length"
             if nzc > 1:
                 assert len(choose_x) == len(choose_z), "choose_x and choose_y must have the same length"
-                X_i, Y_i, Z_i = np.meshgrid(x[choose_x[i][0]:choose_x[i][1]], y[choose_y[i][0]:choose_y[i][1]], z[choose_z[i][0]:choose_z[i][1]], indexing=indexing)
+                X_i, Y_i, Z_i = np.meshgrid(
+                    x[choose_x[i][0]:choose_x[i][1]], 
+                    y[choose_y[i][0]:choose_y[i][1]], 
+                    z[choose_z[i][0]:choose_z[i][1]], 
+                    indexing=indexing
+                )
                 X.append(X_i)
                 Y.append(Y_i)
                 Z.append(Z_i)
             else:
-                X_i, Y_i = np.meshgrid(x[choose_x[i][0]:choose_x[i][1]], y[choose_y[i][0]:choose_y[i][1]], indexing=indexing)
+                X_i, Y_i = np.meshgrid(
+                    x[choose_x[i][0]:choose_x[i][1]], 
+                    y[choose_y[i][0]:choose_y[i][1]], 
+                    indexing=indexing
+                )
                 X.append(X_i)
                 Y.append(Y_i)
-        X = np.concatenate(X,axis=1)
-        Y = np.concatenate(Y,axis=1) 
+        X = np.concatenate(X, axis=1)
+        Y = np.concatenate(Y, axis=1)
         if nzc > 1:
-            Z = np.concatenate(Z,axis=1)
+            Z = np.concatenate(Z, axis=1)
     else:
         if nzc > 1:
-            X, Y, Z = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], z[choose_z[0]:choose_z[1]], indexing=indexing)
+            X, Y, Z = np.meshgrid(
+                x[choose_x[0]:choose_x[1]], 
+                y[choose_y[0]:choose_y[1]], 
+                z[choose_z[0]:choose_z[1]], 
+                indexing=indexing
+            )
         else:
-            X, Y = np.meshgrid(x[choose_x[0]:choose_x[1]], y[choose_y[0]:choose_y[1]], indexing=indexing)
+            X, Y = np.meshgrid(
+                x[choose_x[0]:choose_x[1]], 
+                y[choose_y[0]:choose_y[1]], 
+                indexing=indexing
+            )
     
     if nzc > 1:
         return X, Y, Z
@@ -241,32 +394,17 @@ def read_features_targets(files_path, filenames, fields_to_read=None, request_fe
         features (ndarray): An array containing the extracted features.
         targets (ndarray): An array containing the extracted targets.
     """
-    try: # looks in the specific folder, or in the root:
-        f=open(files_path+filenames[0].rsplit("/",1)[0]+"/SimulationData.txt","r")
+    # Determine the correct path for SimulationData.txt
+    # Try looking in the subdirectory of the first filename, or fall back to files_path
+    lookup_path = files_path
+    try:
+        lookup_path = files_path + filenames[0].rsplit("/", 1)[0] + os.sep
     except Exception:
-        f=open(files_path+"SimulationData.txt","r")
-   
-    content=f.readlines()
-    f.close()
-
-    qom=[]
-    for n in content:
-        if "QOM" in n:
-            qom.append(float(re.split("=",re.sub(" |\n","",n))[-1]))
-        if "x-Length" in n:
-            Lx=float(re.split("=",re.sub(" |\n","",n))[1])
-        if "y-Length" in n:
-            Ly=float(re.split("=",re.sub(" |\n","",n))[1])
-        #if "z-Length" in n:
-        #    Lz=float(re.split("=",re.sub(" |\n","",n))[1])
-        if "Number of cells (x)" in n:
-            nxc=int(re.split("=",re.sub(" |\n","",n))[1])
-        if "Number of cells (y)" in n:
-            nyc=int(re.split("=",re.sub(" |\n","",n))[1])
-        if "Number of cells (z)" in n:
-            nzc=int(re.split("=",re.sub(" |\n","",n))[1])
-        if "Time step" in n:
-            dt=float(re.split("=",re.sub(" |\n","",n))[1])
+        lookup_path = files_path
+    
+    # Parse simulation data using the new unified parser
+    sim_data = parse_simulation_data(lookup_path)
+    qom = sim_data['qom']
 
     if choose_x is not None and isinstance(choose_x[0],list):
         if not isinstance(choose_y[0],list):
@@ -626,33 +764,25 @@ def get_exp_times(experiments, files_path, fields_to_read, choose_species=None, 
     data = {}
     for experiment in experiments:
         logger.info(f" reading {files_path}/{experiment}/SimulationData.txt")
-        f=open(f"{files_path}/{experiment}/SimulationData.txt","r")
-        content=f.readlines()
-        f.close()
-
-        qom=[]
-        for n in content:
-            if "QOM" in n:
-                qom.append(float(re.split("=",re.sub(" |\n","",n))[-1]))
-            if "x-Length" in n:
-                Lx=float(re.split("=",re.sub(" |\n","",n))[1])
-            if "y-Length" in n:
-                Ly=float(re.split("=",re.sub(" |\n","",n))[1])
-            if "z-Length" in n:
-                Lz=float(re.split("=",re.sub(" |\n","",n))[1])
-            if "Number of cells (x)" in n:
-                nxc=int(re.split("=",re.sub(" |\n","",n))[1])
-            if "Number of cells (y)" in n:
-                nyc=int(re.split("=",re.sub(" |\n","",n))[1])
-            if "Number of cells (z)" in n:
-                nzc=int(re.split("=",re.sub(" |\n","",n))[1])
-            if "Time step" in n:
-                dt=float(re.split("=",re.sub(" |\n","",n))[1])
+        
+        # Parse simulation data using the new unified parser
+        experiment_path = f"{files_path}{experiment}" + os.sep
+        sim_data = parse_simulation_data(experiment_path)
+        
+        qom = sim_data['qom']
+        Lx = sim_data['Lx']
+        Ly = sim_data['Ly']
+        Lz = sim_data['Lz']
+        nxc = sim_data['nxc']
+        nyc = sim_data['nyc']
+        nzc = sim_data['nzc']
+        dt = sim_data['dt']
+        
         logger.info(f"{Lx = }, {Ly = }, {nxc = }, {nyc = }")
         # The x, y and z axes are set.
-        x=np.linspace(0,Lx,nxc+1)
-        y=np.linspace(0,Ly,nyc+1)
-        z=np.linspace(0,Lz,nzc+1)    
+        x = np.linspace(0, Lx, nxc + 1)
+        y = np.linspace(0, Ly, nyc + 1)
+        z = np.linspace(0, Lz, nzc + 1)    
         #compute dx and dy to be used for the gradients computation
         #dx = Lx/nxc
         #dy = Ly/nyc
@@ -678,11 +808,11 @@ def get_exp_times(experiments, files_path, fields_to_read, choose_species=None, 
         data[experiment] = read_data(f"{files_path}{experiment}/",selected_filenames,fields_to_read,qom,
                                      choose_species=choose_species,choose_x=choose_x,choose_y=choose_y,choose_z=choose_z,verbose=verbose, **kwargs)
         if choose_x is None:
-            choose_x = [0,x.shape[0]-1]
+            choose_x = [0, x.shape[0] - 1]
         if choose_y is None:
-            choose_y = [0,y.shape[0]-1]
+            choose_y = [0, y.shape[0] - 1]
         if choose_z is None:
-            choose_z = [0,z.shape[0]-1]
+            choose_z = [0, z.shape[0] - 1]
         if verbose:
             logger.info(f"{choose_x = }, {choose_y = }, {choose_z = }, {choose_times =}")
         if nzc == 1:
