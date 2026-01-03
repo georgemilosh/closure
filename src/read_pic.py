@@ -16,6 +16,31 @@ DEFAULT_CHOOSE_Z = None
 DEFAULT_INDEXING = 'ij'
 DEFAULT_VERBOSE = False
 
+def ipic3D_available_cycles(files_path):
+    """
+    Identify available cycles in iPiC3D HDF5 files.
+
+    Returns:
+    - list: A sorted list of available cycle identifiers.
+    """
+    all_hdf_files = sorted(glob.glob(os.path.join(files_path, "proc*.hdf")))
+    sim_data = parse_simulation_data(files_path)
+    dt = sim_data['dt']
+    sample_file = all_hdf_files[0]
+    import h5py
+    with h5py.File(sample_file, "r") as f:
+        try:
+            time_cycles = list(f['fields']['Bx'].keys())
+        except KeyError:
+            logger.info(f"available groups in file: {list(f.keys())} ")
+            logger.info(f"available fields: {list(f['fields'].keys())} ")
+            raise KeyError(f"Could not find 'Bx' field in file {sample_file}")
+    cycles = [int(re.search(r'cycle_(\d+)', cycle).group(1)) for cycle in time_cycles]
+    cycles = sorted(cycles)
+    times = [np.round(cycle*dt, decimals=8) for cycle in cycles]
+    cycles = [int(cycle) for cycle in cycles]
+    return cycles, times
+
 def read_ipic3d_field(files_path, cycles, fieldname, choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, 
                       choose_z=DEFAULT_CHOOSE_Z, indexing=DEFAULT_INDEXING, verbose=DEFAULT_VERBOSE):
     """
@@ -48,7 +73,9 @@ def read_ipic3d_field(files_path, cycles, fieldname, choose_x=DEFAULT_CHOOSE_X, 
         choose_y = [0, nyc]
     if choose_z is None:
         choose_z = [0, nzc]
-    time_cycles = [f"cycle_{cycle}" for cycle in cycles]
+    if verbose:
+        logger.info(f"{choose_x = }, {choose_y = }, {choose_z = }")
+    time_cycles = [f"cycle_{int(cycle)}" for cycle in cycles]
     field_times = []
     all_hdf_files = sorted(glob.glob(os.path.join(files_path, "proc*.hdf")))
     if "_" in fieldname:
@@ -78,12 +105,262 @@ def read_ipic3d_field(files_path, cycles, fieldname, choose_x=DEFAULT_CHOOSE_X, 
                 #logger.info(f"Read {fieldname} from {file_path} with shape {field_data.shape}")
         if verbose:
             logger.info(f"Read {fieldname} at {time_cycle} with shape {field.shape} before slicing")    
-        field_times.append(field.transpose()[choose_x[0]:choose_x[1], choose_y[0]:choose_y[1]])
+        field_times.append(field[choose_x[0]:choose_x[1], choose_y[0]:choose_y[1]])
     field_times = np.array(field_times)
     if verbose:
         logger.info(f"Extracted {field_times.shape = }")
     
-    return np.transpose(field_times,(2,1,0))
+    return np.transpose(field_times,(1,2,0))
+
+
+def read_data_ipic3d(files_path, cycles, fields_to_read, qom=None, choose_species=None, choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, 
+              choose_z=DEFAULT_CHOOSE_Z, verbose=DEFAULT_VERBOSE, small=1e-10, **kwargs):
+    """
+    Reads and processes data from files in iPiC3D hdf5 format.
+
+    Parameters:
+    - files_path (str): The path to the files.
+    - cycles (list): A list of cycle numbers to read.
+    - fields_to_read (dict): A dictionary indicating which fields to read.
+    - qom (list): A list of charge-to-mass ratios for each species.
+    - choose_species (list): A list of species to choose.
+    - choose_x (float): The x-coordinates to choose.
+    - choose_y (float): The y-coordinates to choose.
+    - choose_z (float): The z-coordinates to choose.
+    - verbose (bool): A flag indicating whether to logger.info debug information.
+    - small (float): A small number to avoid division by zero, e.g. Jx/rho
+
+    Returns:
+    - data (dict): A dictionary containing the processed data.
+
+    Names of fields:
+    - Bx, By, Bz: The magnetic field components.
+    - Ex, Ey, Ez: The electric field components.
+    - Bx_ext, By_ext, Bz_ext: The external magnetic field components.
+    - divB: The divergence of the magnetic field.
+    - rho: The charge density.
+    - N: The number of particles per cell in the particle in cell simulation.
+    - Qrem: The remaining charge in the particle in cell simulation.???????????
+    - Jx, Jy, Jz: The current density components.
+    - Pxx, Pxy, Pxz, Pyy, Pyz, Pzz: The pressure tensor components.
+    - PIxx, PIxy, PIxz, PIyy, PIyz, PIzz: The stress tensor components.
+    - Ppar, Pperp: The parallel and perpendicular pressure.
+    - q: The heat flux.
+    
+    """
+    #logger.info(f"{files_path = }")
+    #logger.info(f"{filenames = }")
+    if qom is None:
+        sim_data = parse_simulation_data(files_path)
+        qom = sim_data['qom']
+   
+    #logger.info(f"Reading data from folder: {folder_path}")
+    X, Y = build_XY(files_path,choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, choose_z=DEFAULT_CHOOSE_Z, indexing=DEFAULT_INDEXING)
+    #choose_species_new = ut.append_index_to_duplicates(choose_species) 
+    #dublicatespecies = ut.get_duplicate_indices(choose_species)
+    data = {}
+    # The magnetic and electric field is read.
+    for fields in ['B', 'E']:
+        if fields_to_read[fields]:
+            if verbose:
+                logger.info(f"loading {fields}")
+            for component in ['x','y','z']:
+                data[f'{fields}{component}'] = read_ipic3d_field(files_path,cycles,f"{fields}{component}",choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
+            try:    
+                data[f'{fields}magn'] = np.sqrt(data[f'{fields}x']**2 + data[f'{fields}y']**2 + data[f'{fields}z']**2)
+            except Exception as e:
+                logger.info(f"{fields}magn failed")
+                raise e
+        if fields_to_read[f"{fields}_ext"]:
+            for component in ['x','y','z']:
+                data[f'B{component}_ext'] = read_ipic3d_field(files_path,cycles,f"{fields}{component}_ext",choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
+    # The divergence of B is read.
+    if fields_to_read["divB"]:
+        if verbose:
+                logger.info(f"loading divB")
+        data['divB'] = read_ipic3d_field(files_path,cycles,'divB',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
+    for fields in ['rho', 'N', 'Qrem']:
+        if fields in fields_to_read and fields_to_read[fields]:
+            if verbose:
+                logger.info(f"loading {fields}")
+            data[fields] = {}
+            for i, species in enumerate(choose_species): # Care must be taken that these the only species and they are actually correctly labeled
+                if species is not None:
+                    if species in data[fields]: # we sum over identical species
+                        data[fields][species] += read_ipic3d_field(files_path,cycles,fields+f'_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
+                    else:
+                        data[fields][species] = read_ipic3d_field(files_path,cycles,f'{fields}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
+
+
+    if fields_to_read["J"]:
+        data['Jx'], data['Jy'], data['Jz'] = {}, {}, {}
+        if fields_to_read['rho']:
+            data['Vx'], data['Vy'], data['Vz'] = {}, {}, {}
+        if verbose:
+            logger.info(f"loading J")
+        for component in ['x','y','z']:
+            for i, species in enumerate(choose_species):
+                if species is not None:
+                    if species in data[f'J{component}']: # we sum over identical species
+                        data[f'J{component}'][species] += read_ipic3d_field(files_path,cycles,f'J{component}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
+                    else:
+                        data[f'J{component}'][species] = read_ipic3d_field(files_path,cycles,f'J{component}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
+            if fields_to_read['rho']:
+                for species in data[f'J{component}'].keys():
+                    data[f'V{component}'][species] = data[f'J{component}'][species]/(data['rho'][species]+small*np.sign(qom[i]))
+        data['Jmagn'] = {}
+        data['Jtotx'] = np.sum([data['Jx'][species] for species in data['Jx'].keys()], axis=0)
+        data['Jtoty'] = np.sum([data['Jy'][species] for species in data['Jy'].keys()], axis=0)
+        data['Jtotz'] = np.sum([data['Jz'][species] for species in data['Jz'].keys()], axis=0)
+        if 'Vx' in data.keys():
+            data['Vmagn'] = {}
+        for species in data[f'J{component}'].keys():
+            if species is not None:
+                data['Jmagn'][species] = np.sqrt(data['Jx'][species]**2 + data['Jy'][species]**2 + data['Jz'][species]**2)
+                if 'Vx' in data.keys():
+                    data['Vmagn'][species] = np.sqrt(data['Vx'][species]**2 + data['Vy'][species]**2 + data['Vz'][species]**2)
+                
+
+    # The diagonal and offdiagonal part of the pressure is calculated (to do so you need to read rho and J first).
+    if fields_to_read["P"] or fields_to_read["PI"]:
+        if verbose:
+            logger.info(f"loading P and/or PI")
+        for component_1 in ['x','y','z']:
+            for component_2 in ['x','y','z']:
+                data[f'PI{component_1}{component_2}'] = {}
+                data[f'P{component_1}{component_2}'] = {}
+
+                for i, species in enumerate(choose_species):
+                    if species is not None:
+                        try:
+                            if species in data[f'PI{component_1}{component_2}']:
+                                data[f'PI{component_1}{component_2}'][species] += read_ipic3d_field(files_path,cycles,f'P{component_1}{component_2}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
+                            else:
+                                data[f'PI{component_1}{component_2}'][species] = read_ipic3d_field(files_path,cycles,f'P{component_1}{component_2}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
+                        except:
+                            if verbose:
+                                logger.info(f'Component P{component_1}{component_2} for species {species} missing because tensor is symmetric')
+                for species in data[f'PI{component_1}{component_2}']: # because now the number of species has potentially changed
+                    i = choose_species.index(species)
+                    data[f'P{component_1}{component_2}'][species]  = (data[f'PI{component_1}{component_2}'][species] - \
+                                data[f'J{component_1}'][species]*data[f'J{component_2}'][species]/(data[f'rho'][species]+small*np.sign(qom[i])))/qom[i]
+
+                if not fields_to_read["P"]:
+                    del data[f'P{component_1}{component_2}']
+                if not fields_to_read["PI"]:
+                    del data[f'PI{component_1}{component_2}']  
+                       
+        if fields_to_read["PI"]:
+            for species in data[f'PI{component_1}{component_2}']:
+                if species in data['PIxy']:
+                    data['PIyx'][species] = data['PIxy'][species]
+                if species in data['PIxz']:
+                    data['PIzx'][species] = data['PIxz'][species]
+                if species in data['PIyz']:
+                    data['PIzy'][species] = data['PIyz'][species]
+        if fields_to_read["P"]:
+            data['Ppar'], data['Pperp'] = {}, {}
+            for species in data[f'P{component_1}{component_2}']:
+                if species in data['Pxy']:
+                    data['Pyx'][species] = data['Pxy'][species]
+                if species in data['Pxz']:
+                    data['Pzx'][species] = data['Pxz'][species]
+                if species in data['Pyz']:
+                    data['Pzy'][species] = data['Pyz'][species]
+                if verbose:
+                    logger.info(f"loading Ppar and Pperp")
+                try:
+                    data['Ppar'][species] = (data['Pxx'][species]*data['Bx']**2 + data['Pyy'][species]*data['By']**2  + data['Pzz'][species]*data['Bz']**2 + \
+                                        2*data['Pxy'][species]*data['Bx']*data['By']+2*data['Pxz'][species]*data['Bx']*data['Bz'] + \
+                                            2*data['Pyz'][species]*data['By']*data['Bz'])/(data['By']**2+data['Bx']**2+data['Bz']**2)
+                except Exception as e:
+                    logger.warning(f"Failed to calculate Ppar for {species = } likely due to missing fields, see: {e}")
+                try:
+                    data['Pperp'][species] = (data['Pxx'][species] + data['Pyy'][species] + data['Pzz'][species] - data['Ppar'][species])/2
+                except Exception as e:
+                    logger.warning(f"Failed to calculate Pperp for {species} likely due to missing fields, see: {e}")
+        if "gyro_radius" in fields_to_read and fields_to_read["gyro_radius"]:
+            try:
+                data['gyro_radius'] = {}
+                for species in data['rho']:
+                    i = choose_species.index(species)
+                    #p = data['Pxx'][species]+data['Pyy'][species]+data['Pzz'][species]
+                    vth=np.sqrt(np.abs(qom[i]*data['Pperp'][species]/(np.abs(data['rho'][species])+small)))
+                    data['gyro_radius'][species] = np.abs(vth/(qom[i]*data['Bmagn']))
+            except Exception as e:
+                logger.warning(f"Failed to calculate gyro_radius, see: {e}")
+    if "divP" in fields_to_read and fields_to_read["divP"] or "Ohmres" in fields_to_read and fields_to_read["Ohmres"]:
+        if verbose:
+            logger.info(f"computing divP and or Ohmres")
+
+        dx = X[1,0]-X[0,0]
+        dy = Y[0,1]-Y[0,0]
+
+        if not 'e' in choose_species:
+            raise ValueError(f"Calculating divP_e or Ohmres without electron species cannot be done")
+        
+        
+
+        data['EPx'] = -(ut.highdiff(data['Pxx']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pxy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
+        data['EPy'] = -(ut.highdiff(data['Pxy']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pyy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
+        data['EPz'] = -(ut.highdiff(data['Pxz']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pyz']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
+        
+        if "Ohmres" in fields_to_read and fields_to_read["Ohmres"]:
+            #logger.info(f"{data['Bx'].shape = }")
+            #B = np.array([data['Bx'], data['By'], data['Bz']]).transpose(1,2,3,0)
+            #E = np.array([data['Ex'], data['Ey'], data['Ez']]).transpose(1,2,3,0)
+            Jtotx = np.sum([data['Jx'][species] for species in data['Jx'].keys()], axis=0)
+            Jtoty = np.sum([data['Jy'][species] for species in data['Jy'].keys()], axis=0)
+            Jtotz = np.sum([data['Jz'][species] for species in data['Jz'].keys()], axis=0)
+
+            # = np.array([Jtotx, Jtoty, Jtotz]).transpose(1,2,3,0)
+            data['EHallx'], data['EHally'], data['EHallz'] = do_cross(Jtotx,Jtoty,Jtotz,data['Bx'],data['By'],data['Bz'])/(-data['rho']['e']) # EHx,EHy,EHz=do_cross(Jx,Jy,Jz,Bx,By,Bz)/(-rho_0)
+            norm = 0
+            uCMx = 0
+            uCMy = 0
+            uCMz = 0
+            for i, species in enumerate(data['rho'].keys()):
+                uCMx += (data['rho'][species]/qom[i])*data['Vx'][species]
+                uCMy += (data['rho'][species]/qom[i])*data['Vy'][species]
+                uCMz += (data['rho'][species]/qom[i])*data['Vz'][species]
+                norm += data['rho'][species]/qom[i]
+            uCMx /= norm
+            uCMy /= norm
+            uCMz /= norm
+            data['EMHDx'], data['EMHDy'], data['EMHDz'] = do_cross(uCMx,uCMy,uCMz,data['Bx'],data['By'],data['Bz']) # TODO: fix sign, should be minus
+            # data['EMHDx'], data['EMHDy'], data['EMHDz'] = -do_cross(uCMx,uCMy,uCMz,data['Bx'],data['By'],data['Bz']) 
+            data['Ohmresx'] = data['Ex'] + data['EMHDx'] - data['EHallx'] - data['EPx']
+            data['Ohmresy'] = data['Ey'] + data['EMHDy'] - data['EHally'] - data['EPy']
+            data['Ohmresz'] = data['Ez'] + data['EMHDz'] - data['EHally'] - data['EPz']
+    # The heat flux is calculated (to do so you need to read rho, J and P first).
+    if fields_to_read["Heat_flux"]:
+        if verbose:
+            logger.info(f"loading q")
+        for component in ['x','y','z']:
+            data[f'EF{component}'] = {}
+            for i, species in enumerate(choose_species):
+                if species is not None:
+                    if species in data[f'EF{component}']:
+                        data[f'EF{component}'][species] += read_data_ipic3d(files_path,cycles,f'EF{component}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
+                    else:
+                        data[f'EF{component}'][species] = read_data_ipic3d(files_path,cycles,f'EF{component}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
+            #logger.info(f"{data[f'EF{component}'].keys() = }")
+            try:
+                data[f'q{component}'] = {}
+                for species in data[f'EF{component}'].keys():
+                    i = choose_species.index(species)
+                    data[f'q{component}'][species] =  data[f'EF{component}'][species] - \
+                        (data['Jx'][species]**2+data['Jy'][species]**2+data['Jz'][species]**2)*data[f'J{component}'][species]/(2*qom[i]*data[f'rho'][species]**2+small*np.sign(qom[i])) - \
+                        (data['Pxx'][species] + data[f'Pyy'][species] + data[f'Pzz'][species])*data[f'J{component}'][species]/(2*data['rho'][species]+small*np.sign(qom[i])) - \
+                        (data['Jx'][species]*data[f'Px{component}'][species] + data['Jy'][species]*data[f'Py{component}'][species] + data['Jz'][species]*data[f'Pz{component}'][species])/(data['rho'][species]+small*np.sign(qom[i]))
+            except Exception as e:
+                logger.warning(f"Failed to calculate q{component} see: {e}")
+                #logger.info(f"{data[f'q{component}'].keys() = }")
+            if 'EF' not in fields_to_read or not fields_to_read['EF']:
+                del data[f'EF{component}']
+    return data   
+
+            
 
 
 
