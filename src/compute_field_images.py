@@ -15,6 +15,7 @@ Usage:
         --cmap <str>                 Colormap to use (default: auto, seismic for signed, viridis for unsigned)
         --choose_x <list>            X range to select, comma-separated (default: None)
         --choose_y <list>            Y range to select, comma-separated (default: None)
+        --gif                        Also save a GIF animation for each field (default: False)
 
 Example:
     # Basic usage
@@ -31,6 +32,9 @@ Example:
 
     # Custom species and time selection
     python compute_field_images.py Le0 --choose_species "e1,i1" --choose_times "0,10,20,30"
+
+    # Save GIFs in addition to PNG frames
+    python compute_field_images.py Le0 --fields "Jz-tot,Ex" --gif
 """
 
 import argparse
@@ -108,6 +112,12 @@ def parse_args():
         '--verbose',
         action='store_true',
         help='Enable verbose output (default: False)'
+    )
+
+    parser.add_argument(
+        '--gif',
+        action='store_true',
+        help='Save GIF animations for each field (default: False)'
     )
     
     parser.add_argument(
@@ -188,6 +198,7 @@ def main():
         print(f"  Colormap: {args.cmap}")
         print(f"  X range: {choose_x}")
         print(f"  Y range: {choose_y}")
+        print(f"  GIF: {args.gif}")
         print()
     
     # Fields to read
@@ -242,8 +253,6 @@ def main():
         if args.verbose:
             print(f"Processing field: {plot_field}, species: {species}")
         
-        # Create output directory for frames (single folder per field)
-        frames_dir = f'{args.files_path}/{args.experiment}/plots/{args.experiment}_frames/{plot_field}'
         # Create output directory for frames (single folder per field)
         frames_dir = f'{args.files_path}/{args.experiment}/plots/{args.experiment}_frames/{plot_field}'
         if os.path.exists(frames_dir):
@@ -305,6 +314,32 @@ def main():
             
             if args.verbose:
                 print(f"  Saved {shape2} frames to {frames_dir}")
+
+            if args.gif:
+                gif_fig, gif_ax = plt.subplots(figsize=(6, 5))
+                initial_frame = data[plot_field][:, :, 0]
+                if cmap == 'seismic':
+                    gif_cax = gif_ax.pcolormesh(X, Y, initial_frame, vmin=-vlimit, vmax=vlimit, cmap=cmap)
+                else:
+                    gif_cax = gif_ax.pcolormesh(X, Y, np.abs(initial_frame), cmap=cmap, vmin=0, vmax=vlimit)
+                gif_fig.colorbar(gif_cax)
+                gif_ax.set_title(f'{plot_field}, run {args.experiment}, time = {times[0]:.2f}' + r"$\Omega_{ci}^{-1}$")
+
+                def update(frame):
+                    frame_data = data[plot_field][:, :, frame]
+                    if cmap != 'seismic':
+                        frame_data = np.abs(frame_data)
+                    gif_cax.set_array(frame_data.ravel())
+                    gif_ax.set_title(f'{plot_field}, run {args.experiment}, time = {times[frame]:.2f}' + r"$\Omega_{ci}^{-1}$")
+                    return gif_cax,
+
+                gif_fig.set_tight_layout(True)
+                ani = animation.FuncAnimation(gif_fig, update, frames=shape2, blit=True)
+                gif_path = os.path.join(args.files_path, args.experiment, 'plots', f'{plot_field}_{args.experiment}_movie.gif')
+                ani.save(gif_path, dpi=args.dpi)
+                plt.close(gif_fig)
+                if args.verbose:
+                    print(f"  Saved GIF to {gif_path}")
         else:
             shape2 = data[plot_field][species].shape[2]
             finite_data = data[plot_field][species][np.isfinite(data[plot_field][species])]
@@ -341,6 +376,32 @@ def main():
             
             if args.verbose:
                 print(f"  Saved {shape2} frames to {frames_dir}")
+
+            if args.gif:
+                gif_fig, gif_ax = plt.subplots(figsize=(6, 5))
+                initial_frame = data[plot_field][species][:, :, 0]
+                if cmap == 'seismic':
+                    gif_cax = gif_ax.pcolormesh(X, Y, initial_frame, vmin=-vlimit, vmax=vlimit, cmap=cmap)
+                else:
+                    gif_cax = gif_ax.pcolormesh(X, Y, np.abs(initial_frame), cmap=cmap, vmin=0, vmax=vlimit)
+                gif_fig.colorbar(gif_cax)
+                gif_ax.set_title(f'{plot_field}, {species}, run {args.experiment}, time = {times[0]:.2f}' + r"$\Omega_{ci}^{-1}$")
+
+                def update(frame):
+                    frame_data = data[plot_field][species][:, :, frame]
+                    if cmap != 'seismic':
+                        frame_data = np.abs(frame_data)
+                    gif_cax.set_array(frame_data.ravel())
+                    gif_ax.set_title(f'{plot_field}, {species}, run {args.experiment}, time = {times[frame]:.2f}' + r"$\Omega_{ci}^{-1}$")
+                    return gif_cax,
+
+                gif_fig.set_tight_layout(True)
+                ani = animation.FuncAnimation(gif_fig, update, frames=shape2, blit=True)
+                gif_path = os.path.join(args.files_path, args.experiment, 'plots', f'{plot_field}_{species}_{args.experiment}_movie.gif')
+                ani.save(gif_path, dpi=args.dpi)
+                plt.close(gif_fig)
+                if args.verbose:
+                    print(f"  Saved GIF to {gif_path}")
         
         plt.close(fig)
     
