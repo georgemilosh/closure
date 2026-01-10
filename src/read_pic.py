@@ -92,16 +92,21 @@ def read_ipic3d_field(files_path, cycles, fieldname, choose_x=DEFAULT_CHOOSE_X, 
                     field_data = np.array(f[f"moments/species_{species}/{field_name}/" + time_cycle])[:-1, :-1, :-1]
                 else:
                     field_data = np.array(f[f"fields/{field_name}/" + time_cycle])[:-1, :-1, :-1]
-                x0, y0, z0 = field_data.shape[0]*f['topology']['cartesian_coord'][()]
+                x0, y0, z0 = (np.array(field_data.shape) * f['topology']['cartesian_coord'][()]).astype(int)
                 nx_local, ny_local, nz_local = field_data.shape
                 
                 if rank_id != f['topology']['cartesian_rank'][()]:
                     raise ValueError(f"Rank ID {rank_id} does not match cartesian rank {f['topology']['cartesian_rank'][()]} in file {file_path}")
-                #if verbose:
-                #    logger.info(f"Rank {rank_id} at position ({x0 = }, {y0 = }, {z0 = }) with {i = }, {j = }, {k = } processing file {file_path} ")
-                #    logger.info(f".   cartesian_coord: {f['topology']['cartesian_coord'][()]}")
-                #    logger.info(f" writing data to global arrays at indices x: {x0} to {x0 + nx_local}, y: {y0} to {y0 + ny_local}")
-                field[x0:x0 + nx_local, y0:y0 + ny_local] = field_data[:, :, 0]
+                if verbose == 'debug':
+                    logger.info(f"Rank {rank_id} at position ({x0 = }, {y0 = }, {z0 = }) processing file {file_path} ")
+                    logger.info(f".   cartesian_coord: {f['topology']['cartesian_coord'][()]}")
+                    logger.info(f" {nx_local = }, {ny_local = }, {nz_local = }")
+                    logger.info(f" writing data to global arrays at indices x: {x0} to {x0 + nx_local}, y: {y0} to {y0 + ny_local}")
+                try:
+                    field[x0:x0 + nx_local, y0:y0 + ny_local] = field_data[:, :, 0]
+                except Exception as e:
+                    logger.info(f"{field.shape = }, {field_data.shape = }, {x0 = }, {y0 = }, {nx_local = }, {ny_local = }")
+                    raise e
                 #logger.info(f"Read {fieldname} from {file_path} with shape {field_data.shape}")
         if verbose:
             logger.info(f"Read {fieldname} at {time_cycle} with shape {field.shape} before slicing")    
@@ -110,7 +115,10 @@ def read_ipic3d_field(files_path, cycles, fieldname, choose_x=DEFAULT_CHOOSE_X, 
     if verbose:
         logger.info(f"Extracted {field_times.shape = }")
     
-    return np.transpose(field_times,(1,2,0))
+    if indexing == 'ij':
+        return np.transpose(field_times,(1,2,0))
+    elif indexing == 'xy':
+        return np.transpose(field_times,(2,1,0))
 
 
 def read_data_ipic3d(files_path, cycles, fields_to_read, qom=None, choose_species=None, choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, 
@@ -416,7 +424,10 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
             if choose_z is None:
                 choose_z = [0,temp.shape[0]-1]
             #logger.warning(f"{choose_x = }, {choose_y = }, {choose_z = } with shape {temp.shape}")
-            temp = np.transpose(temp[choose_z[0]:choose_z[1], choose_y[0]:choose_y[1], choose_x[0]:choose_x[1]], (2, 1, 0))  # to (z,y,x)
+            if indexing == 'ij':
+                temp = np.transpose(temp[choose_z[0]:choose_z[1], choose_y[0]:choose_y[1], choose_x[0]:choose_x[1]], (2, 1, 0))  # to (z,y,x)
+            elif indexing == 'xy':
+                temp = np.transpose(temp[choose_z[0]:choose_z[1], choose_y[0]:choose_y[1], choose_x[0]:choose_x[1]], (1, 0, 2))  # to (y,x,z)
             #logger.warning(f"Read {fieldname} from {filename} with shape {temp.shape} before squeeze")
             temp = temp.squeeze()
             field.append(temp)

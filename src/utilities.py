@@ -1356,6 +1356,7 @@ def highdiff(data, dx, dy, coeff = None, axis=0, **kwargs):
 
 def get_Ohm(data,qom, x,y, coeff=None):
     """
+    E_Ohm = - V x B + J x B / ne - grad P_e / ne
     Compute the electric field and other derived quantities based on the input data.
     This function calculates the electric field, ExB/B^2, EHall, EMHD, and other quantities
     using the provided data dictionary. It also computes the pressure gradient and other
@@ -1392,7 +1393,24 @@ def get_Ohm(data,qom, x,y, coeff=None):
     data['EPy'] = -(highdiff(data['Pxy']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap') + highdiff(data['Pyy']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
     data['EPz'] = -(highdiff(data['Pxz']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap') + highdiff(data['Pyz']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
     
-
+def get_J_perp(data, x,y, coeff=None):
+    """
+    Calculate the perpendicular current contribution from pressure gradients and curvature
+    """
+    
+    dx = x[1]-x[0]
+    dy = y[1]-y[0]
+    B = np.array([data['Bx'], data['By'], data['Bz']]).transpose(1,2,3,0)
+    data['gradPperpx'] = highdiff(data['Pperp']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap')
+    data['gradPperpy'] = highdiff(data['Pperp']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap')
+    data['gradPperpz'] = np.zeros_like(data['gradPperpx'])
+    gradPperp = np.array([data['gradPperpx'], data['gradPperpy'], data['gradPperpz']]).transpose(1,2,3,0)
+    data['cross(B,DPperp)/B^2'] = np.cross(B, gradPperp)/np.sum(B**2, axis=3, keepdims=True)
+    data['b'] = B / np.sqrt(np.sum(B**2, axis=3, keepdims=True))
+    print(f"data['b'] shape: {data['b'].shape}")
+    data['b*Db'] = data['b'][...,0,np.newaxis]*highdiff(data['b'], dx, dy, coeff=coeff, axis=0, mode='wrap') + \
+                data['b'][...,1,np.newaxis]*highdiff(data['b'], dx, dy, coeff=coeff, axis=1, mode='wrap')
+    data['(Ppar - Pperp) cros(B, b*Db)/B^2'] = (data['Ppar']['e'] - data['Pperp']['e'])[...,np.newaxis]*np.cross(B, data['b*Db'])/np.sum(B**2, axis=3, keepdims=True)
 
 def get_Az(x,y,data):
     """
