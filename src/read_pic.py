@@ -41,6 +41,27 @@ def ipic3D_available_cycles(files_path):
     cycles = [int(cycle) for cycle in cycles]
     return cycles, times
 
+def find_field_in_hdf5(f, path_prefix, field_name, time_cycle):
+    """
+    Find a field in HDF5 file with case-insensitive matching.
+    
+    Returns the correct field name and data, or raises KeyError if not found.
+    """
+    try:
+        # Try exact match first
+        return np.array(f[f"{path_prefix}/{field_name}/{time_cycle}"])[:-1, :-1, :-1]
+    except KeyError:
+        # Try case-insensitive match
+        available_fields = list(f[path_prefix].keys())
+        field_name_lower = field_name.lower()
+        
+        for available_field in available_fields:
+            if available_field.lower() == field_name_lower:
+                return np.array(f[f"{path_prefix}/{available_field}/{time_cycle}"])[:-1, :-1, :-1]
+        
+        # No match found
+        raise KeyError(f"Field '{field_name}' not found. Available: {available_fields}")
+
 def read_ipic3d_field(files_path, cycles, fieldname, choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, 
                       choose_z=DEFAULT_CHOOSE_Z, indexing=DEFAULT_INDEXING, verbose=DEFAULT_VERBOSE):
     """
@@ -67,6 +88,7 @@ def read_ipic3d_field(files_path, cycles, fieldname, choose_x=DEFAULT_CHOOSE_X, 
     nxc = sim_data['nxc']
     nyc = sim_data['nyc']
     nzc = sim_data['nzc']
+
     if choose_x is None:
         choose_x = [0, nxc]
     if choose_y is None:
@@ -88,10 +110,18 @@ def read_ipic3d_field(files_path, cycles, fieldname, choose_x=DEFAULT_CHOOSE_X, 
             import h5py
             rank_id = int(os.path.basename(file_path).replace("proc", "").replace(".hdf", ""))
             with h5py.File(file_path, "r") as f:
-                if species is not None:
-                    field_data = np.array(f[f"moments/species_{species}/{field_name}/" + time_cycle])[:-1, :-1, :-1]
-                else:
-                    field_data = np.array(f[f"fields/{field_name}/" + time_cycle])[:-1, :-1, :-1]
+                try:
+                    if species is not None:
+                        field_data = find_field_in_hdf5(f, f"moments/species_{species}", field_name, time_cycle)
+                    else:
+                        field_data = find_field_in_hdf5(f, "fields", field_name, time_cycle)
+                except KeyError as e:
+                    logger.info(f"error reading {field_name}: {e}")
+                    if species is not None:
+                        logger.info(f"available moments: {list(f['moments/species_' + species].keys())} ")
+                    else:
+                        logger.info(f"available fields: {list(f['fields'].keys())} ")
+
                 x0, y0, z0 = (np.array(field_data.shape) * f['topology']['cartesian_coord'][()]).astype(int)
                 nx_local, ny_local, nz_local = field_data.shape
                 
@@ -247,7 +277,7 @@ def read_data_ipic3d(files_path, cycles, fields_to_read, qom=None, choose_specie
                                 data[f'PI{component_1}{component_2}'][species] = read_ipic3d_field(files_path,cycles,f'P{component_1}{component_2}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
                         except:
                             if verbose:
-                                logger.info(f'Component P{component_1}{component_2} for species {species} missing because tensor is symmetric')
+                                logger.info(f'Component P{component_1}{component_2} for species {species} missing')
                 for species in data[f'PI{component_1}{component_2}']: # because now the number of species has potentially changed
                     i = choose_species.index(species)
                     data[f'P{component_1}{component_2}'][species]  = (data[f'PI{component_1}{component_2}'][species] - \
