@@ -116,11 +116,11 @@ def read_ipic3d_field(files_path, cycles, fieldname, choose_x=DEFAULT_CHOOSE_X, 
                     else:
                         field_data = find_field_in_hdf5(f, "fields", field_name, time_cycle)
                 except KeyError as e:
-                    logger.info(f"error reading {field_name}: {e}")
+                    logger.warning(f"error reading {field_name}: {e}")
                     if species is not None:
-                        logger.info(f"available moments: {list(f['moments/species_' + species].keys())} ")
+                        logger.warning(f"available moments: {list(f['moments/species_' + species].keys())} ")
                     else:
-                        logger.info(f"available fields: {list(f['fields'].keys())} ")
+                        logger.warning(f"available fields: {list(f['fields'].keys())} ")
 
                 x0, y0, z0 = (np.array(field_data.shape) * f['topology']['cartesian_coord'][()]).astype(int)
                 nx_local, ny_local, nz_local = field_data.shape
@@ -245,7 +245,11 @@ def read_data_ipic3d(files_path, cycles, fields_to_read, qom=None, choose_specie
                         data[f'J{component}'][species] = read_ipic3d_field(files_path,cycles,f'J{component}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
             if fields_to_read['rho']:
                 for species in data[f'J{component}'].keys():
-                    data[f'V{component}'][species] = data[f'J{component}'][species]/(data['rho'][species]+small*np.sign(qom[i]))
+                    try:
+                        data[f'V{component}'][species] = data[f'J{component}'][species]/(data['rho'][species]+small*np.sign(qom[i]))
+                    except:
+                        logger.warning(f"{species = }, {qom = }, {data[f'J{component}'].keys() = }, {data[f'V{component}'].keys() = }, {data['rho'].keys() = }")
+                        raise
         data['Jmagn'] = {}
         data['Jtotx'] = np.sum([data['Jx'][species] for species in data['Jx'].keys()], axis=0)
         data['Jtoty'] = np.sum([data['Jy'][species] for species in data['Jy'].keys()], axis=0)
@@ -603,6 +607,17 @@ def parse_simulation_data(files_path):
                 result['nzc'] = int(re.split("=", re.sub(" |\n", "", n))[1])
             if "Time step" in n:
                 result['dt'] = float(re.split("=", re.sub(" |\n", "", n))[1])
+    
+    # Fallback: if qom is still empty, try to read from qom[%d] = value format
+    if not result['qom']:
+        for line in content:
+            # Match lines like "qom[%d] = -64" or "qom[0] = 1.5"
+            if re.match(r'qom\[', line, re.IGNORECASE):
+                try:
+                    qom_val = float(re.split("=", re.sub(" |\n", "", line))[-1])
+                    result['qom'].append(qom_val)
+                except (ValueError, IndexError):
+                    pass
     
     return result
 

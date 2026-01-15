@@ -1397,7 +1397,6 @@ def get_J_perp(data, x,y, coeff=None):
     """
     Calculate the perpendicular current contribution from pressure gradients and curvature
     """
-    
     dx = x[1]-x[0]
     dy = y[1]-y[0]
     B = np.array([data['Bx'], data['By'], data['Bz']]).transpose(1,2,3,0)
