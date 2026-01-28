@@ -801,7 +801,18 @@ def read_files(files_path, filenames, fields_to_read, qom, dtype, extract_fields
                     logger.info(f"Attempting to extract {extract_field_index = } which should be a field name")
                     raise e
         out2.append(np.array(out))
-    return np.array(out2, dtype=dtype).transpose(0,2,3,1)  # we want to have the time as the first index, then x, then y, then the field
+    try:
+        
+        out2 = np.array(out2, dtype=dtype)
+        if len(out2.shape) > 4:
+            logger.warning(f"Output shape {out2.shape} has more than 4 dimensions, we try fixing by removing single-dimensional entries")
+            out2 = out2[...,0]
+        out2 = out2.transpose(0,2,3,1)
+    except Exception as e:
+        logger.info(f"Failed to convert to array with dtype {dtype}, current shape is {out2.shape}")
+        raise e
+        
+    return out2  # we want to have the time as the first index, then x, then y, then the field
 
 
 def do_dot(fx,fy,fz,gx,gy,gz):
