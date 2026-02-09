@@ -1354,7 +1354,7 @@ def highdiff(data, dx, dy, coeff = None, axis=0, **kwargs):
     else:
         raise ValueError("Invalid axis. Use 0 or 1.")
 
-def get_Ohm(data,qom, x,y, coeff=None):
+def get_Ohm(data,qom, x,y, coeff=None, small=1e-10):
     """
     E_Ohm = - V x B + J x B / ne - grad P_e / ne
     Compute the electric field and other derived quantities based on the input data.
@@ -1369,7 +1369,7 @@ def get_Ohm(data,qom, x,y, coeff=None):
     data['Jtoty'] = np.sum([data['Jy'][species] for species in data['Jy'].keys()], axis=0)
     data['Jtotz'] = np.sum([data['Jz'][species] for species in data['Jz'].keys()], axis=0)
     J = np.array([data['Jtotx'], data['Jtoty'], data['Jtotz']]).transpose(1,2,3,0)
-    data['EHallx'], data['EHally'], data['EHallz'] = (np.cross(J,B)/(-data['rho']['e'])[...,np.newaxis]).transpose(3,0,1,2)
+    data['EHallx'], data['EHally'], data['EHallz'] = (np.cross(J,B)/(-data['rho']['e']+small)[...,np.newaxis]).transpose(3,0,1,2)
     norm = 0
     data['uCMx'] = 0
     data['uCMy'] = 0
@@ -1389,9 +1389,9 @@ def get_Ohm(data,qom, x,y, coeff=None):
     #data['EP_x'] = (np.gradient(data['Pxx']['e'],x,axis=0,edge_order=2)+np.gradient(data['Pxy']['e'],y,axis=1,edge_order=2))/data['rho']['e']
     #data['EP_y'] = (np.gradient(data['Pxy']['e'],x,axis=0,edge_order=2)+np.gradient(data['Pyy']['e'],y,axis=1,edge_order=2))/data['rho']['e']
     #data['EP_z'] = (np.gradient(data['Pxz']['e'],x,axis=0,edge_order=2)+np.gradient(data['Pyz']['e'],y,axis=1,edge_order=2))/data['rho']['e']
-    data['EPx'] = -(highdiff(data['Pxx']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap') + highdiff(data['Pxy']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
-    data['EPy'] = -(highdiff(data['Pxy']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap') + highdiff(data['Pyy']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
-    data['EPz'] = -(highdiff(data['Pxz']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap') + highdiff(data['Pyz']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
+    data['EPx'] = -(highdiff(data['Pxx']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap') + highdiff(data['Pxy']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap'))/(-data['rho']['e']+small) # density in ECsim is negative (electron charge density)
+    data['EPy'] = -(highdiff(data['Pxy']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap') + highdiff(data['Pyy']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap'))/(-data['rho']['e']+small) # density in ECsim is negative (electron charge density)
+    data['EPz'] = -(highdiff(data['Pxz']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap') + highdiff(data['Pyz']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap'))/(-data['rho']['e']+small) # density in ECsim is negative (electron charge density)
     
 def get_J_perp(data, x,y, coeff=None):
     """

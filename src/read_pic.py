@@ -5,6 +5,7 @@ from . import utilities as ut
 import scipy.ndimage as nd
 import pickle
 import glob
+import shutil
 
 import logging
 logger = logging.getLogger(__name__)
@@ -106,6 +107,7 @@ def read_ipic3d_field(files_path, cycles, fieldname, choose_x=DEFAULT_CHOOSE_X, 
         field_name, species = fieldname, None            # or handle however you need
     for time_cycle in time_cycles:
         field = np.zeros_like(X)
+        found_any = False
         for file_path in all_hdf_files:
             import h5py
             rank_id = int(os.path.basename(file_path).replace("proc", "").replace(".hdf", ""))
@@ -115,12 +117,14 @@ def read_ipic3d_field(files_path, cycles, fieldname, choose_x=DEFAULT_CHOOSE_X, 
                         field_data = find_field_in_hdf5(f, f"moments/species_{species}", field_name, time_cycle)
                     else:
                         field_data = find_field_in_hdf5(f, "fields", field_name, time_cycle)
+                    found_any = True
                 except KeyError as e:
                     logger.warning(f"error reading {field_name}: {e}")
                     if species is not None:
                         logger.warning(f"available moments: {list(f['moments/species_' + species].keys())} ")
                     else:
                         logger.warning(f"available fields: {list(f['fields'].keys())} ")
+                    continue
 
                 x0, y0, z0 = (np.array(field_data.shape) * f['topology']['cartesian_coord'][()]).astype(int)
                 nx_local, ny_local, nz_local = field_data.shape
@@ -138,6 +142,8 @@ def read_ipic3d_field(files_path, cycles, fieldname, choose_x=DEFAULT_CHOOSE_X, 
                     logger.info(f"{field.shape = }, {field_data.shape = }, {x0 = }, {y0 = }, {nx_local = }, {ny_local = }")
                     raise e
                 #logger.info(f"Read {fieldname} from {file_path} with shape {field_data.shape}")
+        if not found_any:
+            raise KeyError(f"Field '{fieldname}' not found in any proc*.hdf for {time_cycle}")
         if verbose:
             logger.info(f"Read {fieldname} at {time_cycle} with shape {field.shape} before slicing")    
         field_times.append(field[choose_x[0]:choose_x[1], choose_y[0]:choose_y[1]])
@@ -540,12 +546,20 @@ def parse_simulation_data(files_path):
     Returns:
     - dict: A dictionary containing Lx, Ly, Lz, nxc, nyc, nzc, dt, and qom values
     """
+    sim_path = files_path
+    if os.path.isdir(files_path):
+        sim_path = os.path.join(files_path, "SimulationData.txt")
+    elif os.path.basename(files_path) == "SimulationData.txt":
+        sim_path = files_path
+    else:
+        sim_path = os.path.join(os.path.dirname(os.path.normpath(files_path)), "SimulationData.txt")
+
     try:
-        f = open(files_path + "SimulationData.txt", "r")
+        f = open(sim_path, "r")
     except Exception:
-        # Remove the last folder from files_path
-        files_path = os.path.dirname(os.path.normpath(files_path)) + os.sep
-        f = open(files_path + "SimulationData.txt", "r")
+        # Remove the last folder from files_path and try again
+        fallback_path = os.path.join(os.path.dirname(os.path.normpath(files_path)), "SimulationData.txt")
+        f = open(fallback_path, "r")
     
     content = f.readlines()
     f.close()
@@ -937,7 +951,7 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
             for component_2 in ['x','y','z']:
                 data[f'PI{component_1}{component_2}'] = {}
                 data[f'P{component_1}{component_2}'] = {}
-
+                
                 for i, species in enumerate(choose_species):
                     if species is not None:
                         try:
@@ -1174,3 +1188,216 @@ def get_experiments(*args, **kwargs):
     """
     logger.warning("get_experiments is deprecated, use get_exp_times instead")
     return get_exp_times(*args, **kwargs)[:-1]
+
+
+def _detect_ipic3d_species(files_path, sample_file=None):
+    """
+    Detect species labels from iPiC3D HDF5 files.
+
+    Returns a list of species suffixes (e.g., ["0", "1"]).
+    """
+    all_hdf_files = sorted(glob.glob(os.path.join(files_path, "proc*.hdf")))
+    if not all_hdf_files:
+        raise FileNotFoundError(f"No proc*.hdf files found in {files_path}")
+    sample_file = sample_file or all_hdf_files[0]
+    import h5py
+    with h5py.File(sample_file, "r") as f:
+        if "moments" not in f:
+            return []
+        species_groups = [k for k in f["moments"].keys() if k.startswith("species_")]
+    species = [k.split("species_", 1)[1] for k in species_groups]
+    # Sort numerically if possible, otherwise lexicographically
+    try:
+        species_sorted = sorted(species, key=lambda s: int(s))
+    except ValueError:
+        species_sorted = sorted(species)
+    return species_sorted
+
+
+def _expand_to_ecsim(field_xy, nxc, nyc, nzc):
+    """
+    Convert a 2D field with shape (nx, ny) into ECSIM format (nz+1, ny+1, nx+1).
+
+    The ECSIM format is (z, y, x). This helper places the provided field into
+    the z=0 plane and leaves the final index as a guard (consistent with ECSIM readers
+    that slice to -1).
+    """
+    nx, ny = field_xy.shape
+    out = np.zeros((nzc + 1, nyc + 1, nxc + 1), dtype=field_xy.dtype)
+    max_x = min(nx, nxc)
+    max_y = min(ny, nyc)
+    out[0, :max_y, :max_x] = field_xy[:max_x, :max_y].T
+    return out
+
+
+def _default_ipic3d_fields_to_read():
+    """
+    Default fields dictionary for iPiC3D -> ECSIM conversion.
+    """
+    return {
+        "B": True,
+        "B_ext": False,
+        "divB": False,
+        "E": True,
+        "E_ext": False,
+        "rho": True,
+        "J": True,
+        "P": True,
+        "PI": False,
+        "N": False,
+        "Qrem": False,
+        "Heat_flux": False,
+        "EF": False,
+    }
+
+
+def convert_ipic3d_to_ecsim_h5(
+    input_folder,
+    output_folder,
+    cycles=None,
+    fields_to_read=None,
+    choose_species=None,
+    choose_x=DEFAULT_CHOOSE_X,
+    choose_y=DEFAULT_CHOOSE_Y,
+    choose_z=DEFAULT_CHOOSE_Z,
+    indexing=DEFAULT_INDEXING,
+    simulation_name="iPIC3D",
+    time_digits=6,
+    overwrite=False,
+    copy_aux_files=True,
+    aux_globs=None,
+    compression="gzip",
+    compression_opts=4,
+    allow_3d=False,
+    skip_missing=True,
+    verbose=DEFAULT_VERBOSE,
+):
+    """
+    Convert iPiC3D HDF5 output (proc*.hdf) to ECSIM-compatible HDF5 files.
+
+    Parameters are provided as kwargs with defaults so the function can be called
+    programmatically or via a thin CLI wrapper.
+    """
+    if fields_to_read is None:
+        fields_to_read = _default_ipic3d_fields_to_read()
+    if aux_globs is None:
+        aux_globs = ["SimulationData.txt", "*.txt", "*.ini", "*.cfg", "*.json"]
+
+    os.makedirs(output_folder, exist_ok=True)
+
+    if copy_aux_files:
+        for pattern in aux_globs:
+            for file_path in glob.glob(os.path.join(input_folder, pattern)):
+                if os.path.isfile(file_path):
+                    dest_path = os.path.join(output_folder, os.path.basename(file_path))
+                    if overwrite or not os.path.exists(dest_path):
+                        shutil.copy2(file_path, dest_path)
+
+    sim_data = parse_simulation_data(input_folder)
+    nxc = sim_data["nxc"]
+    nyc = sim_data["nyc"]
+    nzc = sim_data["nzc"]
+    if nzc is None:
+        raise ValueError("SimulationData.txt missing nzc; cannot determine z dimension.")
+    if nzc > 1 and not allow_3d:
+        raise NotImplementedError("3D conversion is not implemented yet (nzc > 1).")
+
+    if cycles is None:
+        cycles, _ = ipic3D_available_cycles(input_folder)
+    elif isinstance(cycles, int):
+        cycles = [cycles]
+
+    if choose_species is None:
+        choose_species = _detect_ipic3d_species(input_folder)
+
+    import h5py
+
+    def maybe_add_field(field_name, ipic_name=None):
+        ipic_field = ipic_name or field_name
+        try:
+            field_xy = read_ipic3d_field(
+                input_folder,
+                [cycle],
+                ipic_field,
+                choose_x=choose_x,
+                choose_y=choose_y,
+                choose_z=choose_z,
+                indexing=indexing,
+                verbose=verbose,
+            )[:, :, 0]
+        except KeyError as exc:
+            if skip_missing:
+                if verbose:
+                    logger.info(f"Skipping missing field {ipic_field}: {exc}")
+                return
+            raise
+        field_datasets[field_name] = _expand_to_ecsim(field_xy, nxc, nyc, nzc)
+
+    for cycle in cycles:
+        time_label = f"{int(cycle):0{time_digits}d}"
+        out_filename = f"{simulation_name}-Fields_{time_label}.h5"
+        out_path = os.path.join(output_folder, out_filename)
+
+        if os.path.exists(out_path) and not overwrite:
+            if verbose:
+                logger.info(f"Skipping existing file: {out_path}")
+            continue
+
+        field_datasets = {}
+
+        # Fields: B and E
+        for field_prefix in ["B", "E"]:
+            if fields_to_read.get(field_prefix, False):
+                for comp in ["x", "y", "z"]:
+                    field_name = f"{field_prefix}{comp}"
+                    maybe_add_field(field_name)
+
+            if fields_to_read.get(f"{field_prefix}_ext", False) and field_prefix == "B":
+                for comp in ["x", "y", "z"]:
+                    field_name = f"{field_prefix}{comp}_ext"
+                    maybe_add_field(field_name)
+
+        # divB
+        if fields_to_read.get("divB", False):
+            maybe_add_field("divB")
+
+        # Species moments
+        for field_name in ["rho", "N", "Qrem"]:
+            if fields_to_read.get(field_name, False):
+                for i, species in enumerate(choose_species):
+                    ipic_field = f"{field_name}_{species}"
+                    ecsim_field = f"{field_name}_{i}"
+                    maybe_add_field(ecsim_field, ipic_name=ipic_field)
+
+        if fields_to_read.get("J", False):
+            for comp in ["x", "y", "z"]:
+                for i, species in enumerate(choose_species):
+                    ipic_field = f"J{comp}_{species}"
+                    ecsim_field = f"J{comp}_{i}"
+                    maybe_add_field(ecsim_field, ipic_name=ipic_field)
+
+        if fields_to_read.get("P", False) or fields_to_read.get("PI", False):
+            for comp1 in ["x", "y", "z"]:
+                for comp2 in ["x", "y", "z"]:
+                    for i, species in enumerate(choose_species):
+                        ipic_field = f"P{comp1}{comp2}_{species}"
+                        ecsim_field = f"P{comp1}{comp2}_{i}"
+                        maybe_add_field(ecsim_field, ipic_name=ipic_field)
+
+        # Write ECSIM HDF5
+        with h5py.File(out_path, "w") as h5f:
+            step_group = h5f.create_group("Step#0")
+            block_group = step_group.create_group("Block")
+            for field_name, field_data in field_datasets.items():
+                field_group = block_group.create_group(field_name)
+                field_group.create_dataset(
+                    "0",
+                    data=field_data,
+                    compression=compression,
+                    compression_opts=compression_opts,
+                )
+
+        if verbose:
+            logger.info(f"Wrote {out_path} with {len(field_datasets)} fields")
+
+    return True
