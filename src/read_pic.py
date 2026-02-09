@@ -458,17 +458,11 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
             else:
                 raise FileNotFoundError(f"Neither {filename} nor {filename}.pkl found in {files_path}")
             if choose_x is None:
-                choose_x = [0, temp.shape[2]]
+                choose_x = [0,temp.shape[2]-1]
             if choose_y is None:
-                choose_y = [0, temp.shape[1]]
+                choose_y = [0,temp.shape[1]-1]
             if choose_z is None:
-                choose_z = [0, temp.shape[0]]
-            if choose_x[1] <= choose_x[0] and temp.shape[2] > 0:
-                choose_x = [choose_x[0], min(choose_x[0] + 1, temp.shape[2])]
-            if choose_y[1] <= choose_y[0] and temp.shape[1] > 0:
-                choose_y = [choose_y[0], min(choose_y[0] + 1, temp.shape[1])]
-            if choose_z[1] <= choose_z[0] and temp.shape[0] > 0:
-                choose_z = [choose_z[0], min(choose_z[0] + 1, temp.shape[0])]
+                choose_z = [0,temp.shape[0]-1]
             #logger.warning(f"{choose_x = }, {choose_y = }, {choose_z = } with shape {temp.shape}")
             if indexing == 'ij':
                 temp = np.transpose(temp[choose_z[0]:choose_z[1], choose_y[0]:choose_y[1], choose_x[0]:choose_x[1]], (2, 1, 0))  # to (z,y,x)
@@ -552,20 +546,28 @@ def parse_simulation_data(files_path):
     Returns:
     - dict: A dictionary containing Lx, Ly, Lz, nxc, nyc, nzc, dt, and qom values
     """
-    sim_path = files_path
-    if os.path.isdir(files_path):
-        sim_path = os.path.join(files_path, "SimulationData.txt")
-    elif os.path.basename(files_path) == "SimulationData.txt":
+    try:
         sim_path = files_path
-    else:
-        sim_path = os.path.join(os.path.dirname(os.path.normpath(files_path)), "SimulationData.txt")
+        if os.path.isdir(files_path):
+            sim_path = os.path.join(files_path, "SimulationData.txt")
+        elif os.path.basename(files_path) == "SimulationData.txt":
+            sim_path = files_path
+        else:
+            sim_path = os.path.join(os.path.dirname(os.path.normpath(files_path)), "SimulationData.txt")
+    except Exception as e:
+        logger.error(f"Error determining simulation data path: {files_path = }")
+        raise e
 
     try:
         f = open(sim_path, "r")
     except Exception:
         # Remove the last folder from files_path and try again
-        fallback_path = os.path.join(os.path.dirname(os.path.normpath(files_path)), "SimulationData.txt")
-        f = open(fallback_path, "r")
+        try:
+            fallback_path = os.path.join(os.path.dirname(os.path.normpath(files_path)), "SimulationData.txt")
+            f = open(fallback_path, "r")
+        except Exception as e:
+            logger.error(f"Failed to open SimulationData.txt at {files_path = } and fallback path {fallback_path = }")
+            raise e
     
     content = f.readlines()
     f.close()

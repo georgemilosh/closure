@@ -35,13 +35,16 @@ Example:
 
     # Save GIFs in addition to PNG frames
     python compute_field_images.py Le0 --fields "Jz-tot,Ex" --gif
+
+    # Full example
+    python -m src.compute_field_images XFinelli3H --files_path /volume1/scratch/share_dir/ecsim/GEM/ --choose_species "e,i,e,i"  --fields Jz-tot --field_max
+ 0.001 --verbose --gif
 """
 
 import argparse
 import matplotlib.pyplot as plt
 import sys
 sys.path.append('../')
-import src.trainers as tr
 import src.read_pic as rp
 import os
 import numpy as np
