@@ -470,6 +470,7 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
                 temp = np.transpose(temp[choose_z[0]:choose_z[1], choose_y[0]:choose_y[1], choose_x[0]:choose_x[1]], (1, 0, 2))  # to (y,x,z)
             #logger.warning(f"Read {fieldname} from {filename} with shape {temp.shape} before squeeze")
             temp = temp.squeeze()
+            temp = temp.reshape([d for d in temp.shape if d != 0]) # remove dimensions of size 0
             field.append(temp)
         except Exception as e:
             if verbose:
