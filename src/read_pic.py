@@ -458,11 +458,17 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
             else:
                 raise FileNotFoundError(f"Neither {filename} nor {filename}.pkl found in {files_path}")
             if choose_x is None:
-                choose_x = [0,temp.shape[2]-1]
+                choose_x = [0, temp.shape[2]]
             if choose_y is None:
-                choose_y = [0,temp.shape[1]-1]
+                choose_y = [0, temp.shape[1]]
             if choose_z is None:
-                choose_z = [0,temp.shape[0]-1]
+                choose_z = [0, temp.shape[0]]
+            if choose_x[1] <= choose_x[0] and temp.shape[2] > 0:
+                choose_x = [choose_x[0], min(choose_x[0] + 1, temp.shape[2])]
+            if choose_y[1] <= choose_y[0] and temp.shape[1] > 0:
+                choose_y = [choose_y[0], min(choose_y[0] + 1, temp.shape[1])]
+            if choose_z[1] <= choose_z[0] and temp.shape[0] > 0:
+                choose_z = [choose_z[0], min(choose_z[0] + 1, temp.shape[0])]
             #logger.warning(f"{choose_x = }, {choose_y = }, {choose_z = } with shape {temp.shape}")
             if indexing == 'ij':
                 temp = np.transpose(temp[choose_z[0]:choose_z[1], choose_y[0]:choose_y[1], choose_x[0]:choose_x[1]], (2, 1, 0))  # to (z,y,x)
@@ -814,13 +820,15 @@ def read_files(files_path, filenames, fields_to_read, qom, dtype, extract_fields
                     logger.info(f"Available data keys are {data.keys() = }")
                     logger.info(f"Attempting to extract {extract_field_index = } which should be a field name")
                     raise e
+            outshape = out[-1].shape
         out2.append(np.array(out))
     try:
-        
         out2 = np.array(out2, dtype=dtype)
         if len(out2.shape) > 4:
+            logger.warning(f"read_data: prior to appending {outshape = }")
             logger.warning(f"Output shape {out2.shape} has more than 4 dimensions, we try fixing by removing single-dimensional entries")
-            out2 = out2[...,0]
+            out2 = out2[...,0].squeeze()
+            logger.warning(f"Output shape after fixing {out2.shape}")
         out2 = out2.transpose(0,2,3,1)
     except Exception as e:
         logger.info(f"Failed to convert to array with dtype {dtype}, current shape is {out2.shape}")
