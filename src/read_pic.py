@@ -458,11 +458,20 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
             else:
                 raise FileNotFoundError(f"Neither {filename} nor {filename}.pkl found in {files_path}")
             if choose_x is None:
-                choose_x = [0,temp.shape[2]-1]
+                if temp.shape[2] > 1:
+                    choose_x = [0,temp.shape[2]-1]
+                else:
+                    choose_x = [0,1]
             if choose_y is None:
-                choose_y = [0,temp.shape[1]-1]
+                if temp.shape[1] > 1:
+                    choose_y = [0,temp.shape[1]-1]
+                else:
+                    choose_y = [0,1]
             if choose_z is None:
-                choose_z = [0,temp.shape[0]-1]
+                if temp.shape[0] > 1:
+                    choose_z = [0,temp.shape[0]-1]
+                else:
+                    choose_z = [0,1]
             #logger.warning(f"{choose_x = }, {choose_y = }, {choose_z = } with shape {temp.shape}")
             if indexing == 'ij':
                 temp = np.transpose(temp[choose_z[0]:choose_z[1], choose_y[0]:choose_y[1], choose_x[0]:choose_x[1]], (2, 1, 0))  # to (z,y,x)
@@ -473,8 +482,8 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
             temp = temp.reshape([d for d in temp.shape if d != 0]) # remove dimensions of size 0
             field.append(temp)
         except Exception as e:
-            if verbose:
-                logger.warning(f"Failed to read {fieldname} from {filename} using path {files_path}")
+            logger.warning(f"Failed to read {fieldname} from {filename} using path {files_path}. Available fields: {list(n.keys())}")
+            #logger.warning(f"{temp.shape = }")
             raise e
     a = np.moveaxis(np.array(field), 0, -1)
         
@@ -966,10 +975,14 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                 for i, species in enumerate(choose_species):
                     if species is not None:
                         try:
+                            if component_1 <= component_2: # we only read the upper triangular part of the pressure tensor, because it is symmetric, and we will fill the lower triangular part later
+                                PIread = read_fieldname(files_path,filenames,f'P{component_1}{component_2}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
+                            #else:
+                            #    PIread = read_fieldname(files_path,filenames,f'PI{component_2}{component_1}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
                             if species in data[f'PI{component_1}{component_2}']:
-                                data[f'PI{component_1}{component_2}'][species] += read_fieldname(files_path,filenames,f'P{component_1}{component_2}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
+                                data[f'PI{component_1}{component_2}'][species] += PIread
                             else:
-                                data[f'PI{component_1}{component_2}'][species] = read_fieldname(files_path,filenames,f'P{component_1}{component_2}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
+                                data[f'PI{component_1}{component_2}'][species] = PIread
                         except:
                             if verbose:
                                 logger.info(f'Component P{component_1}{component_2} for species {species} missing because tensor is symmetric')
