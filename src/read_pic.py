@@ -673,7 +673,7 @@ def build_XY(files_path, choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y,
     nxc = sim_data['nxc']
     nyc = sim_data['nyc']
     nzc = sim_data['nzc']
-    qom = sim_data['qom']
+    #qom = sim_data['qom']
     
     # The x, y and z axes are set.
     x = np.linspace(0, Lx, nxc + 1)

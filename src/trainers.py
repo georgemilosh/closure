@@ -258,6 +258,11 @@ class Trainer:
         #dataset_kwargs = config['dataset_kwargs']
         load_data_kwargs = config['load_data_kwargs']
         model_kwargs = config['model_kwargs']
+        if model_kwargs['model'] == 'FCNN':
+            if model_kwargs['channels'][-1] != len(config['dataset_kwargs']['read_features_targets_kwargs']['request_targets']):
+                raise ValueError(f"The last element of model_kwargs['channels'] must be equal to the number of targets specified in config['dataset_kwargs']['read_features_targets_kwargs']['request_targets']")
+            if model_kwargs['channels'][0] != len(config['dataset_kwargs']['read_features_targets_kwargs']['request_features']):
+                raise ValueError(f"The first element of model_kwargs['channels'] must be equal to the number of features specified in config['dataset_kwargs']['read_features_targets_kwargs']['request_features']")
         #device = config['device']
         # Determine the model path for the model (considering runs)
         model_path = self.work_dir
@@ -508,7 +513,8 @@ class Trainer:
                             shutil.rmtree(target_dir, onerror=remove_readonly)
                     except OSError as e:
                         logger.warning(f"Could not remove directory {target_dir}: {e}")
-                    shutil.rmtree(os.path.join(self.work_dir, self.run))
+                    if os.path.exists(os.path.join(self.work_dir, self.run)):
+                        shutil.rmtree(os.path.join(self.work_dir, self.run))
                 else:
                     raise FileExistsError(
                         f"Config file {config_file} already exists. "
