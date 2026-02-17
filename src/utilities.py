@@ -603,11 +603,11 @@ def graph_pred_targets(trainer, target_name: str, ground_truth_scaled, predictio
                         choose_x=trainer.dataset_kwargs['read_features_targets_kwargs']['choose_x'],
                         choose_y = trainer.dataset_kwargs['read_features_targets_kwargs']['choose_y'])
     import os
+    if not os.path.exists(f'{trainer.work_dir}/img/{trainer.run}'):
+        os.makedirs(f'{trainer.work_dir}/img/{trainer.run}')
     # Create a figure and subplots
     _, axs = plt.subplots(3, 3, figsize=(12, 6))
-    if not os.path.exists('img'):
-        # Create the directory
-        os.makedirs('img')
+
     # Iterate over the panels
     for i in range(3):
         error = (ground_truth_reshaped[i,...,0] - prediction_reshaped[i,...,0])/(ground_truth_reshaped[i,...,0].max())
@@ -633,7 +633,9 @@ def graph_pred_targets(trainer, target_name: str, ground_truth_scaled, predictio
                 axes.set_xlabel('X')
                 axes.set_ylabel('Y')
                 f.colorbar(im, ax=axes)
-                f.savefig(f'img/{target_name}_time{i}_{label}.png',bbox_inches='tight')
+
+                
+                f.savefig(f'{trainer.work_dir}/img/{trainer.run}/{target_name}_time{i}_{label}.png',bbox_inches='tight')
                 plt.close(f)
     # Adjust the layout of the subplots
     plt.tight_layout()

@@ -25,7 +25,7 @@ WORK_DIR=$1
 #OUTPUT_DIR=$(pwd)/
 #WORK_DIR="${OUTPUT_DIR}${WORK_DIR}"
 
-REPO_DIR="/dodrio/scratch/projects/2025_065/georgem/2024_109/closure/"
+REPO_DIR="/dodrio/scratch/projects/2025_112/georgem/closure/"
 
 ### change 5-digit MASTER_PORT as you wish, slurm will raise Error if duplicated with others
 ### change WORLD_SIZE as gpus/node * num_nodes
@@ -39,9 +39,10 @@ export MASTER_ADDR=$master_addr
 echo "MASTER_ADDR="$MASTER_ADDR
 
 
-module load PyTorch/2.1.2-foss-2023a-CUDA-12.1.1
+#module load PyTorch/2.1.2-foss-2023a-CUDA-12.1.1
+module load PyTorch/2.1.2-foss-2023a
 module load h5py/3.9.0-foss-2023a
-module load torchvision/0.16.0-foss-2023a-CUDA-12.1.1
+#module load torchvision/0.16.0-foss-2023a-CUDA-12.1.1
 #module load Optuna/3.6.1-foss-2023b
 #module load h5py/3.9.0-foss-2023a
 #module load SciPy-bundle/2022.05-foss-2022a

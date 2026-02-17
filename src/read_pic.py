@@ -841,9 +841,19 @@ def read_files(files_path, filenames, fields_to_read, qom, dtype, extract_fields
             logger.warning(f"Output shape {out2.shape} has more than 4 dimensions, we try fixing by removing single-dimensional entries")
             out2 = out2[...,0].squeeze()
             logger.warning(f"Output shape after fixing {out2.shape}")
-        out2 = out2.transpose(0,2,3,1)
+        # Add logging before transpose
+        logger.info(f"About to transpose array with shape {out2.shape}")
+        
+        # Only transpose if we have 4 dimensions
+        if len(out2.shape) == 4:
+            out2 = out2.transpose(0,2,3,1)
+        else:
+            logger.error(f"Expected 4D array for transpose, got shape {out2.shape}")
+            raise ValueError(f"Cannot transpose array with shape {out2.shape} - expected 4 dimensions, got {len(out2.shape)}")
+            
     except Exception as e:
-        logger.info(f"Failed to convert to array with dtype {dtype}, current shape is {out2.shape}")
+        logger.error(f"Failed to process array. Current shape: {np.array(out2).shape if isinstance(out2, list) else out2.shape}")
+        logger.error(f"dtype: {dtype}, outshape from last file: {outshape}")
         raise e
         
     return out2  # we want to have the time as the first index, then x, then y, then the field
