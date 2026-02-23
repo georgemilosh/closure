@@ -17,6 +17,24 @@ DEFAULT_CHOOSE_Z = None
 DEFAULT_INDEXING = 'ij'
 DEFAULT_VERBOSE = False
 
+def get_saved_iterations(files_path, experiment):
+    """Return sorted saved field iterations and corresponding simulation times."""
+    exp_path = os.path.join(files_path, experiment)
+    parser = parse_simulation_data(exp_path)
+    fields_dirs = [
+        d.name for d in os.scandir(exp_path)
+        if d.is_dir() and d.name.startswith("Fields_")
+    ]
+
+    saved_iterations = sorted(
+        int(name[len("Fields_"):])
+        for name in fields_dirs
+        if name[len("Fields_"):].isdigit()
+    )
+    saved_times = [parser['dt']*iteration for iteration in saved_iterations]
+
+    return saved_iterations, saved_times   
+
 def ipic3D_available_cycles(files_path):
     """
     Identify available cycles in iPiC3D HDF5 files.
@@ -235,7 +253,6 @@ def read_data_ipic3d(files_path, cycles, fields_to_read, qom=None, choose_specie
                     else:
                         data[fields][species] = read_ipic3d_field(files_path,cycles,f'{fields}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
 
-
     if fields_to_read["J"]:
         data['Jx'], data['Jy'], data['Jz'] = {}, {}, {}
         if fields_to_read['rho']:
@@ -346,8 +363,6 @@ def read_data_ipic3d(files_path, cycles, fields_to_read, qom=None, choose_specie
 
         if not 'e' in choose_species:
             raise ValueError(f"Calculating divP_e or Ohmres without electron species cannot be done")
-        
-        
 
         data['EPx'] = -(ut.highdiff(data['Pxx']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pxy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
         data['EPy'] = -(ut.highdiff(data['Pxy']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pyy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
@@ -408,10 +423,6 @@ def read_data_ipic3d(files_path, cycles, fields_to_read, qom=None, choose_specie
                 del data[f'EF{component}']
     return data   
 
-            
-
-
-
 def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, 
                    choose_z=DEFAULT_CHOOSE_Z, indexing=DEFAULT_INDEXING, verbose=DEFAULT_VERBOSE, filters=None):
     """
@@ -456,7 +467,50 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
                 with np.load(files_path + filename) as n:
                     temp = n[fieldname]
             else:
-                raise FileNotFoundError(f"Neither {filename} nor {filename}.pkl found in {files_path}")
+                # Assuming that string of integers was passed
+                import h5py
+                iteration = int(filename)
+                # Split fieldname to handle cases like Jx_0 (field Jx, species 0)
+                fieldname_parts = fieldname.split('_')
+                base_fieldname = fieldname_parts[0]
+                species_id = fieldname_parts[1] if len(fieldname_parts) > 1 else None
+                try:
+                    if base_fieldname in ['Bx', 'By', 'Bz']:
+                        filepath = f"{files_path}/Fields_{iteration:05d}/B_{iteration:05d}.h5"
+                        with h5py.File(filepath, "r") as n:
+                            temp = np.array(n['Fields'][fieldname])
+                    elif base_fieldname in ['Ex', 'Ey', 'Ez']:
+                        filepath = f"{files_path}/Fields_{iteration:05d}/E_{iteration:05d}.h5"
+                        with h5py.File(filepath, "r") as n:
+                            temp = np.array(n['Fields'][fieldname])
+                    elif base_fieldname in ['Jx','Jy','Jz']:
+                        filepath = f"{files_path}/Moments_{iteration:05d}/J_species_{species_id}_{iteration:05d}.h5"
+                        with h5py.File(filepath, "r") as n:
+                            temp = np.array(n['Moments'][f'species_{species_id}'][base_fieldname])
+                    elif base_fieldname in ['Pxx','Pxy','Pxz','Pyy','Pyz','Pzz']:
+                        filepath = f"{files_path}/Moments_{iteration:05d}/Pressure_species_{species_id}_{iteration:05d}.h5"
+                        #print(base_fieldname.swapcase())
+                        with h5py.File(filepath, "r") as n:
+                            temp = np.array(n['Moments'][f'species_{species_id}'][base_fieldname.swapcase()])
+                    elif base_fieldname in ['rho']:
+                        filepath = f"{files_path}/Moments_{iteration:05d}/rho_species_{species_id}_{iteration:05d}.h5"
+                        with h5py.File(filepath, "r") as n:
+                            temp = np.array(n['Moments'][f'species_{species_id}'][base_fieldname])
+                    elif base_fieldname in ['EFx','EFy','EFz']:
+                        filepath = f"{files_path}/Moments_{iteration:05d}/E_flux_species_{species_id}_{iteration:05d}.h5"
+                        with h5py.File(filepath, "r") as n:
+                            temp = np.array(n['Moments'][f'species_{species_id}'][base_fieldname])
+                    elif base_fieldname in ['Qxxxs','Qxxys','Qxxzs','Qxxyy','Qxxyz','Qxxzz','Qyyys','Qyyzs','Qyyyy','Qyyzz','Qzzzs','Qzzzz']:
+                        filepath = f"{files_path}/Moments_{iteration:05d}/H_flux_species_{species_id}_{iteration:05d}.h5"
+                        with h5py.File(filepath, "r") as n:
+                            temp = np.array(n['Moments'][f'species_{species_id}'][base_fieldname])
+                except Exception as e:
+                    logger.error(f"Unable to open {filepath = } for {fieldname = }")
+                    raise e
+                # Permute from (x, y, z) to (z, y, x)
+                temp = np.transpose(temp, (2, 1, 0))
+            #print(f"{temp.shape = }")
+            # Slicing if needed, if not specified we take the whole range (or 0,1 if the dimension is of size 1)
             if choose_x is None:
                 if temp.shape[2] > 1:
                     choose_x = [0,temp.shape[2]-1]
@@ -486,24 +540,6 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
             #logger.warning(f"{temp.shape = }")
             raise e
     a = np.moveaxis(np.array(field), 0, -1)
-        
-    #logger.info(f"{filename}, {fieldname}, {a.shape = }")
-    if filters is not None:
-        if not isinstance(filters, list):
-            filters = [filters]
-        for filteri in filters: # apply all filters in succession
-            if verbose:
-                logger.info(f"Filtering {fieldname} from {filename} with {filteri['name']}")
-            filters_copy = filteri.copy()
-            filters_name = filters_copy.pop("name", None)
-            filters_object = getattr(nd, filters_name)
-            filter_kwargs = filters_copy
-            for _, kwarg in filter_kwargs.items():
-                if  isinstance(kwarg, list):
-                    kwarg = tuple(kwarg)  #  configs usually provide lists, but we need tuples
-            a = filters_object(a, **filter_kwargs)
-            if verbose:
-                logger.info(f"Resulting shape {a.shape}")
     return a
 
 def apply_filters(field, filters, fieldname=None, filename=None, verbose=DEFAULT_VERBOSE):
@@ -889,10 +925,10 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
     - Bx, By, Bz: The magnetic field components.
     - Ex, Ey, Ez: The electric field components.
     - Bx_ext, By_ext, Bz_ext: The external magnetic field components.
-    - divB: The divergence of the magnetic field.
+    - divB: The divergence of the magnetic field. DEPRECATED and absent in new ipic3d version
     - rho: The charge density.
-    - N: The number of particles per cell in the particle in cell simulation.
-    - Qrem: The remaining charge in the particle in cell simulation.???????????
+    - N: The number of particles per cell in the particle in cell simulation. DEPRECATED and absent in new ipic3d version
+    - Qrem: The remaining charge in the particle in cell simulation. DEPRECATED and absent in new ipic3d version
     - Jx, Jy, Jz: The current density components.
     - Pxx, Pxy, Pxz, Pyy, Pyz, Pzz: The pressure tensor components.
     - PIxx, PIxy, PIxz, PIyy, PIyz, PIzz: The stress tensor components.
@@ -902,10 +938,14 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
     """
     #logger.info(f"{files_path = }")
     #logger.info(f"{filenames = }")
-    if isinstance(filenames, list):
-        folder_path = files_path + "/" + filenames[0].rsplit("/", 1)[0] + "/"
-    else:
-        folder_path = files_path + "/" + filenames.rsplit("/", 1)[0] + "/"
+    try:
+        if isinstance(filenames, list):
+            folder_path = files_path + "/" + filenames[0].rsplit("/", 1)[0] + "/"
+        else:
+            folder_path = files_path + "/" + filenames.rsplit("/", 1)[0] + "/"
+    except Exception as e:
+        logger.error(f"Error determining folder path from files_path and filenames: {files_path = }, {filenames = }")
+        raise e
     #logger.info(f"Reading data from folder: {folder_path}")
     X, Y = build_XY(folder_path,choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, choose_z=DEFAULT_CHOOSE_Z, indexing=DEFAULT_INDEXING)
     #choose_species_new = ut.append_index_to_duplicates(choose_species) 
@@ -1180,6 +1220,9 @@ def get_exp_times(experiments, files_path, fields_to_read, choose_species=None, 
         #dy = Ly/nyc
         # sorted(os.listdir()) creates a sorted list containing the .h5 filenames, os.listdir() alone would put them in random order.
         filenames = sorted([n for n in os.listdir(f"{files_path}{experiment}") if "-Fields_" in n and (n.endswith(".pkl") or n.endswith(".h5") or n.endswith(".npz"))])
+        if filenames == []:
+            filenames = sorted([re.search(r'Fields_(\d+)', n).group(1) for n in os.listdir(f"{files_path}{experiment}") if re.search(r'Fields_(\d+)', n)])
+            #logger.warning(f"No matching field files found in {files_path}{experiment}. Available iterations: {available_iterations}")
         if choose_times is None:
             selected_filenames = filenames
         elif isinstance(choose_times, int):
@@ -1191,12 +1234,24 @@ def get_exp_times(experiments, files_path, fields_to_read, choose_species=None, 
                 logger.info(f"Inconsistent size: {len(filenames) = }  {len(choose_times) = }")
                 raise e
         try:
-            times = [int(n[-13:-7] if n.endswith(".h5.pkl") else (n[-9:-4] if n.endswith(".npz") else n[-9:-3])) * dt for n in selected_filenames]
+            logger.info(f"selected_filenames = {selected_filenames}")
+            times = []
+            for n in selected_filenames:
+                if n.endswith(".h5.pkl"):
+                    time_token = n[-13:-7]
+                elif n.endswith(".npz"):
+                    time_token = n[-9:-4]
+                elif n.endswith(".h5"):
+                    time_token = n[-9:-3]
+                else: # deal with new ipic3d version where the time is directly after "Fields_"
+                    time_token = int(n)
+                times.append(int(time_token) * dt)
         except Exception as e:
             logger.info(f"Failed to extract times from {n = }")
             logger.info(f"{selected_filenames=}")
             raise e
         #logger.info(times)
+        #logger.info(f"Selected filenames for experiment {experiment}: {selected_filenames}")
         data[experiment] = read_data(f"{files_path}{experiment}/",selected_filenames,fields_to_read,qom,
                                      choose_species=choose_species,choose_x=choose_x,choose_y=choose_y,choose_z=choose_z,verbose=verbose, **kwargs)
         if choose_x is None:
