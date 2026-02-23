@@ -17,6 +17,24 @@ DEFAULT_CHOOSE_Z = None
 DEFAULT_INDEXING = 'ij'
 DEFAULT_VERBOSE = False
 
+def get_saved_iterations(files_path, experiment):
+    """Return sorted saved field iterations and corresponding simulation times."""
+    exp_path = os.path.join(files_path, experiment)
+    parser = parse_simulation_data(exp_path)
+    fields_dirs = [
+        d.name for d in os.scandir(exp_path)
+        if d.is_dir() and d.name.startswith("Fields_")
+    ]
+
+    saved_iterations = sorted(
+        int(name[len("Fields_"):])
+        for name in fields_dirs
+        if name[len("Fields_"):].isdigit()
+    )
+    saved_times = [parser['dt']*iteration for iteration in saved_iterations]
+
+    return saved_iterations, saved_times   
+
 def ipic3D_available_cycles(files_path):
     """
     Identify available cycles in iPiC3D HDF5 files.
@@ -1216,12 +1234,24 @@ def get_exp_times(experiments, files_path, fields_to_read, choose_species=None, 
                 logger.info(f"Inconsistent size: {len(filenames) = }  {len(choose_times) = }")
                 raise e
         try:
-            times = [int(n[-13:-7] if n.endswith(".h5.pkl") else (n[-9:-4] if n.endswith(".npz") else n[-9:-3])) * dt for n in selected_filenames]
+            logger.info(f"selected_filenames = {selected_filenames}")
+            times = []
+            for n in selected_filenames:
+                if n.endswith(".h5.pkl"):
+                    time_token = n[-13:-7]
+                elif n.endswith(".npz"):
+                    time_token = n[-9:-4]
+                elif n.endswith(".h5"):
+                    time_token = n[-9:-3]
+                else: # deal with new ipic3d version where the time is directly after "Fields_"
+                    time_token = int(n)
+                times.append(int(time_token) * dt)
         except Exception as e:
             logger.info(f"Failed to extract times from {n = }")
             logger.info(f"{selected_filenames=}")
             raise e
         #logger.info(times)
+        #logger.info(f"Selected filenames for experiment {experiment}: {selected_filenames}")
         data[experiment] = read_data(f"{files_path}{experiment}/",selected_filenames,fields_to_read,qom,
                                      choose_species=choose_species,choose_x=choose_x,choose_y=choose_y,choose_z=choose_z,verbose=verbose, **kwargs)
         if choose_x is None:
