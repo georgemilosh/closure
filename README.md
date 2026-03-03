@@ -1,4 +1,4 @@
-# closure
+# closure (nathan_branch)
 
 **closure** is a flexible, reproducible, and distributed-ready machine learning framework for training on fields files of ECsim/iPiC3D Particle in Cell Codes, with a focus on fluid closure. It provides tools for data loading, preprocessing, model training, evaluation, and experiment management, supporting both single-node and distributed (multi-GPU/multi-node) workflows.
 
