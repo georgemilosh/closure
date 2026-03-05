@@ -17,23 +17,23 @@ DEFAULT_CHOOSE_Z = None
 DEFAULT_INDEXING = 'ij'
 DEFAULT_VERBOSE = False
 
-def get_saved_iterations(files_path, experiment):
+def get_saved_iterations(files_path, experiment, choose_times=None):
     """Return sorted saved field iterations and corresponding simulation times."""
     exp_path = os.path.join(files_path, experiment)
     parser = parse_simulation_data(exp_path)
-    fields_dirs = [
-        d.name for d in os.scandir(exp_path)
-        if d.is_dir() and d.name.startswith("Fields_")
-    ]
+    
+    filenames = _collect_experiment_filenames(f"{files_path}/{experiment}")
+    field_files = _select_filenames_by_time(filenames, choose_times)
 
-    saved_iterations = sorted(
-        int(name[len("Fields_"):])
-        for name in fields_dirs
-        if name[len("Fields_"):].isdigit()
-    )
+    saved_iterations = sorted({
+        int(match.group(1))
+        for name in field_files
+        for match in [re.search(r"(\d+)\.h5(?:\.pkl)?$", name)]
+        if match
+    })
     saved_times = [parser['dt']*iteration for iteration in saved_iterations]
 
-    return saved_iterations, saved_times   
+    return saved_iterations, saved_times    
 
 def ipic3D_available_cycles(files_path):
     """
@@ -1160,6 +1160,57 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                 del data[f'EF{component}']
     return data
 
+
+def _collect_experiment_filenames(experiment_dir):
+    """
+    Collect sorted field filenames for an experiment directory.
+
+    Supports both legacy ECSIM-style files (e.g. *-Fields_XXXXX.h5/.pkl/.npz)
+    and iPiC3D-like directory naming where iteration appears as Fields_<iter>.
+    """
+    filenames = sorted([
+        n for n in os.listdir(experiment_dir)
+        if "-Fields_" in n and (n.endswith(".pkl") or n.endswith(".h5") or n.endswith(".npz"))
+    ])
+    if filenames == []:
+        filenames = sorted([
+            re.search(r'Fields_(\d+)', n).group(1)
+            for n in os.listdir(experiment_dir)
+            if re.search(r'Fields_(\d+)', n)
+        ])
+    return filenames
+
+
+def _select_filenames_by_time(filenames, choose_times):
+    """Select filenames according to choose_times semantics used in get_exp_times."""
+    if choose_times is None:
+        return filenames
+    if isinstance(choose_times, int):
+        return filenames[choose_times:]
+    try:
+        return [filenames[i] for i in choose_times]
+    except Exception as e:
+        logger.info(f"Inconsistent size: {len(filenames) = }  {len(choose_times) = }")
+        raise e
+
+
+def _extract_times_from_filenames(selected_filenames, dt):
+    """Extract physical times from selected filenames/iterations."""
+    times = []
+    for n in selected_filenames:
+        n_str = str(n)
+        if n_str.endswith(".h5.pkl"):
+            time_token = n_str[-13:-7]
+        elif n_str.endswith(".npz"):
+            time_token = n_str[-9:-4]
+        elif n_str.endswith(".h5"):
+            time_token = n_str[-9:-3]
+        else:  # deal with new ipic3d version where the time is directly after "Fields_"
+            match = re.search(r'Fields_(\d+)', n_str)
+            time_token = match.group(1) if match else int(n_str)
+        times.append(int(time_token) * dt)
+    return times
+
 def get_exp_times(experiments, files_path, fields_to_read, choose_species=None, choose_times=None,choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, choose_z=DEFAULT_CHOOSE_Z, 
                   verbose=DEFAULT_VERBOSE, **kwargs):
     """
@@ -1219,33 +1270,11 @@ def get_exp_times(experiments, files_path, fields_to_read, choose_species=None, 
         #dx = Lx/nxc
         #dy = Ly/nyc
         # sorted(os.listdir()) creates a sorted list containing the .h5 filenames, os.listdir() alone would put them in random order.
-        filenames = sorted([n for n in os.listdir(f"{files_path}{experiment}") if "-Fields_" in n and (n.endswith(".pkl") or n.endswith(".h5") or n.endswith(".npz"))])
-        if filenames == []:
-            filenames = sorted([re.search(r'Fields_(\d+)', n).group(1) for n in os.listdir(f"{files_path}{experiment}") if re.search(r'Fields_(\d+)', n)])
-            #logger.warning(f"No matching field files found in {files_path}{experiment}. Available iterations: {available_iterations}")
-        if choose_times is None:
-            selected_filenames = filenames
-        elif isinstance(choose_times, int):
-            selected_filenames = filenames[choose_times:]
-        else:
-            try:
-                selected_filenames = [filenames[i] for i in choose_times]
-            except Exception as e:
-                logger.info(f"Inconsistent size: {len(filenames) = }  {len(choose_times) = }")
-                raise e
+        filenames = _collect_experiment_filenames(f"{files_path}{experiment}")
+        selected_filenames = _select_filenames_by_time(filenames, choose_times)
         try:
             logger.info(f"selected_filenames = {selected_filenames}")
-            times = []
-            for n in selected_filenames:
-                if n.endswith(".h5.pkl"):
-                    time_token = n[-13:-7]
-                elif n.endswith(".npz"):
-                    time_token = n[-9:-4]
-                elif n.endswith(".h5"):
-                    time_token = n[-9:-3]
-                else: # deal with new ipic3d version where the time is directly after "Fields_"
-                    time_token = int(n)
-                times.append(int(time_token) * dt)
+            times = _extract_times_from_filenames(selected_filenames, dt)
         except Exception as e:
             logger.info(f"Failed to extract times from {n = }")
             logger.info(f"{selected_filenames=}")
