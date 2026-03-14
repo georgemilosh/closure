@@ -1394,6 +1394,13 @@ def get_Ohm(data,qom, x,y, coeff=None, small=1e-10):
     data['EPx'] = -(highdiff(data['Pxx']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap') + highdiff(data['Pxy']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap'))/(-data['rho']['e']+small) # density in ECsim is negative (electron charge density)
     data['EPy'] = -(highdiff(data['Pxy']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap') + highdiff(data['Pyy']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap'))/(-data['rho']['e']+small) # density in ECsim is negative (electron charge density)
     data['EPz'] = -(highdiff(data['Pxz']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap') + highdiff(data['Pyz']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap'))/(-data['rho']['e']+small) # density in ECsim is negative (electron charge density)
+
+    data['mVgradVx/e'] = highdiff(data['Vx']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap')*data['Vx']['e']/qom[0] + \
+                                highdiff(data['Vx']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap')*data['Vy']['e']/qom[0]
+    data['mVgradVy/e'] = highdiff(data['Vy']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap')*data['Vx']['e']/qom[0] + \
+                                highdiff(data['Vy']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap')*data['Vy']['e']/qom[0]
+    data['mVgradVz/e'] = highdiff(data['Vz']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap')*data['Vx']['e']/qom[0] + \
+                                highdiff(data['Vz']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap')*data['Vy']['e']/qom[0]
     
 def get_J_perp(data, x,y, coeff=None):
     """
