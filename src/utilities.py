@@ -1003,7 +1003,7 @@ def get_spectral_index(k,spec,N):
 
 
 
-def code2alfven(data, B0x, nb):
+def code2alfven(data, X, Y, B0x, nb):
     "Rescale code units to Alfven units, using the normalisation  given by B0x and nb"
     VA = B0x/np.sqrt(nb)
     J0 = nb*VA
@@ -1063,6 +1063,8 @@ def code2alfven(data, B0x, nb):
                 data[field_name][spec] = data[field_name][spec]/(VA/B0x)
         except:
             print(f"{field_name} not in data")
+
+    return X*np.sqrt(nb), Y*np.sqrt(nb)
 
 def do_dot(fx,fy,fz,gx,gy,gz):
 	return fx*gx+fy*gy+fz*gz
