@@ -1556,22 +1556,22 @@ def _read_ipic3d_cycles(files_path, cycles, requests, choose_x=DEFAULT_CHOOSE_X,
     results = {request['output_name']: [] for request in requests}
     import h5py
 
-    for cycle in cycles:
-        time_cycle = f"cycle_{int(cycle)}"
-        cycle_fields = {}
-        found_fields = set()
+    time_cycles = [f"cycle_{int(cycle)}" for cycle in cycles]
+    cycle_fields = [dict() for _ in cycles]
+    found_fields = [set() for _ in cycles]
 
-        for file_path in all_hdf_files:
-            rank_id = int(os.path.basename(file_path).replace("proc", "").replace(".hdf", ""))
-            with h5py.File(file_path, "r") as f:
-                topology = f['topology']
-                cartesian_coord = topology['cartesian_coord'][()]
-                cartesian_rank = topology['cartesian_rank'][()]
-                if rank_id != cartesian_rank:
-                    raise ValueError(
-                        f"Rank ID {rank_id} does not match cartesian rank {cartesian_rank} in file {file_path}"
-                    )
+    for file_path in all_hdf_files:
+        rank_id = int(os.path.basename(file_path).replace("proc", "").replace(".hdf", ""))
+        with h5py.File(file_path, "r") as f:
+            topology = f['topology']
+            cartesian_coord = topology['cartesian_coord'][()]
+            cartesian_rank = topology['cartesian_rank'][()]
+            if rank_id != cartesian_rank:
+                raise ValueError(
+                    f"Rank ID {rank_id} does not match cartesian rank {cartesian_rank} in file {file_path}"
+                )
 
+            for cycle_index, time_cycle in enumerate(time_cycles):
                 for request in requests:
                     try:
                         field_data = find_field_in_hdf5(
@@ -1588,9 +1588,9 @@ def _read_ipic3d_cycles(files_path, cycles, requests, choose_x=DEFAULT_CHOOSE_X,
                         ) from exc
 
                     output_name = request['output_name']
-                    found_fields.add(output_name)
-                    if output_name not in cycle_fields:
-                        cycle_fields[output_name] = np.zeros((nxc, nyc), dtype=field_data.dtype)
+                    found_fields[cycle_index].add(output_name)
+                    if output_name not in cycle_fields[cycle_index]:
+                        cycle_fields[cycle_index][output_name] = np.zeros((nxc, nyc), dtype=field_data.dtype)
 
                     x0, y0, z0 = (np.array(field_data.shape) * cartesian_coord).astype(int)
                     nx_local, ny_local, nz_local = field_data.shape
@@ -1600,16 +1600,17 @@ def _read_ipic3d_cycles(files_path, cycles, requests, choose_x=DEFAULT_CHOOSE_X,
                         logger.info(f" {nx_local = }, {ny_local = }, {nz_local = }")
                         logger.info(f" writing data to global arrays at indices x: {x0} to {x0 + nx_local}, y: {y0} to {y0 + ny_local}")
 
-                    cycle_fields[output_name][x0:x0 + nx_local, y0:y0 + ny_local] = field_data[:, :, 0]
+                    cycle_fields[cycle_index][output_name][x0:x0 + nx_local, y0:y0 + ny_local] = field_data[:, :, 0]
 
+    for cycle_index, time_cycle in enumerate(time_cycles):
         for request in requests:
             output_name = request['output_name']
-            if output_name not in found_fields:
+            if output_name not in found_fields[cycle_index]:
                 if skip_missing:
                     continue
                 raise KeyError(f"Field '{output_name}' not found in any proc*.hdf for {time_cycle}")
 
-            sliced_field = cycle_fields[output_name][choose_x[0]:choose_x[1], choose_y[0]:choose_y[1]]
+            sliced_field = cycle_fields[cycle_index][output_name][choose_x[0]:choose_x[1], choose_y[0]:choose_y[1]]
             if indexing == 'xy':
                 sliced_field = sliced_field.T
             results[output_name].append(sliced_field)
@@ -1717,7 +1718,6 @@ def convert_ipic3d_to_ecsim_h5(
             for field_name, field_data in cycle_fields.items()
         }
 
-        # Write ECSIM HDF5
         with h5py.File(out_path, "w") as h5f:
             step_group = h5f.create_group("Step#0")
             block_group = step_group.create_group("Block")
