@@ -1002,6 +1002,68 @@ def get_spectral_index(k,spec,N):
 	return np.array(k_red), np.array(slopes)
 
 
+
+def code2alfven(data, B0x, nb):
+    "Rescale code units to Alfven units, using the normalisation  given by B0x and nb"
+    VA = B0x/np.sqrt(nb)
+    J0 = nb*VA
+    p0 = nb*VA**2
+    E0 = VA*B0x
+    for field_name in ['Bx', 'By', 'Bz']:
+        try:
+            data[field_name] = data[field_name]/B0x
+        except:
+            print(f"{field_name} not in data")
+    data['Bmagn'] = data['Bmagn']/B0x
+    for field_name in ['Ex', 'Ey', 'Ez','EPx', 'EPy', 'EPz','EHallx', 'EHally', 'EHallz','Ohmresx', 'Ohmresy', 'Ohmresz']:
+        try:
+            data[field_name] = data[field_name]/E0
+        except:
+            print(f"{field_name} not in data")
+    data['Emagn'] = data['Emagn']/E0
+    for field_name in ['Jx', 'Jy', 'Jz', 'Jmagn']:
+        try:
+            for spec in data[field_name].keys():
+                data[field_name][spec] = data[field_name][spec]/J0
+        except:
+            print(f"{field_name} not in data")
+    for field_name in ['Jtotx', 'Jtoty', 'Jtotz']:
+        try:
+            data[field_name] = data[field_name]/J0
+        except:
+            print(f"{field_name} not in data")
+    for field_name in ['rho']:
+        try:
+            for spec in data[field_name].keys():
+                data[field_name][spec] = data[field_name][spec]/nb
+        except:
+            print(f"{field_name} not in data")
+    for field_name in ['Vx', 'Vy', 'Vz']:
+        try:             
+            for spec in data[field_name].keys():
+                data[field_name][spec] = data[field_name][spec]/VA
+        except:
+            print(f"{field_name} not in data")
+    for field_name in ['Pxx', 'Pxy', 'Pxz', 'Pyx', 'Pyy', 'Pyz', 'Pzx', 'Pzy', 'Pzz', 'Ppar', 'Pperp']:
+        try:
+            for spec in data[field_name].keys():
+                data[field_name][spec] = data[field_name][spec]/p0  
+        except:
+            print(f"{field_name} not in data")
+    for field_name in ['qx', 'qy', 'qz','EFx', 'EFy', 'EFz']:
+        try:
+            for spec in data[field_name].keys():
+                data[field_name][spec] = data[field_name][spec]/(p0*VA)
+                
+        except:
+            print(f"{field_name} not in data")
+    for field_name in ['gyro_radius']:
+        try:
+            for spec in data[field_name].keys():
+                data[field_name][spec] = data[field_name][spec]/(VA/B0x)
+        except:
+            print(f"{field_name} not in data")
+
 def do_dot(fx,fy,fz,gx,gy,gz):
 	return fx*gx+fy*gy+fz*gz
 	

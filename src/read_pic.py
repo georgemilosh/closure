@@ -525,6 +525,7 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
             #logger.warning(f"{temp.shape = }")
             raise e
     a = np.moveaxis(np.array(field), 0, -1)
+    a = apply_filters(a, filters, fieldname=fieldname, filename=filenames, verbose=verbose)
     return a
 
 def apply_filters(field, filters, fieldname=None, filename=None, verbose=DEFAULT_VERBOSE):
