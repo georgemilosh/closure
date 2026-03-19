@@ -102,7 +102,6 @@ def read_ipic3d_field(files_path, cycles, fieldname, choose_x=DEFAULT_CHOOSE_X, 
     - numpy.ndarray: A subset of the field, with the z-dimension removed.
 
     """
-    X, _ = build_XY(files_path)
     sim_data = parse_simulation_data(files_path)
     nxc = sim_data['nxc']
     nyc = sim_data['nyc']
@@ -116,63 +115,29 @@ def read_ipic3d_field(files_path, cycles, fieldname, choose_x=DEFAULT_CHOOSE_X, 
         choose_z = [0, nzc]
     if verbose:
         logger.info(f"{choose_x = }, {choose_y = }, {choose_z = }")
-    time_cycles = [f"cycle_{int(cycle)}" for cycle in cycles]
-    field_times = []
-    all_hdf_files = sorted(glob.glob(os.path.join(files_path, "proc*.hdf")))
     if "_" in fieldname:
         field_name, species = fieldname.split("_", 1)  # splits at first underscore
     else:
         field_name, species = fieldname, None            # or handle however you need
-    for time_cycle in time_cycles:
-        field = np.zeros_like(X)
-        found_any = False
-        for file_path in all_hdf_files:
-            import h5py
-            rank_id = int(os.path.basename(file_path).replace("proc", "").replace(".hdf", ""))
-            with h5py.File(file_path, "r") as f:
-                try:
-                    if species is not None:
-                        field_data = find_field_in_hdf5(f, f"moments/species_{species}", field_name, time_cycle)
-                    else:
-                        field_data = find_field_in_hdf5(f, "fields", field_name, time_cycle)
-                    found_any = True
-                except KeyError as e:
-                    logger.warning(f"error reading {field_name}: {e}")
-                    if species is not None:
-                        logger.warning(f"available moments: {list(f['moments/species_' + species].keys())} ")
-                    else:
-                        logger.warning(f"available fields: {list(f['fields'].keys())} ")
-                    continue
-
-                x0, y0, z0 = (np.array(field_data.shape) * f['topology']['cartesian_coord'][()]).astype(int)
-                nx_local, ny_local, nz_local = field_data.shape
-                
-                if rank_id != f['topology']['cartesian_rank'][()]:
-                    raise ValueError(f"Rank ID {rank_id} does not match cartesian rank {f['topology']['cartesian_rank'][()]} in file {file_path}")
-                if verbose == 'debug':
-                    logger.info(f"Rank {rank_id} at position ({x0 = }, {y0 = }, {z0 = }) processing file {file_path} ")
-                    logger.info(f".   cartesian_coord: {f['topology']['cartesian_coord'][()]}")
-                    logger.info(f" {nx_local = }, {ny_local = }, {nz_local = }")
-                    logger.info(f" writing data to global arrays at indices x: {x0} to {x0 + nx_local}, y: {y0} to {y0 + ny_local}")
-                try:
-                    field[x0:x0 + nx_local, y0:y0 + ny_local] = field_data[:, :, 0]
-                except Exception as e:
-                    logger.info(f"{field.shape = }, {field_data.shape = }, {x0 = }, {y0 = }, {nx_local = }, {ny_local = }")
-                    raise e
-                #logger.info(f"Read {fieldname} from {file_path} with shape {field_data.shape}")
-        if not found_any:
-            raise KeyError(f"Field '{fieldname}' not found in any proc*.hdf for {time_cycle}")
-        if verbose:
-            logger.info(f"Read {fieldname} at {time_cycle} with shape {field.shape} before slicing")    
-        field_times.append(field[choose_x[0]:choose_x[1], choose_y[0]:choose_y[1]])
-    field_times = np.array(field_times)
+    requests = [{
+        'output_name': fieldname,
+        'path_prefix': f"moments/species_{species}" if species is not None else 'fields',
+        'field_name': field_name,
+    }]
+    field_times = _read_ipic3d_cycles(
+        files_path,
+        cycles,
+        requests,
+        choose_x=choose_x,
+        choose_y=choose_y,
+        choose_z=choose_z,
+        indexing=indexing,
+        skip_missing=False,
+        verbose=verbose,
+    )[fieldname]
     if verbose:
         logger.info(f"Extracted {field_times.shape = }")
-    
-    if indexing == 'ij':
-        return np.transpose(field_times,(1,2,0))
-    elif indexing == 'xy':
-        return np.transpose(field_times,(2,1,0))
+    return field_times
 
 
 def read_data_ipic3d(files_path, cycles, fields_to_read, qom=None, choose_species=None, choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, 
@@ -210,122 +175,143 @@ def read_data_ipic3d(files_path, cycles, fields_to_read, qom=None, choose_specie
     - q: The heat flux.
     
     """
-    #logger.info(f"{files_path = }")
-    #logger.info(f"{filenames = }")
+    if choose_species is None:
+        choose_species = _detect_ipic3d_species(files_path)
+
+    sim_data = parse_simulation_data(files_path)
     if qom is None:
-        sim_data = parse_simulation_data(files_path)
         qom = sim_data['qom']
-   
-    #logger.info(f"Reading data from folder: {folder_path}")
-    X, Y = build_XY(files_path,choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, choose_z=DEFAULT_CHOOSE_Z, indexing=DEFAULT_INDEXING)
-    #choose_species_new = ut.append_index_to_duplicates(choose_species) 
-    #dublicatespecies = ut.get_duplicate_indices(choose_species)
+
+    indexing = kwargs.get('indexing', DEFAULT_INDEXING)
+    X, Y = build_XY(files_path, choose_x=choose_x, choose_y=choose_y, choose_z=choose_z, indexing=indexing)
     data = {}
-    # The magnetic and electric field is read.
+
+    species_index = {
+        species: i
+        for i, species in enumerate(choose_species)
+        if species is not None and species not in choose_species[:i]
+    }
+
+    def qom_for_species(species):
+        return qom[species_index[species]]
+
+    def accumulate_species_field(field_dict, output_name, species_alias):
+        value = raw_fields.get(output_name)
+        if value is None or species_alias is None:
+            return
+        if species_alias in field_dict:
+            field_dict[species_alias] += value
+        else:
+            field_dict[species_alias] = value
+
+    requests = _build_ipic3d_analysis_requests(fields_to_read, choose_species)
+    raw_fields = {}
+    if requests:
+        available = _inspect_ipic3d_available_fields(files_path)
+        requests = _filter_ipic3d_requests_by_availability(requests, available, verbose=verbose)
+        raw_fields = _read_ipic3d_cycles(
+            files_path,
+            cycles,
+            requests,
+            choose_x=choose_x,
+            choose_y=choose_y,
+            choose_z=choose_z,
+            indexing=indexing,
+            skip_missing=True,
+            verbose=verbose,
+        )
+
     for fields in ['B', 'E']:
-        if fields_to_read[fields]:
+        if fields_to_read.get(fields, False):
             if verbose:
                 logger.info(f"loading {fields}")
-            for component in ['x','y','z']:
-                data[f'{fields}{component}'] = read_ipic3d_field(files_path,cycles,f"{fields}{component}",choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
-            try:    
+            for component in ['x', 'y', 'z']:
+                key = f'{fields}{component}'
+                if key in raw_fields:
+                    data[key] = raw_fields[key]
+            try:
                 data[f'{fields}magn'] = np.sqrt(data[f'{fields}x']**2 + data[f'{fields}y']**2 + data[f'{fields}z']**2)
             except Exception as e:
-                logger.info(f"{fields}magn failed")
-                raise e
-        if fields_to_read[f"{fields}_ext"]:
-            for component in ['x','y','z']:
-                data[f'B{component}_ext'] = read_ipic3d_field(files_path,cycles,f"{fields}{component}_ext",choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
-    # The divergence of B is read.
-    if fields_to_read["divB"]:
+                logger.warning(f"Failed to calculate {fields}magn, see: {e}")
+        if fields_to_read.get(f"{fields}_ext", False):
+            for component in ['x', 'y', 'z']:
+                key = f'{fields}{component}_ext'
+                if key in raw_fields:
+                    data[key] = raw_fields[key]
+
+    if fields_to_read.get("divB", False):
         if verbose:
-                logger.info(f"loading divB")
-        data['divB'] = read_ipic3d_field(files_path,cycles,'divB',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
+            logger.info("loading divB")
+        if 'divB' in raw_fields:
+            data['divB'] = raw_fields['divB']
+
     for fields in ['rho', 'N', 'Qrem']:
-        if fields in fields_to_read and fields_to_read[fields]:
+        if fields_to_read.get(fields, False):
             if verbose:
                 logger.info(f"loading {fields}")
             data[fields] = {}
-            for i, species in enumerate(choose_species): # Care must be taken that these the only species and they are actually correctly labeled
-                if species is not None:
-                    if species in data[fields]: # we sum over identical species
-                        data[fields][species] += read_ipic3d_field(files_path,cycles,fields+f'_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
-                    else:
-                        data[fields][species] = read_ipic3d_field(files_path,cycles,f'{fields}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
+            for i, species in enumerate(choose_species):
+                accumulate_species_field(data[fields], f'{fields}_{i}', species)
 
-    if fields_to_read["J"]:
+    if fields_to_read.get("J", False):
         data['Jx'], data['Jy'], data['Jz'] = {}, {}, {}
-        if fields_to_read['rho']:
+        if fields_to_read.get('rho', False):
             data['Vx'], data['Vy'], data['Vz'] = {}, {}, {}
         if verbose:
-            logger.info(f"loading J")
-        for component in ['x','y','z']:
+            logger.info("loading J")
+        for component in ['x', 'y', 'z']:
+            field_name = f'J{component}'
             for i, species in enumerate(choose_species):
-                if species is not None:
-                    if species in data[f'J{component}']: # we sum over identical species
-                        data[f'J{component}'][species] += read_ipic3d_field(files_path,cycles,f'J{component}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
-                    else:
-                        data[f'J{component}'][species] = read_ipic3d_field(files_path,cycles,f'J{component}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
-            if fields_to_read['rho']:
-                for species in data[f'J{component}'].keys():
-                    try:
-                        data[f'V{component}'][species] = data[f'J{component}'][species]/(data['rho'][species]+small*np.sign(qom[i]))
-                    except:
-                        logger.warning(f"{species = }, {qom = }, {data[f'J{component}'].keys() = }, {data[f'V{component}'].keys() = }, {data['rho'].keys() = }")
-                        raise
+                accumulate_species_field(data[field_name], f'{field_name}_{i}', species)
+            if fields_to_read.get('rho', False):
+                for species in data[field_name].keys():
+                    species_qom = qom_for_species(species)
+                    data[f'V{component}'][species] = data[field_name][species] / (
+                        data['rho'][species] + small * np.sign(species_qom)
+                    )
         data['Jmagn'] = {}
         data['Jtotx'] = np.sum([data['Jx'][species] for species in data['Jx'].keys()], axis=0)
         data['Jtoty'] = np.sum([data['Jy'][species] for species in data['Jy'].keys()], axis=0)
         data['Jtotz'] = np.sum([data['Jz'][species] for species in data['Jz'].keys()], axis=0)
-        if 'Vx' in data.keys():
+        if 'Vx' in data:
             data['Vmagn'] = {}
-        for species in data[f'J{component}'].keys():
-            if species is not None:
-                data['Jmagn'][species] = np.sqrt(data['Jx'][species]**2 + data['Jy'][species]**2 + data['Jz'][species]**2)
-                if 'Vx' in data.keys():
-                    data['Vmagn'][species] = np.sqrt(data['Vx'][species]**2 + data['Vy'][species]**2 + data['Vz'][species]**2)
-                
+        for species in data['Jx'].keys():
+            data['Jmagn'][species] = np.sqrt(data['Jx'][species]**2 + data['Jy'][species]**2 + data['Jz'][species]**2)
+            if 'Vx' in data:
+                data['Vmagn'][species] = np.sqrt(data['Vx'][species]**2 + data['Vy'][species]**2 + data['Vz'][species]**2)
 
-    # The diagonal and offdiagonal part of the pressure is calculated (to do so you need to read rho and J first).
-    if fields_to_read["P"] or fields_to_read["PI"]:
+    if fields_to_read.get("P", False) or fields_to_read.get("PI", False):
         if verbose:
-            logger.info(f"loading P and/or PI")
-        for component_1 in ['x','y','z']:
-            for component_2 in ['x','y','z']:
+            logger.info("loading P and/or PI")
+        for component_1 in ['x', 'y', 'z']:
+            for component_2 in ['x', 'y', 'z']:
                 data[f'PI{component_1}{component_2}'] = {}
                 data[f'P{component_1}{component_2}'] = {}
-
                 for i, species in enumerate(choose_species):
-                    if species is not None:
-                        try:
-                            if species in data[f'PI{component_1}{component_2}']:
-                                data[f'PI{component_1}{component_2}'][species] += read_ipic3d_field(files_path,cycles,f'P{component_1}{component_2}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
-                            else:
-                                data[f'PI{component_1}{component_2}'][species] = read_ipic3d_field(files_path,cycles,f'P{component_1}{component_2}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
-                        except:
-                            if verbose:
-                                logger.info(f'Component P{component_1}{component_2} for species {species} missing')
-                for species in data[f'PI{component_1}{component_2}']: # because now the number of species has potentially changed
-                    i = choose_species.index(species)
-                    data[f'P{component_1}{component_2}'][species]  = (data[f'PI{component_1}{component_2}'][species] - \
-                                data[f'J{component_1}'][species]*data[f'J{component_2}'][species]/(data[f'rho'][species]+small*np.sign(qom[i])))/qom[i]
-
-                if not fields_to_read["P"]:
+                    accumulate_species_field(data[f'PI{component_1}{component_2}'], f'P{component_1}{component_2}_{i}', species)
+                for species in data[f'PI{component_1}{component_2}']:
+                    species_qom = qom_for_species(species)
+                    data[f'P{component_1}{component_2}'][species] = (
+                        data[f'PI{component_1}{component_2}'][species]
+                        - data[f'J{component_1}'][species] * data[f'J{component_2}'][species] / (
+                            data['rho'][species] + small * np.sign(species_qom)
+                        )
+                    ) / species_qom
+                if not fields_to_read.get("P", False):
                     del data[f'P{component_1}{component_2}']
-                if not fields_to_read["PI"]:
-                    del data[f'PI{component_1}{component_2}']  
-                       
-        if fields_to_read["PI"]:
-            for species in data[f'PI{component_1}{component_2}']:
+                if not fields_to_read.get("PI", False):
+                    del data[f'PI{component_1}{component_2}']
+        if fields_to_read.get("PI", False):
+            for species in data['PIxx']:
                 if species in data['PIxy']:
                     data['PIyx'][species] = data['PIxy'][species]
                 if species in data['PIxz']:
                     data['PIzx'][species] = data['PIxz'][species]
                 if species in data['PIyz']:
                     data['PIzy'][species] = data['PIyz'][species]
-        if fields_to_read["P"]:
+        if fields_to_read.get("P", False):
             data['Ppar'], data['Pperp'] = {}, {}
-            for species in data[f'P{component_1}{component_2}']:
+            for species in data['Pxx']:
                 if species in data['Pxy']:
                     data['Pyx'][species] = data['Pxy'][species]
                 if species in data['Pxz']:
@@ -333,25 +319,29 @@ def read_data_ipic3d(files_path, cycles, fields_to_read, qom=None, choose_specie
                 if species in data['Pyz']:
                     data['Pzy'][species] = data['Pyz'][species]
                 if verbose:
-                    logger.info(f"loading Ppar and Pperp")
+                    logger.info("loading Ppar and Pperp")
                 try:
-                    data['Ppar'][species] = (data['Pxx'][species]*data['Bx']**2 + data['Pyy'][species]*data['By']**2  + data['Pzz'][species]*data['Bz']**2 + \
-                                        2*data['Pxy'][species]*data['Bx']*data['By']+2*data['Pxz'][species]*data['Bx']*data['Bz'] + \
-                                            2*data['Pyz'][species]*data['By']*data['Bz'])/(data['By']**2+data['Bx']**2+data['Bz']**2)
+                    data['Ppar'][species] = (
+                        data['Pxx'][species] * data['Bx']**2
+                        + data['Pyy'][species] * data['By']**2
+                        + data['Pzz'][species] * data['Bz']**2
+                        + 2 * data['Pxy'][species] * data['Bx'] * data['By']
+                        + 2 * data['Pxz'][species] * data['Bx'] * data['Bz']
+                        + 2 * data['Pyz'][species] * data['By'] * data['Bz']
+                    ) / (data['By']**2 + data['Bx']**2 + data['Bz']**2)
                 except Exception as e:
                     logger.warning(f"Failed to calculate Ppar for {species = } likely due to missing fields, see: {e}")
                 try:
-                    data['Pperp'][species] = (data['Pxx'][species] + data['Pyy'][species] + data['Pzz'][species] - data['Ppar'][species])/2
+                    data['Pperp'][species] = (data['Pxx'][species] + data['Pyy'][species] + data['Pzz'][species] - data['Ppar'][species]) / 2
                 except Exception as e:
                     logger.warning(f"Failed to calculate Pperp for {species} likely due to missing fields, see: {e}")
-        if "gyro_radius" in fields_to_read and fields_to_read["gyro_radius"]:
+        if fields_to_read.get("gyro_radius", False):
             try:
                 data['gyro_radius'] = {}
                 for species in data['rho']:
-                    i = choose_species.index(species)
-                    #p = data['Pxx'][species]+data['Pyy'][species]+data['Pzz'][species]
-                    vth=np.sqrt(np.abs(qom[i]*data['Pperp'][species]/(np.abs(data['rho'][species])+small)))
-                    data['gyro_radius'][species] = np.abs(vth/(qom[i]*data['Bmagn']))
+                    species_qom = qom_for_species(species)
+                    vth = np.sqrt(np.abs(species_qom * data['Pperp'][species] / (np.abs(data['rho'][species]) + small)))
+                    data['gyro_radius'][species] = np.abs(vth / (species_qom * data['Bmagn']))
             except Exception as e:
                 logger.warning(f"Failed to calculate gyro_radius, see: {e}")
     if "divP" in fields_to_read and fields_to_read["divP"] or "Ohmres" in fields_to_read and fields_to_read["Ohmres"]:
@@ -382,11 +372,12 @@ def read_data_ipic3d(files_path, cycles, fields_to_read, qom=None, choose_specie
             uCMx = 0
             uCMy = 0
             uCMz = 0
-            for i, species in enumerate(data['rho'].keys()):
-                uCMx += (data['rho'][species]/qom[i])*data['Vx'][species]
-                uCMy += (data['rho'][species]/qom[i])*data['Vy'][species]
-                uCMz += (data['rho'][species]/qom[i])*data['Vz'][species]
-                norm += data['rho'][species]/qom[i]
+            for species in data['rho'].keys():
+                species_qom = qom_for_species(species)
+                uCMx += (data['rho'][species]/species_qom)*data['Vx'][species]
+                uCMy += (data['rho'][species]/species_qom)*data['Vy'][species]
+                uCMz += (data['rho'][species]/species_qom)*data['Vz'][species]
+                norm += data['rho'][species]/species_qom
             uCMx /= norm
             uCMy /= norm
             uCMz /= norm
@@ -396,30 +387,24 @@ def read_data_ipic3d(files_path, cycles, fields_to_read, qom=None, choose_specie
             data['Ohmresy'] = data['Ey'] + data['EMHDy'] - data['EHally'] - data['EPy']
             data['Ohmresz'] = data['Ez'] + data['EMHDz'] - data['EHally'] - data['EPz']
     # The heat flux is calculated (to do so you need to read rho, J and P first).
-    if fields_to_read["Heat_flux"]:
+    if fields_to_read.get("Heat_flux", False):
         if verbose:
             logger.info(f"loading q")
         for component in ['x','y','z']:
             data[f'EF{component}'] = {}
             for i, species in enumerate(choose_species):
-                if species is not None:
-                    if species in data[f'EF{component}']:
-                        data[f'EF{component}'][species] += read_data_ipic3d(files_path,cycles,f'EF{component}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
-                    else:
-                        data[f'EF{component}'][species] = read_data_ipic3d(files_path,cycles,f'EF{component}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
-            #logger.info(f"{data[f'EF{component}'].keys() = }")
+                accumulate_species_field(data[f'EF{component}'], f'EF{component}_{i}', species)
             try:
                 data[f'q{component}'] = {}
                 for species in data[f'EF{component}'].keys():
-                    i = choose_species.index(species)
+                    species_qom = qom_for_species(species)
                     data[f'q{component}'][species] =  data[f'EF{component}'][species] - \
-                        (data['Jx'][species]**2+data['Jy'][species]**2+data['Jz'][species]**2)*data[f'J{component}'][species]/(2*qom[i]*data[f'rho'][species]**2+small*np.sign(qom[i])) - \
-                        (data['Pxx'][species] + data[f'Pyy'][species] + data[f'Pzz'][species])*data[f'J{component}'][species]/(2*data['rho'][species]+small*np.sign(qom[i])) - \
-                        (data['Jx'][species]*data[f'Px{component}'][species] + data['Jy'][species]*data[f'Py{component}'][species] + data['Jz'][species]*data[f'Pz{component}'][species])/(data['rho'][species]+small*np.sign(qom[i]))
+                        (data['Jx'][species]**2+data['Jy'][species]**2+data['Jz'][species]**2)*data[f'J{component}'][species]/(2*species_qom*data[f'rho'][species]**2+small*np.sign(species_qom)) - \
+                        (data['Pxx'][species] + data[f'Pyy'][species] + data[f'Pzz'][species])*data[f'J{component}'][species]/(2*data['rho'][species]+small*np.sign(species_qom)) - \
+                        (data['Jx'][species]*data[f'Px{component}'][species] + data['Jy'][species]*data[f'Py{component}'][species] + data['Jz'][species]*data[f'Pz{component}'][species])/(data['rho'][species]+small*np.sign(species_qom))
             except Exception as e:
                 logger.warning(f"Failed to calculate q{component} see: {e}")
-                #logger.info(f"{data[f'q{component}'].keys() = }")
-            if 'EF' not in fields_to_read or not fields_to_read['EF']:
+            if not fields_to_read.get('EF', False):
                 del data[f'EF{component}']
     return data   
 
@@ -1276,7 +1261,7 @@ def get_exp_times(experiments, files_path, fields_to_read, choose_species=None, 
             logger.info(f"selected_filenames = {selected_filenames}")
             times = _extract_times_from_filenames(selected_filenames, dt)
         except Exception as e:
-            logger.info(f"Failed to extract times from {n = }")
+            logger.info(f"Failed to extract times from {selected_filenames = }")
             logger.info(f"{selected_filenames=}")
             raise e
         #logger.info(times)
@@ -1369,6 +1354,278 @@ def _default_ipic3d_fields_to_read():
     }
 
 
+def _get_ipic3d_hdf_files(files_path):
+    all_hdf_files = sorted(glob.glob(os.path.join(files_path, "proc*.hdf")))
+    if not all_hdf_files:
+        raise FileNotFoundError(f"No proc*.hdf files found in {files_path}")
+    return all_hdf_files
+
+
+def _normalize_ipic3d_selection(sim_data, choose_x, choose_y, choose_z):
+    nxc = sim_data['nxc']
+    nyc = sim_data['nyc']
+    nzc = sim_data['nzc']
+    if choose_x is None:
+        choose_x = [0, nxc]
+    if choose_y is None:
+        choose_y = [0, nyc]
+    if choose_z is None:
+        choose_z = [0, nzc]
+    return choose_x, choose_y, choose_z
+
+
+def _inspect_ipic3d_available_fields(files_path, sample_file=None):
+    sample_file = sample_file or _get_ipic3d_hdf_files(files_path)[0]
+    import h5py
+
+    available = {
+        "fields": set(),
+        "moments": {},
+    }
+    with h5py.File(sample_file, "r") as f:
+        if "fields" in f:
+            available["fields"] = set(f["fields"].keys())
+        if "moments" in f:
+            for species_group in f["moments"].keys():
+                if species_group.startswith("species_"):
+                    species = species_group.split("species_", 1)[1]
+                    available["moments"][species] = set(f["moments"][species_group].keys())
+    return available
+
+
+def _build_ipic3d_conversion_requests(fields_to_read, choose_species):
+    requests = []
+
+    for field_prefix in ["B", "E"]:
+        if fields_to_read.get(field_prefix, False):
+            for comp in ["x", "y", "z"]:
+                requests.append({
+                    "output_name": f"{field_prefix}{comp}",
+                    "path_prefix": "fields",
+                    "field_name": f"{field_prefix}{comp}",
+                })
+
+        if fields_to_read.get(f"{field_prefix}_ext", False) and field_prefix == "B":
+            for comp in ["x", "y", "z"]:
+                requests.append({
+                    "output_name": f"{field_prefix}{comp}_ext",
+                    "path_prefix": "fields",
+                    "field_name": f"{field_prefix}{comp}_ext",
+                })
+
+    if fields_to_read.get("divB", False):
+        requests.append({
+            "output_name": "divB",
+            "path_prefix": "fields",
+            "field_name": "divB",
+        })
+
+    for field_name in ["rho", "N", "Qrem"]:
+        if fields_to_read.get(field_name, False):
+            for i, species in enumerate(choose_species):
+                requests.append({
+                    "output_name": f"{field_name}_{i}",
+                    "path_prefix": f"moments/species_{species}",
+                    "field_name": field_name,
+                })
+
+    if fields_to_read.get("J", False):
+        for comp in ["x", "y", "z"]:
+            for i, species in enumerate(choose_species):
+                requests.append({
+                    "output_name": f"J{comp}_{i}",
+                    "path_prefix": f"moments/species_{species}",
+                    "field_name": f"J{comp}",
+                })
+
+    if fields_to_read.get("P", False) or fields_to_read.get("PI", False):
+        for comp1 in ["x", "y", "z"]:
+            for comp2 in ["x", "y", "z"]:
+                for i, species in enumerate(choose_species):
+                    requests.append({
+                        "output_name": f"P{comp1}{comp2}_{i}",
+                        "path_prefix": f"moments/species_{species}",
+                        "field_name": f"P{comp1}{comp2}",
+                    })
+
+    return requests
+
+
+def _build_ipic3d_analysis_requests(fields_to_read, choose_species):
+    requests = []
+
+    for field_prefix in ["B", "E"]:
+        if fields_to_read.get(field_prefix, False):
+            for comp in ["x", "y", "z"]:
+                requests.append({
+                    "output_name": f"{field_prefix}{comp}",
+                    "path_prefix": "fields",
+                    "field_name": f"{field_prefix}{comp}",
+                })
+        if fields_to_read.get(f"{field_prefix}_ext", False):
+            for comp in ["x", "y", "z"]:
+                requests.append({
+                    "output_name": f"{field_prefix}{comp}_ext",
+                    "path_prefix": "fields",
+                    "field_name": f"{field_prefix}{comp}_ext",
+                })
+
+    if fields_to_read.get("divB", False):
+        requests.append({
+            "output_name": "divB",
+            "path_prefix": "fields",
+            "field_name": "divB",
+        })
+
+    for field_name in ["rho", "N", "Qrem"]:
+        if fields_to_read.get(field_name, False):
+            for i, species in enumerate(choose_species):
+                if species is not None:
+                    requests.append({
+                        "output_name": f"{field_name}_{i}",
+                        "path_prefix": f"moments/species_{i}",
+                        "field_name": field_name,
+                    })
+
+    if fields_to_read.get("J", False):
+        for comp in ["x", "y", "z"]:
+            for i, species in enumerate(choose_species):
+                if species is not None:
+                    requests.append({
+                        "output_name": f"J{comp}_{i}",
+                        "path_prefix": f"moments/species_{i}",
+                        "field_name": f"J{comp}",
+                    })
+
+    if fields_to_read.get("P", False) or fields_to_read.get("PI", False):
+        for comp1 in ["x", "y", "z"]:
+            for comp2 in ["x", "y", "z"]:
+                for i, species in enumerate(choose_species):
+                    if species is not None:
+                        requests.append({
+                            "output_name": f"P{comp1}{comp2}_{i}",
+                            "path_prefix": f"moments/species_{i}",
+                            "field_name": f"P{comp1}{comp2}",
+                        })
+
+    if fields_to_read.get("Heat_flux", False) or fields_to_read.get("EF", False):
+        for comp in ["x", "y", "z"]:
+            for i, species in enumerate(choose_species):
+                if species is not None:
+                    requests.append({
+                        "output_name": f"EF{comp}_{i}",
+                        "path_prefix": f"moments/species_{i}",
+                        "field_name": f"EF{comp}",
+                    })
+
+    return requests
+
+
+def _filter_ipic3d_requests_by_availability(requests, available, verbose=DEFAULT_VERBOSE):
+    filtered_requests = []
+    skipped = []
+    for request in requests:
+        path_prefix = request["path_prefix"]
+        field_name = request["field_name"]
+        if path_prefix == "fields":
+            is_available = field_name in available["fields"]
+        else:
+            species = path_prefix.split("species_", 1)[1]
+            is_available = field_name in available["moments"].get(species, set())
+        if is_available:
+            filtered_requests.append(request)
+        else:
+            skipped.append(request)
+
+    if verbose and skipped:
+        skipped_names = [request["output_name"] for request in skipped]
+        logger.info(f"Skipping unavailable iPiC3D fields: {skipped_names}")
+
+    return filtered_requests
+
+
+def _read_ipic3d_cycles(files_path, cycles, requests, choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y,
+                        choose_z=DEFAULT_CHOOSE_Z, indexing=DEFAULT_INDEXING, skip_missing=True,
+                        verbose=DEFAULT_VERBOSE):
+    sim_data = parse_simulation_data(files_path)
+    nxc = sim_data['nxc']
+    nyc = sim_data['nyc']
+    choose_x, choose_y, choose_z = _normalize_ipic3d_selection(sim_data, choose_x, choose_y, choose_z)
+    all_hdf_files = _get_ipic3d_hdf_files(files_path)
+
+    results = {request['output_name']: [] for request in requests}
+    import h5py
+
+    for cycle in cycles:
+        time_cycle = f"cycle_{int(cycle)}"
+        cycle_fields = {}
+        found_fields = set()
+
+        for file_path in all_hdf_files:
+            rank_id = int(os.path.basename(file_path).replace("proc", "").replace(".hdf", ""))
+            with h5py.File(file_path, "r") as f:
+                topology = f['topology']
+                cartesian_coord = topology['cartesian_coord'][()]
+                cartesian_rank = topology['cartesian_rank'][()]
+                if rank_id != cartesian_rank:
+                    raise ValueError(
+                        f"Rank ID {rank_id} does not match cartesian rank {cartesian_rank} in file {file_path}"
+                    )
+
+                for request in requests:
+                    try:
+                        field_data = find_field_in_hdf5(
+                            f,
+                            request['path_prefix'],
+                            request['field_name'],
+                            time_cycle,
+                        )
+                    except KeyError as exc:
+                        if skip_missing:
+                            continue
+                        raise KeyError(
+                            f"Field '{request['field_name']}' not found in any proc*.hdf for {time_cycle}"
+                        ) from exc
+
+                    output_name = request['output_name']
+                    found_fields.add(output_name)
+                    if output_name not in cycle_fields:
+                        cycle_fields[output_name] = np.zeros((nxc, nyc), dtype=field_data.dtype)
+
+                    x0, y0, z0 = (np.array(field_data.shape) * cartesian_coord).astype(int)
+                    nx_local, ny_local, nz_local = field_data.shape
+                    if verbose == 'debug':
+                        logger.info(f"Rank {rank_id} at position ({x0 = }, {y0 = }, {z0 = }) processing file {file_path}")
+                        logger.info(f".   cartesian_coord: {cartesian_coord}")
+                        logger.info(f" {nx_local = }, {ny_local = }, {nz_local = }")
+                        logger.info(f" writing data to global arrays at indices x: {x0} to {x0 + nx_local}, y: {y0} to {y0 + ny_local}")
+
+                    cycle_fields[output_name][x0:x0 + nx_local, y0:y0 + ny_local] = field_data[:, :, 0]
+
+        for request in requests:
+            output_name = request['output_name']
+            if output_name not in found_fields:
+                if skip_missing:
+                    continue
+                raise KeyError(f"Field '{output_name}' not found in any proc*.hdf for {time_cycle}")
+
+            sliced_field = cycle_fields[output_name][choose_x[0]:choose_x[1], choose_y[0]:choose_y[1]]
+            if indexing == 'xy':
+                sliced_field = sliced_field.T
+            results[output_name].append(sliced_field)
+
+    out = {}
+    for output_name, field_times in results.items():
+        if not field_times:
+            continue
+        field_times = np.array(field_times)
+        if indexing in ['ij', 'xy']:
+            out[output_name] = np.transpose(field_times, (1, 2, 0))
+        else:
+            raise ValueError(f"Unsupported indexing: {indexing}")
+    return out
+
+
 def convert_ipic3d_to_ecsim_h5(
     input_folder,
     output_folder,
@@ -1428,28 +1685,11 @@ def convert_ipic3d_to_ecsim_h5(
     if choose_species is None:
         choose_species = _detect_ipic3d_species(input_folder)
 
-    import h5py
+    requests = _build_ipic3d_conversion_requests(fields_to_read, choose_species)
+    available = _inspect_ipic3d_available_fields(input_folder)
+    requests = _filter_ipic3d_requests_by_availability(requests, available, verbose=verbose)
 
-    def maybe_add_field(field_name, ipic_name=None):
-        ipic_field = ipic_name or field_name
-        try:
-            field_xy = read_ipic3d_field(
-                input_folder,
-                [cycle],
-                ipic_field,
-                choose_x=choose_x,
-                choose_y=choose_y,
-                choose_z=choose_z,
-                indexing=indexing,
-                verbose=verbose,
-            )[:, :, 0]
-        except KeyError as exc:
-            if skip_missing:
-                if verbose:
-                    logger.info(f"Skipping missing field {ipic_field}: {exc}")
-                return
-            raise
-        field_datasets[field_name] = _expand_to_ecsim(field_xy, nxc, nyc, nzc)
+    import h5py
 
     for cycle in cycles:
         time_label = f"{int(cycle):0{time_digits}d}"
@@ -1461,46 +1701,21 @@ def convert_ipic3d_to_ecsim_h5(
                 logger.info(f"Skipping existing file: {out_path}")
             continue
 
-        field_datasets = {}
-
-        # Fields: B and E
-        for field_prefix in ["B", "E"]:
-            if fields_to_read.get(field_prefix, False):
-                for comp in ["x", "y", "z"]:
-                    field_name = f"{field_prefix}{comp}"
-                    maybe_add_field(field_name)
-
-            if fields_to_read.get(f"{field_prefix}_ext", False) and field_prefix == "B":
-                for comp in ["x", "y", "z"]:
-                    field_name = f"{field_prefix}{comp}_ext"
-                    maybe_add_field(field_name)
-
-        # divB
-        if fields_to_read.get("divB", False):
-            maybe_add_field("divB")
-
-        # Species moments
-        for field_name in ["rho", "N", "Qrem"]:
-            if fields_to_read.get(field_name, False):
-                for i, species in enumerate(choose_species):
-                    ipic_field = f"{field_name}_{species}"
-                    ecsim_field = f"{field_name}_{i}"
-                    maybe_add_field(ecsim_field, ipic_name=ipic_field)
-
-        if fields_to_read.get("J", False):
-            for comp in ["x", "y", "z"]:
-                for i, species in enumerate(choose_species):
-                    ipic_field = f"J{comp}_{species}"
-                    ecsim_field = f"J{comp}_{i}"
-                    maybe_add_field(ecsim_field, ipic_name=ipic_field)
-
-        if fields_to_read.get("P", False) or fields_to_read.get("PI", False):
-            for comp1 in ["x", "y", "z"]:
-                for comp2 in ["x", "y", "z"]:
-                    for i, species in enumerate(choose_species):
-                        ipic_field = f"P{comp1}{comp2}_{species}"
-                        ecsim_field = f"P{comp1}{comp2}_{i}"
-                        maybe_add_field(ecsim_field, ipic_name=ipic_field)
+        cycle_fields = _read_ipic3d_cycles(
+            input_folder,
+            [cycle],
+            requests,
+            choose_x=choose_x,
+            choose_y=choose_y,
+            choose_z=choose_z,
+            indexing=indexing,
+            skip_missing=skip_missing,
+            verbose=verbose,
+        )
+        field_datasets = {
+            field_name: _expand_to_ecsim(field_data[:, :, 0], nxc, nyc, nzc)
+            for field_name, field_data in cycle_fields.items()
+        }
 
         # Write ECSIM HDF5
         with h5py.File(out_path, "w") as h5f:
