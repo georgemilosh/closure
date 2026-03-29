@@ -3,6 +3,7 @@
 *.out
 *.pyc
 *.err
+paths.yaml
 **/data/** 
 **/models/** 
 **/__pycache__/**
