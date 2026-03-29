@@ -56,7 +56,7 @@ roll_y = int(args.roll_y)
 timeshot = args.timeshot
 
 
-filters=[{'name': 'uniform_filter', 'size': 4, 'axes': (1,2), 'mode' : 'wrap'},
+filters=[{'name': 'uniform_filter', 'size': int(1/zoom), 'axes': (1,2), 'mode' : 'wrap'},
                 {'name': 'zoom', 'zoom': (1, zoom, zoom), 'mode' : 'grid-wrap'}]
 if not os.path.exists(f'{path}{read_folder}'): # Check if read_folder exists
     raise FileNotFoundError(f"The folder {path}{read_folder} does not exist.")
@@ -83,6 +83,7 @@ for filename in filenames_list:
     verbose=False
     data = {}
     with h5py.File(read_filename, 'r') as n:
+        print(f"Working on {filename}")
         if "/Step#0/Block/" in n:
             # Iterate over each time step
             for fieldname in n[f"/Step#0/Block/"].keys():
@@ -119,12 +120,19 @@ shutil.copy(f'{path}{read_folder}/SimulationData.txt', simulation_data_path)
 with open(simulation_data_path, 'r') as file:
     lines = file.readlines()
 
-# Modify the specific lines
+# Modify the specific lines by scaling the existing values by zoom
 for i, line in enumerate(lines):
-    if 'Number of cells (x)' in line:
-        lines[i] = 'Number of cells (x)      = 512\n' # TODO: change this to the correct value, which is consistent with the zoom
-    if 'Number of cells (y)' in line:
-        lines[i] = 'Number of cells (y)      = 512\n'
+    if 'Number of cells (x)' in line or 'Number of cells (y)' in line:
+        left, sep, right = line.partition('=')
+        if not sep:
+            raise ValueError(f"Malformed line in SimulationData.txt: {line.strip()}")
+        try:
+            original_cells = int(right.strip())
+        except ValueError as e:
+            raise ValueError(f"Could not parse number of cells from line: {line.strip()}") from e
+
+        new_cells = int(round(original_cells * zoom))
+        lines[i] = f"{left}= {new_cells}\n"
 
 # Write the modified lines back to the file
 with open(simulation_data_path, 'w') as file:

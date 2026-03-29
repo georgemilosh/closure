@@ -1,3 +1,20 @@
+"""
+Docstring for closure.src.logconfig
+
+To be used for setting up logging configuration for the closure library. 
+This includes setting up a root logger with a console handler, and providing a function to add file handlers to specific loggers. 
+The log format includes job_id, nodename, rank, local_rank, timestamp, log level, logger name, and the message.
+
+Example usage in your notebooks:
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger(__name__)
+"""
+
+
 import logging
 import os
 import sys

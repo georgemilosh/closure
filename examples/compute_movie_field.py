@@ -10,7 +10,7 @@ import matplotlib.animation as animation
 
 
 if len(sys.argv) != 4:
-    print("Usage: python compute_movie_field.py <plot_field> <run_ID>")
+    print("Usage: python compute_movie_field.py <plot_field> <path> <run_ID>")
     sys.exit(1)
 
 plot_fields = sys.argv[1].strip('[]').split(',')

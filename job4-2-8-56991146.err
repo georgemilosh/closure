@@ -1,0 +1,1157 @@
+WARNING:__main__:Config file /lustre1/project/stg_00032/georgem/closure/models/dev/dev21/config.json found -> loading configuration
+INFO:__main__: 
+INFO:__main__:===Logging to /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//training.log on level 20, @ self.rank=1, self.local_rank=1, self.device=None ===
+INFO:__main__:host: r24g37
+INFO:__main__: 
+INFO:src.datasets:Filtering features
+INFO:src.datasets:Filtering targets
+INFO:src.datasets: This is train set
+INFO:src.datasets:Datasplit performed according to /lustre1/project/stg_00032/share_dir/brecht/sampling/swpBg/train_bg0.05-bg3.csv
+WARNING:__main__:Config file /lustre1/project/stg_00032/georgem/closure/models/dev/dev21/config.json found -> loading configuration
+INFO:__main__: 
+INFO:__main__:===Logging to /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//training.log on level 20, @ self.rank=2, self.local_rank=0, self.device=None ===
+INFO:__main__:host: r24g38
+INFO:__main__: 
+INFO:src.datasets:Filtering features
+INFO:src.datasets:Filtering targets
+INFO:src.datasets: This is train set
+INFO:src.datasets:Datasplit performed according to /lustre1/project/stg_00032/share_dir/brecht/sampling/swpBg/train_bg0.05-bg3.csv
+WARNING:__main__:Config file /lustre1/project/stg_00032/georgem/closure/models/dev/dev21/config.json found -> loading configuration
+INFO:__main__: 
+INFO:__main__:===Logging to /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//training.log on level 20, @ self.rank=3, self.local_rank=1, self.device=None ===
+INFO:__main__:host: r24g38
+INFO:__main__: 
+INFO:src.datasets:Filtering features
+INFO:src.datasets:Filtering targets
+INFO:src.datasets: This is train set
+INFO:src.datasets:Datasplit performed according to /lustre1/project/stg_00032/share_dir/brecht/sampling/swpBg/train_bg0.05-bg3.csv
+WARNING:__main__:Config file /lustre1/project/stg_00032/georgem/closure/models/dev/dev21/config.json found -> loading configuration
+INFO:__main__: 
+INFO:__main__:===Logging to /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//training.log on level 20, @ self.rank=0, self.local_rank=0, self.device=None ===
+INFO:__main__:host: r24g37
+INFO:__main__: 
+INFO:src.datasets:Filtering features
+INFO:src.datasets:Filtering targets
+INFO:src.datasets: This is train set
+INFO:src.datasets:Datasplit performed according to /lustre1/project/stg_00032/share_dir/brecht/sampling/swpBg/train_bg0.05-bg3.csv
+WARNING:__main__:Config file /lustre1/project/stg_00032/georgem/closure/models/dev/dev21/config.json found -> loading configuration
+INFO:__main__: 
+INFO:__main__:===Logging to /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//training.log on level 20, @ self.rank=4, self.local_rank=0, self.device=None ===
+INFO:__main__:host: r24g40
+INFO:__main__: 
+INFO:src.datasets:Filtering features
+INFO:src.datasets:Filtering targets
+INFO:src.datasets: This is train set
+INFO:src.datasets:Datasplit performed according to /lustre1/project/stg_00032/share_dir/brecht/sampling/swpBg/train_bg0.05-bg3.csv
+WARNING:__main__:Config file /lustre1/project/stg_00032/georgem/closure/models/dev/dev21/config.json found -> loading configuration
+INFO:__main__: 
+INFO:__main__:===Logging to /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//training.log on level 20, @ self.rank=6, self.local_rank=0, self.device=None ===
+INFO:__main__:host: r24g41
+INFO:__main__: 
+INFO:src.datasets:Filtering features
+INFO:src.datasets:Filtering targets
+INFO:src.datasets: This is train set
+INFO:src.datasets:Datasplit performed according to /lustre1/project/stg_00032/share_dir/brecht/sampling/swpBg/train_bg0.05-bg3.csv
+WARNING:__main__:Config file /lustre1/project/stg_00032/georgem/closure/models/dev/dev21/config.json found -> loading configuration
+INFO:__main__: 
+INFO:__main__:===Logging to /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//training.log on level 20, @ self.rank=5, self.local_rank=1, self.device=None ===
+INFO:__main__:host: r24g40
+INFO:__main__: 
+INFO:src.datasets:Filtering features
+INFO:src.datasets:Filtering targets
+INFO:src.datasets: This is train set
+INFO:src.datasets:Datasplit performed according to /lustre1/project/stg_00032/share_dir/brecht/sampling/swpBg/train_bg0.05-bg3.csv
+WARNING:__main__:Config file /lustre1/project/stg_00032/georgem/closure/models/dev/dev21/config.json found -> loading configuration
+INFO:__main__: 
+INFO:__main__:===Logging to /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//training.log on level 20, @ self.rank=7, self.local_rank=1, self.device=None ===
+INFO:__main__:host: r24g41
+INFO:__main__: 
+INFO:src.datasets:Filtering features
+INFO:src.datasets:Filtering targets
+INFO:src.datasets: This is train set
+INFO:src.datasets:Datasplit performed according to /lustre1/project/stg_00032/share_dir/brecht/sampling/swpBg/train_bg0.05-bg3.csv
+INFO:src.datasets:Features shape: (36, 10, 769, 155), Targets shape: (36, 6, 769, 155)
+INFO:src.datasets:Loaded self.features_mean, self.features_std from /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//X.pkl
+INFO:src.datasets:Normalization applied to features
+INFO:src.datasets:Features shape: (36, 10, 769, 155), Targets shape: (36, 6, 769, 155)
+INFO:src.datasets:Loaded self.features_mean, self.features_std from /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//X.pkl
+INFO:src.datasets:Normalization applied to features
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Loaded self.targets_mean, self.targets_std from /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//y.pkl
+INFO:src.datasets:Normalization applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Loaded self.targets_mean, self.targets_std from /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//y.pkl
+INFO:src.datasets:Normalization applied to targets
+INFO:src.datasets:Filtering features
+INFO:src.datasets:Filtering targets
+INFO:src.datasets: This is val set
+INFO:src.datasets:Datasplit performed according to /lustre1/project/stg_00032/share_dir/brecht/sampling/swpBg/val_bg0.05-bg3.csv
+INFO:src.datasets:Filtering features
+INFO:src.datasets:Filtering targets
+INFO:src.datasets: This is val set
+INFO:src.datasets:Datasplit performed according to /lustre1/project/stg_00032/share_dir/brecht/sampling/swpBg/val_bg0.05-bg3.csv
+INFO:src.datasets:Features shape: (36, 10, 769, 155), Targets shape: (36, 6, 769, 155)
+INFO:src.datasets:Loaded self.features_mean, self.features_std from /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//X.pkl
+INFO:src.datasets:Normalization applied to features
+INFO:src.datasets:Features shape: (36, 10, 769, 155), Targets shape: (36, 6, 769, 155)
+INFO:src.datasets:Loaded self.features_mean, self.features_std from /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//X.pkl
+INFO:src.datasets:Normalization applied to features
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Loaded self.targets_mean, self.targets_std from /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//y.pkl
+INFO:src.datasets:Normalization applied to targets
+INFO:src.datasets:Features shape: (36, 10, 769, 155), Targets shape: (36, 6, 769, 155)
+INFO:src.datasets:Loaded self.features_mean, self.features_std from /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//X.pkl
+INFO:src.datasets:Normalization applied to features
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Loaded self.targets_mean, self.targets_std from /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//y.pkl
+INFO:src.datasets:Normalization applied to targets
+INFO:src.datasets:Filtering features
+INFO:src.datasets:Filtering targets
+INFO:src.datasets: This is val set
+INFO:src.datasets:Datasplit performed according to /lustre1/project/stg_00032/share_dir/brecht/sampling/swpBg/val_bg0.05-bg3.csv
+INFO:src.datasets:Filtering features
+INFO:src.datasets:Filtering targets
+INFO:src.datasets: This is val set
+INFO:src.datasets:Datasplit performed according to /lustre1/project/stg_00032/share_dir/brecht/sampling/swpBg/val_bg0.05-bg3.csv
+INFO:src.datasets:Features shape: (36, 10, 769, 155), Targets shape: (36, 6, 769, 155)
+INFO:src.datasets:Loaded self.features_mean, self.features_std from /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//X.pkl
+INFO:src.datasets:Normalization applied to features
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Features shape: (36, 10, 769, 155), Targets shape: (36, 6, 769, 155)
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Loaded self.features_mean, self.features_std from /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//X.pkl
+INFO:src.datasets:Loaded self.targets_mean, self.targets_std from /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//y.pkl
+INFO:src.datasets:Normalization applied to features
+INFO:src.datasets:Normalization applied to targets
+INFO:src.datasets:Features shape: (36, 10, 769, 155), Targets shape: (36, 6, 769, 155)
+INFO:src.datasets:Loaded self.features_mean, self.features_std from /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//X.pkl
+INFO:src.datasets:Normalization applied to features
+INFO:src.datasets:Filtering features
+INFO:src.datasets:Filtering targets
+INFO:src.datasets: This is val set
+INFO:src.datasets:Datasplit performed according to /lustre1/project/stg_00032/share_dir/brecht/sampling/swpBg/val_bg0.05-bg3.csv
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Loaded self.targets_mean, self.targets_std from /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//y.pkl
+INFO:src.datasets:Normalization applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Loaded self.targets_mean, self.targets_std from /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//y.pkl
+INFO:src.datasets:Normalization applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Loaded self.targets_mean, self.targets_std from /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//y.pkl
+INFO:src.datasets:Normalization applied to targets
+INFO:src.datasets:Filtering features
+INFO:src.datasets:Filtering targets
+INFO:src.datasets: This is val set
+INFO:src.datasets:Datasplit performed according to /lustre1/project/stg_00032/share_dir/brecht/sampling/swpBg/val_bg0.05-bg3.csv
+INFO:src.datasets:Filtering features
+INFO:src.datasets:Filtering targets
+INFO:src.datasets: This is val set
+INFO:src.datasets:Datasplit performed according to /lustre1/project/stg_00032/share_dir/brecht/sampling/swpBg/val_bg0.05-bg3.csv
+INFO:src.datasets:Filtering features
+INFO:src.datasets:Filtering targets
+INFO:src.datasets: This is val set
+INFO:src.datasets:Datasplit performed according to /lustre1/project/stg_00032/share_dir/brecht/sampling/swpBg/val_bg0.05-bg3.csv
+INFO:src.datasets:Features shape: (18, 10, 769, 155), Targets shape: (18, 6, 769, 155)
+INFO:src.datasets:dataset provided with scaler features
+INFO:src.datasets:Normalization applied to features
+INFO:src.datasets:Features shape: (18, 10, 769, 155), Targets shape: (18, 6, 769, 155)
+INFO:src.datasets:dataset provided with scaler features
+INFO:src.datasets:Normalization applied to features
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:dataset provided with scaler targets
+INFO:src.datasets:Normalization applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:dataset provided with scaler targets
+INFO:src.datasets:Normalization applied to targets
+INFO:src.datasets:Filtering features
+INFO:src.datasets:Filtering targets
+INFO:src.datasets: This is test set
+INFO:src.datasets:Datasplit performed according to /lustre1/project/stg_00032/share_dir/brecht/sampling/exp16/bg0.csv
+INFO:src.datasets:Filtering features
+INFO:src.datasets:Filtering targets
+INFO:src.datasets: This is test set
+INFO:src.datasets:Datasplit performed according to /lustre1/project/stg_00032/share_dir/brecht/sampling/exp16/bg0.csv
+INFO:src.datasets:Features shape: (3, 10, 769, 155), Targets shape: (3, 6, 769, 155)
+INFO:src.datasets:dataset provided with scaler features
+INFO:src.datasets:Normalization applied to features
+INFO:src.datasets:Features shape: (3, 10, 769, 155), Targets shape: (3, 6, 769, 155)
+INFO:src.datasets:dataset provided with scaler features
+INFO:src.datasets:Normalization applied to features
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:dataset provided with scaler targets
+INFO:src.datasets:Normalization applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:dataset provided with scaler targets
+INFO:src.datasets:Normalization applied to targets
+INFO:__main__:Comprehending the configuration settings
+WARNING:__main__:Creating new model. Note this will replace any previous model
+INFO:src.models:torch.cuda.is_available() = True
+INFO:__main__:Comprehending the configuration settings
+WARNING:__main__:Creating new model. Note this will replace any previous model
+INFO:src.models:torch.cuda.is_available() = True
+INFO:src.models:Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+INFO:src.datasets:Features shape: (18, 10, 769, 155), Targets shape: (18, 6, 769, 155)
+INFO:src.datasets:Features shape: (18, 10, 769, 155), Targets shape: (18, 6, 769, 155)
+INFO:src.datasets:dataset provided with scaler features
+INFO:src.datasets:dataset provided with scaler features
+INFO:src.datasets:Normalization applied to features
+INFO:src.datasets:Normalization applied to features
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:dataset provided with scaler targets
+INFO:src.datasets:Normalization applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:dataset provided with scaler targets
+INFO:src.datasets:Normalization applied to targets
+INFO:src.datasets:Features shape: (18, 10, 769, 155), Targets shape: (18, 6, 769, 155)
+INFO:src.datasets:Filtering features
+INFO:src.datasets:Features shape: (18, 10, 769, 155), Targets shape: (18, 6, 769, 155)
+INFO:src.models:Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+INFO:src.datasets:dataset provided with scaler features
+INFO:src.datasets:Filtering features
+INFO:src.datasets:dataset provided with scaler features
+INFO:src.datasets:Normalization applied to features
+INFO:src.datasets:Filtering targets
+INFO:src.datasets:Normalization applied to features
+INFO:src.datasets:Filtering targets
+INFO:src.datasets: This is test set
+INFO:src.datasets:Datasplit performed according to /lustre1/project/stg_00032/share_dir/brecht/sampling/exp16/bg0.csv
+INFO:src.datasets: This is test set
+INFO:src.datasets:Datasplit performed according to /lustre1/project/stg_00032/share_dir/brecht/sampling/exp16/bg0.csv
+INFO:src.datasets:Features shape: (18, 10, 769, 155), Targets shape: (18, 6, 769, 155)
+INFO:src.datasets:dataset provided with scaler features
+INFO:src.datasets:Normalization applied to features
+INFO:src.datasets:Features shape: (18, 10, 769, 155), Targets shape: (18, 6, 769, 155)
+INFO:src.datasets:dataset provided with scaler features
+INFO:src.datasets:Normalization applied to features
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:dataset provided with scaler targets
+INFO:src.datasets:Normalization applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:dataset provided with scaler targets
+INFO:src.datasets:Normalization applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:dataset provided with scaler targets
+INFO:src.datasets:Normalization applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:dataset provided with scaler targets
+INFO:src.datasets:Normalization applied to targets
+INFO:src.datasets:Filtering features
+INFO:src.datasets:Filtering targets
+INFO:src.datasets: This is test set
+INFO:src.datasets:Datasplit performed according to /lustre1/project/stg_00032/share_dir/brecht/sampling/exp16/bg0.csv
+INFO:src.datasets:Filtering features
+INFO:src.datasets:Filtering targets
+INFO:src.datasets: This is test set
+INFO:src.datasets:Datasplit performed according to /lustre1/project/stg_00032/share_dir/brecht/sampling/exp16/bg0.csv
+INFO:src.datasets:Filtering features
+INFO:src.datasets:Filtering targets
+INFO:src.datasets: This is test set
+INFO:src.datasets:Datasplit performed according to /lustre1/project/stg_00032/share_dir/brecht/sampling/exp16/bg0.csv
+INFO:src.datasets:Filtering features
+INFO:src.datasets:Filtering targets
+INFO:src.datasets: This is test set
+INFO:src.datasets:Datasplit performed according to /lustre1/project/stg_00032/share_dir/brecht/sampling/exp16/bg0.csv
+INFO:src.datasets:Features shape: (3, 10, 769, 155), Targets shape: (3, 6, 769, 155)
+INFO:src.datasets:Features shape: (3, 10, 769, 155), Targets shape: (3, 6, 769, 155)
+INFO:src.datasets:dataset provided with scaler features
+INFO:src.datasets:dataset provided with scaler features
+INFO:src.datasets:Normalization applied to features
+INFO:src.datasets:Normalization applied to features
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:dataset provided with scaler targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Normalization applied to targets
+INFO:src.datasets:dataset provided with scaler targets
+INFO:src.datasets:Normalization applied to targets
+INFO:__main__:Comprehending the configuration settings
+WARNING:__main__:Creating new model. Note this will replace any previous model
+INFO:src.models:torch.cuda.is_available() = True
+INFO:__main__:Comprehending the configuration settings
+WARNING:__main__:Creating new model. Note this will replace any previous model
+INFO:src.models:torch.cuda.is_available() = True
+INFO:src.models:Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+INFO:src.datasets:Features shape: (3, 10, 769, 155), Targets shape: (3, 6, 769, 155)
+INFO:src.datasets:dataset provided with scaler features
+INFO:src.datasets:Normalization applied to features
+INFO:src.datasets:Features shape: (3, 10, 769, 155), Targets shape: (3, 6, 769, 155)
+INFO:src.datasets:dataset provided with scaler features
+INFO:src.datasets:Normalization applied to features
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:dataset provided with scaler targets
+INFO:src.datasets:Normalization applied to targets
+INFO:src.datasets:Features shape: (3, 10, 769, 155), Targets shape: (3, 6, 769, 155)
+INFO:src.datasets:dataset provided with scaler features
+INFO:src.datasets:Normalization applied to features
+INFO:src.datasets:Features shape: (3, 10, 769, 155), Targets shape: (3, 6, 769, 155)
+INFO:src.datasets:dataset provided with scaler features
+INFO:src.datasets:Normalization applied to features
+INFO:__main__:Comprehending the configuration settings
+WARNING:__main__:Creating new model. Note this will replace any previous model
+INFO:src.models:torch.cuda.is_available() = True
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:dataset provided with scaler targets
+INFO:src.datasets:Normalization applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:__main__:Comprehending the configuration settings
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+WARNING:__main__:Creating new model. Note this will replace any previous model
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.models:torch.cuda.is_available() = True
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:dataset provided with scaler targets
+INFO:src.datasets:Normalization applied to targets
+INFO:src.datasets:Prescaling <ufunc 'log'> applied to targets
+INFO:src.datasets:dataset provided with scaler targets
+INFO:src.datasets:Normalization applied to targets
+INFO:__main__:Comprehending the configuration settings
+WARNING:__main__:Creating new model. Note this will replace any previous model
+INFO:src.models:torch.cuda.is_available() = True
+INFO:__main__:Comprehending the configuration settings
+WARNING:__main__:Creating new model. Note this will replace any previous model
+INFO:src.models:torch.cuda.is_available() = True
+INFO:src.models:Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+INFO:src.models:Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+INFO:src.models:Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+INFO:src.models:Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+INFO:src.models:Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+INFO:src.models:Optimization criterion MSELoss()
+INFO:src.models:Optimization criterion MSELoss()
+INFO:src.models:Optimization criterion MSELoss()
+INFO:src.models:Optimization criterion MSELoss()
+INFO:src.models:Tracking metrics [L1Loss()]
+INFO:src.models:Tracking metrics [L1Loss()]
+INFO:src.models:Tracking metrics [L1Loss()]
+INFO:src.models:Tracking metrics [L1Loss()]
+INFO:src.models:Optimization criterion MSELoss()
+INFO:src.models:Optimization criterion MSELoss()
+INFO:src.models:Tracking metrics [L1Loss()]
+INFO:src.models:Tracking metrics [L1Loss()]
+INFO:src.models:Optimization criterion MSELoss()
+INFO:src.models:Optimization criterion MSELoss()
+INFO:src.models:Tracking metrics [L1Loss()]
+INFO:src.models:Tracking metrics [L1Loss()]
+INFO:__main__:Creating object: <src.models.PyNet object at 0x153d183c05b0> which contains DistributedDataParallel(
+  (module): FCNN(
+    (seq_model): Sequential(
+      (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (1): ReLU()
+      (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (4): ReLU()
+      (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+      (7): ReLU()
+      (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    )
+  )
+) as the model
+INFO:__main__:Creating object: <src.models.PyNet object at 0x14f019e14730> which contains DistributedDataParallel(
+  (module): FCNN(
+    (seq_model): Sequential(
+      (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (1): ReLU()
+      (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (4): ReLU()
+      (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+      (7): ReLU()
+      (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    )
+  )
+) as the model
+INFO:__main__:self.device = None on self.local_rank = 1
+INFO:__main__:self.device = None on self.local_rank = 0
+INFO:__main__:Creating object: <src.models.PyNet object at 0x1494f27f87c0> which contains DistributedDataParallel(
+  (module): FCNN(
+    (seq_model): Sequential(
+      (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (1): ReLU()
+      (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (4): ReLU()
+      (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+      (7): ReLU()
+      (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    )
+  )
+) as the model
+INFO:__main__:Creating object: <src.models.PyNet object at 0x14cd7e8946a0> which contains DistributedDataParallel(
+  (module): FCNN(
+    (seq_model): Sequential(
+      (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (1): ReLU()
+      (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (4): ReLU()
+      (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+      (7): ReLU()
+      (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    )
+  )
+) as the model
+INFO:__main__:self.device = None on self.local_rank = 1
+INFO:__main__:self.device = None on self.local_rank = 0
+INFO:__main__:Creating object: <src.models.PyNet object at 0x151ea1d547f0> which contains DistributedDataParallel(
+  (module): FCNN(
+    (seq_model): Sequential(
+      (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (1): ReLU()
+      (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (4): ReLU()
+      (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+      (7): ReLU()
+      (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    )
+  )
+) as the model
+INFO:__main__:Creating object: <src.models.PyNet object at 0x14a353428700> which contains DistributedDataParallel(
+  (module): FCNN(
+    (seq_model): Sequential(
+      (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (1): ReLU()
+      (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (4): ReLU()
+      (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+      (7): ReLU()
+      (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    )
+  )
+) as the model
+INFO:__main__:self.device = None on self.local_rank = 1
+INFO:__main__:self.device = None on self.local_rank = 0
+INFO:__main__:Creating object: <src.models.PyNet object at 0x14d67a450430> which contains DistributedDataParallel(
+  (module): FCNN(
+    (seq_model): Sequential(
+      (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (1): ReLU()
+      (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (4): ReLU()
+      (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+      (7): ReLU()
+      (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    )
+  )
+) as the model
+INFO:__main__:Code version git hash: c8853fbbb87a6b5c03848d9579e6ecec5f3ddcc6
+INFO:__main__:Creating object: <src.models.PyNet object at 0x15285c804a60> which contains DistributedDataParallel(
+  (module): FCNN(
+    (seq_model): Sequential(
+      (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (1): ReLU()
+      (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (4): ReLU()
+      (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+      (7): ReLU()
+      (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    )
+  )
+) as the model
+INFO:__main__:Code version git hash: c8853fbbb87a6b5c03848d9579e6ecec5f3ddcc6
+INFO:__main__:Code version git hash: c8853fbbb87a6b5c03848d9579e6ecec5f3ddcc6
+INFO:__main__:Code version git hash: c8853fbbb87a6b5c03848d9579e6ecec5f3ddcc6
+INFO:__main__:self.device = None on self.local_rank = 1
+INFO:__main__:Code version git hash: c8853fbbb87a6b5c03848d9579e6ecec5f3ddcc6
+INFO:__main__:Code version git hash: c8853fbbb87a6b5c03848d9579e6ecec5f3ddcc6
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:__main__:self.device = None on self.local_rank = 0
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:__main__:Code version git hash: c8853fbbb87a6b5c03848d9579e6ecec5f3ddcc6
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:__main__:Code version git hash: c8853fbbb87a6b5c03848d9579e6ecec5f3ddcc6
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:36, len(dataset.targets) = 36 samples before subsampling
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:36, len(dataset.targets) = 36 samples before subsampling
+INFO:src.datasets:36, len(dataset.targets) = 36 samples before subsampling
+INFO:src.datasets:36, len(dataset.targets) = 36 samples before subsampling
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:36, len(dataset.targets) = 36 samples before subsampling
+INFO:src.datasets:36, len(dataset.targets) = 36 samples before subsampling
+INFO:src.datasets:len(self.subset) = 2880 samples after subsampling
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:len(self.subset) = 2880 samples after subsampling
+INFO:src.datasets:len(self.subset) = 2880 samples after subsampling
+INFO:src.datasets:len(self.subset) = 2880 samples after subsampling
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:len(self.subset) = 2880 samples after subsampling
+INFO:src.datasets:len(self.subset) = 2880 samples after subsampling
+INFO:src.datasets:Using DistributedSampler with self.num_replicas = 8, self.rank = 1, self.num_samples = 360, self.total_size = 2880, len(self.indices) = 2880
+INFO:src.datasets:36, len(dataset.targets) = 36 samples before subsampling
+INFO:src.datasets:Using DistributedSampler with self.num_replicas = 8, self.rank = 3, self.num_samples = 360, self.total_size = 2880, len(self.indices) = 2880
+INFO:src.datasets:Using DistributedSampler with self.num_replicas = 8, self.rank = 6, self.num_samples = 360, self.total_size = 2880, len(self.indices) = 2880
+INFO:src.datasets:Using DistributedSampler with self.num_replicas = 8, self.rank = 0, self.num_samples = 360, self.total_size = 2880, len(self.indices) = 2880
+INFO:src.datasets:36, len(dataset.targets) = 36 samples before subsampling
+INFO:src.datasets:Using DistributedSampler with self.num_replicas = 8, self.rank = 2, self.num_samples = 360, self.total_size = 2880, len(self.indices) = 2880
+INFO:src.datasets:Using DistributedSampler with self.num_replicas = 8, self.rank = 7, self.num_samples = 360, self.total_size = 2880, len(self.indices) = 2880
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:len(self.subset) = 2880 samples after subsampling
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:len(self.subset) = 2880 samples after subsampling
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:Using DistributedSampler with self.num_replicas = 8, self.rank = 4, self.num_samples = 360, self.total_size = 2880, len(self.indices) = 2880
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:Using DistributedSampler with self.num_replicas = 8, self.rank = 5, self.num_samples = 360, self.total_size = 2880, len(self.indices) = 2880
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:18, len(dataset.targets) = 18 samples before subsampling
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:18, len(dataset.targets) = 18 samples before subsampling
+INFO:src.datasets:18, len(dataset.targets) = 18 samples before subsampling
+INFO:src.datasets:18, len(dataset.targets) = 18 samples before subsampling
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:18, len(dataset.targets) = 18 samples before subsampling
+INFO:src.datasets:18, len(dataset.targets) = 18 samples before subsampling
+INFO:src.datasets:len(self.subset) = 1440 samples after subsampling
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:len(self.subset) = 1440 samples after subsampling
+INFO:src.datasets:len(self.subset) = 1440 samples after subsampling
+INFO:src.datasets:len(self.subset) = 1440 samples after subsampling
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:len(self.subset) = 1440 samples after subsampling
+INFO:src.datasets:len(self.subset) = 1440 samples after subsampling
+WARNING:__main__:============Updating the config with the new config============
+INFO:src.datasets:18, len(dataset.targets) = 18 samples before subsampling
+WARNING:__main__:============Updating the config with the new config============
+WARNING:__main__:============Updating the config with the new config============
+WARNING:__main__:============Updating the config with the new config============
+INFO:src.datasets:18, len(dataset.targets) = 18 samples before subsampling
+WARNING:__main__:============Updating the config with the new config============
+WARNING:__main__:============Updating the config with the new config============
+INFO:__main__:Comprehending the configuration settings
+INFO:src.datasets:len(self.subset) = 1440 samples after subsampling
+INFO:__main__:Comprehending the configuration settings
+INFO:__main__:Comprehending the configuration settings
+INFO:__main__:Comprehending the configuration settings
+INFO:src.datasets:len(self.subset) = 1440 samples after subsampling
+INFO:__main__:Comprehending the configuration settings
+INFO:__main__:Comprehending the configuration settings
+WARNING:__main__:Creating new model. Note this will replace any previous model
+WARNING:__main__:============Updating the config with the new config============
+WARNING:__main__:Creating new model. Note this will replace any previous model
+WARNING:__main__:Creating new model. Note this will replace any previous model
+WARNING:__main__:Creating new model. Note this will replace any previous model
+WARNING:__main__:============Updating the config with the new config============
+WARNING:__main__:Creating new model. Note this will replace any previous model
+WARNING:__main__:Creating new model. Note this will replace any previous model
+INFO:src.models:torch.cuda.is_available() = True
+INFO:__main__:Comprehending the configuration settings
+INFO:src.models:torch.cuda.is_available() = True
+INFO:src.models:torch.cuda.is_available() = True
+INFO:src.models:torch.cuda.is_available() = True
+INFO:__main__:Comprehending the configuration settings
+INFO:src.models:torch.cuda.is_available() = True
+INFO:src.models:torch.cuda.is_available() = True
+INFO:src.models:Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+WARNING:__main__:Creating new model. Note this will replace any previous model
+INFO:src.models:Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+INFO:src.models:Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+INFO:src.models:Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+WARNING:__main__:Creating new model. Note this will replace any previous model
+INFO:src.models:Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+INFO:src.models:Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+INFO:src.models:torch.cuda.is_available() = True
+INFO:src.models:torch.cuda.is_available() = True
+INFO:src.models:Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+INFO:src.models:Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+INFO:src.models:Optimization criterion MSELoss()
+INFO:src.models:Optimization criterion MSELoss()
+INFO:src.models:Optimization criterion MSELoss()
+INFO:src.models:Optimization criterion MSELoss()
+INFO:src.models:Optimization criterion MSELoss()
+INFO:src.models:Optimization criterion MSELoss()
+INFO:src.models:Optimization criterion MSELoss()
+INFO:src.models:Optimization criterion MSELoss()
+INFO:src.models:Tracking metrics [L1Loss()]
+INFO:src.models:Tracking metrics [L1Loss()]
+INFO:src.models:Tracking metrics [L1Loss()]
+INFO:src.models:Tracking metrics [L1Loss()]
+INFO:src.models:Tracking metrics [L1Loss()]
+INFO:src.models:Tracking metrics [L1Loss()]
+INFO:src.models:Tracking metrics [L1Loss()]
+INFO:src.models:Tracking metrics [L1Loss()]
+INFO:__main__:Creating object: <src.models.PyNet object at 0x153d18510880> which contains DistributedDataParallel(
+  (module): FCNN(
+    (seq_model): Sequential(
+      (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (1): ReLU()
+      (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (4): ReLU()
+      (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+      (7): ReLU()
+      (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    )
+  )
+) as the model
+INFO:__main__:Creating object: <src.models.PyNet object at 0x1494f2750880> which contains DistributedDataParallel(
+  (module): FCNN(
+    (seq_model): Sequential(
+      (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (1): ReLU()
+      (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (4): ReLU()
+      (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+      (7): ReLU()
+      (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    )
+  )
+) as the model
+INFO:__main__:Creating object: <src.models.PyNet object at 0x14a353580730> which contains DistributedDataParallel(
+  (module): FCNN(
+    (seq_model): Sequential(
+      (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (1): ReLU()
+      (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (4): ReLU()
+      (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+      (7): ReLU()
+      (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    )
+  )
+) as the model
+INFO:__main__:Creating object: <src.models.PyNet object at 0x15285c9726b0> which contains DistributedDataParallel(
+  (module): FCNN(
+    (seq_model): Sequential(
+      (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (1): ReLU()
+      (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (4): ReLU()
+      (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+      (7): ReLU()
+      (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    )
+  )
+) as the model
+INFO:__main__:Creating object: <src.models.PyNet object at 0x14f019d6c580> which contains DistributedDataParallel(
+  (module): FCNN(
+    (seq_model): Sequential(
+      (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (1): ReLU()
+      (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (4): ReLU()
+      (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+      (7): ReLU()
+      (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    )
+  )
+) as the model
+INFO:__main__:Creating object: <src.models.PyNet object at 0x14cd7e7fc790> which contains DistributedDataParallel(
+  (module): FCNN(
+    (seq_model): Sequential(
+      (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (1): ReLU()
+      (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (4): ReLU()
+      (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+      (7): ReLU()
+      (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    )
+  )
+) as the model
+INFO:__main__:Creating object: <src.models.PyNet object at 0x151ea1cac6d0> which contains DistributedDataParallel(
+  (module): FCNN(
+    (seq_model): Sequential(
+      (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (1): ReLU()
+      (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (4): ReLU()
+      (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+      (7): ReLU()
+      (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    )
+  )
+) as the model
+INFO:__main__:Creating object: <src.models.PyNet object at 0x14d67a59c820> which contains DistributedDataParallel(
+  (module): FCNN(
+    (seq_model): Sequential(
+      (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (1): ReLU()
+      (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+      (4): ReLU()
+      (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+      (7): ReLU()
+      (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    )
+  )
+) as the model
+INFO:__main__:self.device = None on self.local_rank = 0
+INFO:__main__:self.device = None on self.local_rank = 0
+INFO:__main__:self.device = None on self.local_rank = 1
+INFO:__main__:self.device = None on self.local_rank = 0
+INFO:__main__:self.device = None on self.local_rank = 1
+INFO:__main__:self.device = None on self.local_rank = 1
+INFO:__main__:self.device = None on self.local_rank = 0
+INFO:__main__:self.device = None on self.local_rank = 1
+INFO:__main__:Code version git hash: c8853fbbb87a6b5c03848d9579e6ecec5f3ddcc6
+INFO:__main__:Code version git hash: c8853fbbb87a6b5c03848d9579e6ecec5f3ddcc6
+INFO:__main__:Code version git hash: c8853fbbb87a6b5c03848d9579e6ecec5f3ddcc6
+INFO:__main__:Code version git hash: c8853fbbb87a6b5c03848d9579e6ecec5f3ddcc6
+INFO:__main__:Code version git hash: c8853fbbb87a6b5c03848d9579e6ecec5f3ddcc6
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:__main__:Code version git hash: c8853fbbb87a6b5c03848d9579e6ecec5f3ddcc6
+INFO:__main__:Code version git hash: c8853fbbb87a6b5c03848d9579e6ecec5f3ddcc6
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:__main__:Code version git hash: c8853fbbb87a6b5c03848d9579e6ecec5f3ddcc6
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:36, len(dataset.targets) = 36 samples before subsampling
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:36, len(dataset.targets) = 36 samples before subsampling
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:36, len(dataset.targets) = 36 samples before subsampling
+INFO:src.datasets:36, len(dataset.targets) = 36 samples before subsampling
+INFO:src.datasets:36, len(dataset.targets) = 36 samples before subsampling
+INFO:src.datasets:len(self.subset) = 2880 samples after subsampling
+INFO:src.datasets:36, len(dataset.targets) = 36 samples before subsampling
+INFO:src.datasets:36, len(dataset.targets) = 36 samples before subsampling
+INFO:src.datasets:len(self.subset) = 2880 samples after subsampling
+INFO:src.datasets:36, len(dataset.targets) = 36 samples before subsampling
+INFO:src.datasets:len(self.subset) = 2880 samples after subsampling
+INFO:src.datasets:len(self.subset) = 2880 samples after subsampling
+INFO:src.datasets:len(self.subset) = 2880 samples after subsampling
+INFO:src.datasets:Using DistributedSampler with self.num_replicas = 8, self.rank = 2, self.num_samples = 360, self.total_size = 2880, len(self.indices) = 2880
+INFO:src.datasets:len(self.subset) = 2880 samples after subsampling
+INFO:src.datasets:len(self.subset) = 2880 samples after subsampling
+INFO:src.datasets:Using DistributedSampler with self.num_replicas = 8, self.rank = 0, self.num_samples = 360, self.total_size = 2880, len(self.indices) = 2880
+INFO:src.datasets:len(self.subset) = 2880 samples after subsampling
+INFO:src.datasets:Using DistributedSampler with self.num_replicas = 8, self.rank = 7, self.num_samples = 360, self.total_size = 2880, len(self.indices) = 2880
+INFO:src.datasets:Using DistributedSampler with self.num_replicas = 8, self.rank = 4, self.num_samples = 360, self.total_size = 2880, len(self.indices) = 2880
+INFO:src.datasets:Using DistributedSampler with self.num_replicas = 8, self.rank = 1, self.num_samples = 360, self.total_size = 2880, len(self.indices) = 2880
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:Using DistributedSampler with self.num_replicas = 8, self.rank = 6, self.num_samples = 360, self.total_size = 2880, len(self.indices) = 2880
+INFO:src.datasets:Using DistributedSampler with self.num_replicas = 8, self.rank = 5, self.num_samples = 360, self.total_size = 2880, len(self.indices) = 2880
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:Using DistributedSampler with self.num_replicas = 8, self.rank = 3, self.num_samples = 360, self.total_size = 2880, len(self.indices) = 2880
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:ChannelDataLoader.feature_channels: None
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:ChannelDataLoader.target_channels: None
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:18, len(dataset.targets) = 18 samples before subsampling
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:18, len(dataset.targets) = 18 samples before subsampling
+INFO:src.datasets:Using self.patch_dim = [32, 32]
+INFO:src.datasets:18, len(dataset.targets) = 18 samples before subsampling
+INFO:src.datasets:18, len(dataset.targets) = 18 samples before subsampling
+INFO:src.datasets:18, len(dataset.targets) = 18 samples before subsampling
+INFO:src.datasets:len(self.subset) = 1440 samples after subsampling
+INFO:src.datasets:18, len(dataset.targets) = 18 samples before subsampling
+INFO:src.datasets:18, len(dataset.targets) = 18 samples before subsampling
+INFO:src.datasets:len(self.subset) = 1440 samples after subsampling
+INFO:src.datasets:18, len(dataset.targets) = 18 samples before subsampling
+INFO:src.datasets:len(self.subset) = 1440 samples after subsampling
+INFO:src.datasets:len(self.subset) = 1440 samples after subsampling
+INFO:src.datasets:len(self.subset) = 1440 samples after subsampling
+INFO:__main__: 
+INFO:src.datasets:len(self.subset) = 1440 samples after subsampling
+INFO:src.datasets:len(self.subset) = 1440 samples after subsampling
+INFO:src.datasets:len(self.subset) = 1440 samples after subsampling
+WARNING:__main__:Config file /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//4-2-8/config.json not found, which means that the local_rank 0 did not save the configuration file
+INFO:__main__: 
+WARNING:__main__:Config file /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//4-2-8/config.json not found, which means that the local_rank 0 did not save the configuration file
+INFO:__main__: 
+INFO:__main__:===Logging to /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//4-2-8/run.log on level 20, @ self.rank=2, self.local_rank=0, self.device=None ===
+INFO:__main__: 
+WARNING:__main__:Config file /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//4-2-8/config.json not found, which means that the local_rank 0 did not save the configuration file
+WARNING:__main__:Config file /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//4-2-8/config.json not found, which means that the local_rank 0 did not save the configuration file
+INFO:__main__:===Logging to /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//4-2-8/run.log on level 20, @ self.rank=0, self.local_rank=0, self.device=None ===
+INFO:__main__:Prior to fit: RAM memory % used: 7.5, RAM Used (GB):, 13.317308416, process RAM usage (GB): 3.06103515625
+INFO:__main__:Prior to fit: RAM memory % used: 7.4, RAM Used (GB):, 13.14656256, process RAM usage (GB): 3.0938148498535156
+INFO:__main__:===Logging to /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//4-2-8/run.log on level 20, @ self.rank=4, self.local_rank=0, self.device=None ===
+INFO:__main__:host: r24g38
+INFO:__main__:Prior to fit: RAM memory % used: 8.6, RAM Used (GB):, 15.38506752, process RAM usage (GB): 2.976226806640625
+INFO:__main__:===Logging to /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//4-2-8/run.log on level 20, @ self.rank=6, self.local_rank=0, self.device=None ===
+INFO:__main__:host: r24g37
+INFO:__main__:Prior to fit: RAM memory % used: 9.1, RAM Used (GB):, 16.592236544, process RAM usage (GB): 2.796276092529297
+INFO:__main__:host: r24g40
+INFO:__main__:host: r24g41
+INFO:__main__: 
+INFO:__main__: 
+INFO:__main__: 
+INFO:__main__: 
+INFO:__main__:Saving the new configuration to /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//4-2-8/config.json
+INFO:__main__:Saving the new configuration to /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//4-2-8/config.json
+INFO:__main__:Saving the new configuration to /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//4-2-8/config.json
+INFO:__main__:Saving the new configuration to /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//4-2-8/config.json
+INFO:__main__:Prior to fit: RAM memory % used: 9.1, RAM Used (GB):, 16.596897792, process RAM usage (GB): 2.8123397827148438
+INFO:__main__:Prior to fit: RAM memory % used: 7.4, RAM Used (GB):, 13.161418752, process RAM usage (GB): 2.8500289916992188
+INFO:__main__:Prior to fit: RAM memory % used: 8.6, RAM Used (GB):, 15.39096576, process RAM usage (GB): 2.836414337158203
+INFO:__main__:Prior to fit: RAM memory % used: 7.5, RAM Used (GB):, 13.331857408, process RAM usage (GB): 2.8303604125976562
+INFO:src.models:Epoch 1/2 | Train loss: {'L1Loss': 0.7482638747795768, 'criterion': 1.2101538025814553} | Validation loss: None | Time/epoch: 10.21199 seconds
+INFO:src.models:Epoch 1/2 | Train loss: {'L1Loss': 0.7427936947864034, 'criterion': 1.2571128554966138} | Validation loss: None | Time/epoch: 10.18659 seconds
+INFO:src.models:Epoch 1/2 | Train loss: {'L1Loss': 0.7245580450348232, 'criterion': 1.1127818563710088} | Validation loss: None | Time/epoch: 10.17834 seconds
+INFO:src.models:Epoch 1/2 | Train loss: {'L1Loss': 0.7499572479206583, 'criterion': 1.3280376506888347} | Validation loss: None | Time/epoch: 10.16217 seconds
+INFO:src.models:Epoch 1/2 | Train loss: {'L1Loss': 0.7434153194012849, 'criterion': 1.1742246643356655} | Validation loss: None | Time/epoch: 10.2343 seconds
+INFO:src.models:Epoch 1/2 | Train loss: {'L1Loss': 0.7184457467949908, 'criterion': 1.0318373778591985} | Validation loss: None | Time/epoch: 10.23962 seconds
+INFO:src.models:Epoch 1/2 | Train loss: {'L1Loss': 0.7506785729657048, 'criterion': 1.1817485949267512} | Validation loss: None | Time/epoch: 10.24534 seconds
+INFO:src.models:Epoch 1/2 | Train loss: {'L1Loss': 0.7373244891995969, 'criterion': 1.1106956238332002} | Validation loss: {'L1Loss': 0.5918542726172341, 'criterion': 0.847088775369856} | Time/epoch: 13.37797 seconds
+INFO:src.models:Epoch 2/2 | Train loss: {'L1Loss': 0.613617365774901, 'criterion': 0.8136846215828605} | Validation loss: None | Time/epoch: 5.05688 seconds
+INFO:src.models:Each forward pass had 23 train batches.
+INFO:src.models:Epoch 2/2 | Train loss: {'L1Loss': 0.644054871538411, 'criterion': 0.9330177449661753} | Validation loss: None | Time/epoch: 5.08383 seconds
+INFO:src.models:Each forward pass had 23 train batches.
+INFO:src.models:Epoch 2/2 | Train loss: {'L1Loss': 0.622493326663971, 'criterion': 0.8062004965284596} | Validation loss: None | Time/epoch: 5.0584 seconds
+INFO:src.models:Each forward pass had 23 train batches.
+INFO:src.models:Epoch 2/2 | Train loss: {'L1Loss': 0.6302140303280043, 'criterion': 0.8936154531395953} | Validation loss: None | Time/epoch: 5.08213 seconds
+INFO:src.models:Each forward pass had 23 train batches.
+INFO:src.models:Epoch 2/2 | Train loss: {'L1Loss': 0.6094701056895049, 'criterion': 0.8095609778943269} | Validation loss: None | Time/epoch: 5.07888 seconds
+INFO:src.models:Epoch 2/2 | Train loss: {'L1Loss': 0.6209213915078536, 'criterion': 0.8672012557154116} | Validation loss: None | Time/epoch: 5.08069 seconds
+INFO:src.models:Epoch 2/2 | Train loss: {'L1Loss': 0.6380544058654619, 'criterion': 0.9404781564422275} | Validation loss: None | Time/epoch: 5.08346 seconds
+INFO:src.models:Each forward pass had 23 train batches.
+INFO:src.models:Each forward pass had 23 train batches.
+INFO:src.models:Each forward pass had 23 train batches.
+INFO:src.models:Number of samples per batch: len(next(iter(train_loader))[0]) = 16
+INFO:src.models:End of training on | self.rank = 1, self.device = device(type='cuda', index=1). Total time: 15.29432 seconds
+INFO:__main__:After fit: RAM memory % used: 12.2, RAM Used (GB):, 15.993913344, process RAM usage (GB): 7.718330383300781
+INFO:src.models:Number of samples per batch: len(next(iter(train_loader))[0]) = 16
+INFO:src.models:End of training on | self.rank = 2, self.device = device(type='cuda', index=0). Total time: 15.3065 seconds
+INFO:__main__:After fit: RAM memory % used: 13.5, RAM Used (GB):, 18.517905408, process RAM usage (GB): 7.71588134765625
+INFO:__main__:Saving the model weights and loss history to /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//4-2-8/
+INFO:src.models:Number of samples per batch: len(next(iter(train_loader))[0]) = 16
+INFO:src.models:End of training on | self.rank = 3, self.device = device(type='cuda', index=1). Total time: 15.29819 seconds
+INFO:__main__:After fit: RAM memory % used: 13.5, RAM Used (GB):, 18.517917696, process RAM usage (GB): 7.650199890136719
+INFO:src.models:Number of samples per batch: len(next(iter(train_loader))[0]) = 16
+INFO:src.models:End of training on | self.rank = 5, self.device = device(type='cuda', index=1). Total time: 15.30207 seconds
+INFO:src.models:Number of samples per batch: len(next(iter(train_loader))[0]) = 16
+INFO:__main__:After fit: RAM memory % used: 13.0, RAM Used (GB):, 17.195122688, process RAM usage (GB): 7.680797576904297
+INFO:src.models:End of training on | self.rank = 6, self.device = device(type='cuda', index=0). Total time: 15.27031 seconds
+INFO:__main__:After fit: RAM memory % used: 11.8, RAM Used (GB):, 15.0141952, process RAM usage (GB): 7.622047424316406
+INFO:__main__:Saving the model weights and loss history to /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//4-2-8/
+INFO:src.models:Number of samples per batch: len(next(iter(train_loader))[0]) = 16
+INFO:src.models:End of training on | self.rank = 7, self.device = device(type='cuda', index=1). Total time: 15.33092 seconds
+INFO:__main__:After fit: RAM memory % used: 11.7, RAM Used (GB):, 15.013670912, process RAM usage (GB): 7.592842102050781
+INFO:src.models:Number of samples per batch: len(next(iter(train_loader))[0]) = 16
+INFO:src.models:End of training on | self.rank = 4, self.device = device(type='cuda', index=0). Total time: 15.29574 seconds
+INFO:__main__:After fit: RAM memory % used: 12.9, RAM Used (GB):, 17.183248384, process RAM usage (GB): 7.705600738525391
+INFO:__main__:Saving the model weights and loss history to /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//4-2-8/
+INFO:src.models:Epoch 2/2 | Train loss: {'L1Loss': 0.632951575776805, 'criterion': 0.9118444245794545} | Validation loss: {'L1Loss': 0.560377859407001, 'criterion': 0.7877243518829345} | Time/epoch: 4.21661 seconds
+INFO:src.models:Best loss: 0.7877243518829345 at epoch 2, restoring the corresponding weights...
+INFO:src.models:Each forward pass had 23 train batches.
+INFO:src.models:Number of samples per batch: len(next(iter(train_loader))[0]) = 16
+INFO:src.models:End of training on | self.rank = 0, self.device = device(type='cuda', index=0). Total time: 17.84007 seconds
+INFO:__main__:After fit: RAM memory % used: 8.8, RAM Used (GB):, 12.568907776, process RAM usage (GB): 7.757350921630859
+INFO:__main__:Saving the model weights and loss history to /lustre1/project/stg_00032/georgem/closure/models/dev/dev21//4-2-8/

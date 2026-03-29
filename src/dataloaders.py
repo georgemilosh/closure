@@ -41,10 +41,13 @@ Description:
 import math
 from typing import Sequence, Iterator, Optional, TypeVar
 import numpy as np
-import torch
-from torch.utils.data import Sampler, DataLoader
+try:
+    import torch
+    from torch.utils.data import Sampler, DataLoader
 
-import torch.distributed as dist
+    import torch.distributed as dist
+except ImportError:
+    print("dataloaders: PyTorch is not installed. Some functions may not work.")
 
 import logging
 logger = logging.getLogger(__name__)

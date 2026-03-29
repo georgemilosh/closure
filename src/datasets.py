@@ -39,7 +39,10 @@ Description:
 """
 
 import numpy
-import torch
+try:
+    import torch
+except ImportError:
+    print("datasets: PyTorch is not installed. Some functions may not work.")
 import os
 from typing import Any, Tuple, TypeVar
 
@@ -47,6 +50,7 @@ import pandas as pd
 import numpy as np
 import joblib
 import scipy.ndimage as nd
+
 
 from  . import read_pic as rp
 

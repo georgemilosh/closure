@@ -1,0 +1,39 @@
+name: closure
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - python=3.12
+  # PyTorch with CUDA (from pytorch channel - known to work with menura)
+  - pytorch=2.4.0
+  - torchvision=0.19.0
+  - torchaudio=2.4.0
+  - pytorch-cuda=12.1
+  # Pin numpy <2 to avoid ABI issues
+  - numpy>=1.26,<2.0
+  # Core ML/Science
+  - scipy
+  - scikit-learn
+  - scikit-image
+  - pandas
+  - numexpr          # <-- the missing piece in torch
+  - optuna
+  - torchmetrics
+  - lightning-utilities
+  # Visualization
+  - matplotlib
+  - plotly
+  # Data I/O
+  - h5py
+  - pytables
+  - pyyaml
+  # Build / linking
+  - pybind11
+  - mkl-devel
+  - mkl-include
+  # Dev
+  - ipykernel
+  - ipython
+  - tqdm
+  - debugpy

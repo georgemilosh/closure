@@ -20,7 +20,11 @@ Usage in Command Line:
 
 """
 import logging
-import torch
+try:
+    import torch
+    import torch.distributed as dist
+except ImportError:
+    print("trainers: PyTorch is not installed. Some functions may not work.") 
 import pickle
 import warnings
 import psutil
@@ -28,7 +32,6 @@ import argparse
 import copy
 import os
 import shutil
-import torch.distributed as dist
 import json
 from socket import gethostname
 
@@ -44,8 +47,25 @@ logger = logging.getLogger(__name__)
 import stat
 
 def remove_readonly(func, path, _):
-    """Clear the readonly bit and reattempt the removal"""
-    os.chmod(path, stat.S_IWRITE)
+    """`shutil.rmtree(..., onerror=...)` callback used during `--force` cleanup.
+
+    Why this exists:
+    - Previous runs can leave files/directories that are not removable by default permissions.
+    - `rmtree` calls this callback on permission errors so we can relax permissions and retry.
+
+    Important Linux detail:
+    - Directories need the execute (`x`) bit to be traversable/removable.
+    - Do not set a fixed mode such as write-only (e.g., `0200`) on directories,
+        because that can make them non-traversable and break subsequent run setup.
+
+    This implementation preserves existing mode bits and adds owner permissions needed
+    for deletion (`u+rw` for files, `u+rwx` for directories), then retries `func(path)`.
+    """
+    mode = os.lstat(path).st_mode
+    if stat.S_ISDIR(mode):
+        os.chmod(path, stat.S_IMODE(mode) | stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+    else:
+        os.chmod(path, stat.S_IMODE(mode) | stat.S_IRUSR | stat.S_IWUSR)
     func(path)
 
 class Trainer:
@@ -255,6 +275,11 @@ class Trainer:
         #dataset_kwargs = config['dataset_kwargs']
         load_data_kwargs = config['load_data_kwargs']
         model_kwargs = config['model_kwargs']
+        if model_kwargs['model'] == 'FCNN':
+            if model_kwargs['channels'][-1] != len(config['dataset_kwargs']['read_features_targets_kwargs']['request_targets']):
+                raise ValueError(f"The last element of model_kwargs['channels'] must be equal to the number of targets specified in config['dataset_kwargs']['read_features_targets_kwargs']['request_targets']")
+            if model_kwargs['channels'][0] != len(config['dataset_kwargs']['read_features_targets_kwargs']['request_features']):
+                raise ValueError(f"The first element of model_kwargs['channels'] must be equal to the number of features specified in config['dataset_kwargs']['read_features_targets_kwargs']['request_features']")
         #device = config['device']
         # Determine the model path for the model (considering runs)
         model_path = self.work_dir
@@ -505,7 +530,6 @@ class Trainer:
                             shutil.rmtree(target_dir, onerror=remove_readonly)
                     except OSError as e:
                         logger.warning(f"Could not remove directory {target_dir}: {e}")
-                    shutil.rmtree(os.path.join(self.work_dir, self.run))
                 else:
                     raise FileExistsError(
                         f"Config file {config_file} already exists. "

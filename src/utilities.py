@@ -11,14 +11,17 @@ License:    MIT License
 """
 
 import subprocess
-from . import trainers as tr
+
 import pandas as pd
-import torch
+try:
+    import torch
+    from . import trainers as tr
+except ImportError:
+    print("utilities: PyTorch is not installed. Some functions may not work. Omitting trainer-dependent functions.")
 #import torchmetrics
 import matplotlib.pyplot as plt
 import numpy as np
 from . import read_pic as rp
-import re
 import os
 import pickle
 import scipy.ndimage as nd
@@ -391,9 +394,12 @@ def conserved_quantities(folder, verbose=True):
     ]
 
     # Read the data from the file
-    data = pd.read_csv(file_path, sep=r"\s+", header=None, names=column_names)
-    data = data.drop(columns=['Cycle'])
-    
+    data = pd.read_csv(file_path,  delim_whitespace=True, 
+                    comment='#', 
+                    header=None)
+    # Select only the first len(column_names) columns and assign the names
+    data = data.iloc[:, :len(column_names)]
+    data.columns = column_names
     if verbose:
         print("variables ", column_names[1:])
     
@@ -443,7 +449,7 @@ def transform_features(trainer, rescale=True, renorm=True, verbose=True):
                 ground_truth_scaled[:,channel] = invfunc(ground_truth_scaled[:,channel])
     return ground_truth_scaled
 
-def transform_targets(trainer, rescale=True, renorm=True, verbose=True, reshape=False, test_features=None):
+def transform_targets(trainer, rescale=True, renorm=True, verbose=True, reshape=False, test_features=None, dataset='test'):
     """
     Transforms the predicted and ground truth targets based on the trainer's configuration.
     Args:
@@ -454,39 +460,43 @@ def transform_targets(trainer, rescale=True, renorm=True, verbose=True, reshape=
         reshape (bool): Whether to reshape the targets for visualization. Defaults to False
             reshape = False is how the function was intended to be used in past with functions such as
             graph_pred_targets and plot_pred_targets, which expect the targets to not be reshaped
-        test_features (torch.Tensor, optional): If provided, uses these features for prediction 
-        instead of the test dataset's features.
+        test_features (torch.Tensor, optional): If provided, uses this features for prediction 
+            instead of the dataset's features.
+        dataset (str): Which dataset to use - 'test', 'val', or 'train'. Defaults to 'test'.
     Returns:
         prediction_scaled: The scaled predicted targets.
         ground_truth_scaled: The scaled ground truth targets.
     """
+    # Get the appropriate dataset
+    ds = getattr(trainer, f'{dataset}_dataset')
+    loader = getattr(trainer, f'{dataset}_loader')
+
     if test_features is None:
-        prediction = trainer.model.predict(trainer.test_dataset.features).cpu()
+        prediction = trainer.model.predict(ds.features).cpu()
     else:
         prediction = trainer.model.predict(test_features).cpu()
-    ground_truth = trainer.test_dataset.targets[:,trainer.test_loader.target_channels].squeeze()
+    ground_truth = ds.targets[:,loader.target_channels].squeeze()
     pred_shape = [1 for _ in prediction.shape]
     pred_shape[1] = -1
     pred_shape = tuple(pred_shape)
 
-    if trainer.test_loader.target_channels is None:
-        list_of_target_indices = range(len(trainer.test_dataset.prescaler_targets))
+    if loader.target_channels is None:
+        list_of_target_indices = range(len(ds.prescaler_targets))
     else:
-        list_of_target_indices = trainer.test_loader.target_channels
+        list_of_target_indices = loader.target_channels
 
     if renorm:
-        prediction_scaled = (prediction*trainer.test_dataset.targets_std[list_of_target_indices].reshape(pred_shape)+
-                            trainer.test_dataset.targets_mean[list_of_target_indices].reshape(pred_shape))
-        ground_truth_scaled = (ground_truth*trainer.test_dataset.targets_std[list_of_target_indices].reshape(pred_shape)+
-                                trainer.test_dataset.targets_mean[list_of_target_indices].reshape(pred_shape))
+        prediction_scaled = (prediction*ds.targets_std[list_of_target_indices].reshape(pred_shape)+
+                            ds.targets_mean[list_of_target_indices].reshape(pred_shape))
+        ground_truth_scaled = (ground_truth*ds.targets_std[list_of_target_indices].reshape(pred_shape)+
+                                ds.targets_mean[list_of_target_indices].reshape(pred_shape))
     if rescale:
-        for channel, _ in enumerate(trainer.test_dataset.request_targets):
-            if trainer.test_loader.target_channels is None:
-                list_of_target_indices = range(len(trainer.test_dataset.prescaler_targets))
+        for channel, _ in enumerate(ds.request_targets):
+            if loader.target_channels is None:
+                list_of_target_indices = range(len(ds.prescaler_targets))
             else:
-                list_of_target_indices = trainer.test_loader.target_channels
-
-            func = [trainer.test_dataset.prescaler_targets[i] for i in list_of_target_indices][channel]
+                list_of_target_indices = loader.target_channels
+            func = [ds.prescaler_targets[i] for i in list_of_target_indices][channel]
             if func == None:
                 invfunc = lambda a: a
             elif func.__name__ == 'log':
@@ -499,12 +509,12 @@ def transform_targets(trainer, rescale=True, renorm=True, verbose=True, reshape=
             ground_truth_scaled[:,channel] = invfunc(ground_truth_scaled[:,channel])
     
     if reshape:
-        if trainer.test_dataset.flatten:
-            prediction_scaled = prediction_scaled.reshape((-1,)+trainer.test_dataset.targets_shape[1:])
-            ground_truth_scaled = ground_truth_scaled.reshape((-1,)+trainer.test_dataset.targets_shape[1:])
+        if ds.flatten:
+            prediction_scaled = prediction_scaled.reshape((-1,)+ds.targets_shape[1:])
+            ground_truth_scaled = ground_truth_scaled.reshape((-1,)+ds.targets_shape[1:])
         #else:
-        #    prediction_scaled = (prediction_scaled.reshape(trainer.test_dataset.targets_shape[1:] + (-1,))).permute(3, 2, 0, 1)
-        #    ground_truth_scaled = (ground_truth_scaled.reshape(trainer.test_dataset.targets_shape[1:] + (-1,))).permute(3, 2, 0, 1)
+        #    prediction_scaled = (prediction_scaled.reshape(ds.targets_shape[1:] + (-1,))).permute(3, 2, 0, 1)
+        #    ground_truth_scaled = (ground_truth_scaled.reshape(ds.targets_shape[1:] + (-1,))).permute(3, 2, 0, 1)
     prediction_scaled = prediction_scaled.cpu().numpy()
     ground_truth_scaled = ground_truth_scaled.cpu().numpy()
     return ground_truth_scaled, prediction_scaled 
@@ -562,7 +572,7 @@ def evaluate_loss(trainer, ground_truth, prediction, criterion, verbose=True):
             print(f'Loss for channel {channel}:  {trainer.test_dataset.request_targets[channel]}, loss = {loss[label]}')
     return loss
 
-def graph_pred_targets(trainer, target_name: str, ground_truth_scaled, prediction_scaled, reshape=True):
+def graph_pred_targets(trainer, target_name: str, ground_truth_scaled, prediction_scaled, reshape=True, dataset='test'):
     """
     Generate and display a grid of subplots showing the ground truth, predictions, and error for a specific target variable.
     Parameters:
@@ -574,23 +584,30 @@ def graph_pred_targets(trainer, target_name: str, ground_truth_scaled, predictio
     Returns:
     None
     """
-    channel = trainer.test_dataset.request_targets.index(target_name)
+    # Get the appropriate dataset
+    ds = getattr(trainer, f'{dataset}_dataset')
+    # Convert to numpy if torch tensors
+    if torch.is_tensor(prediction_scaled):
+        prediction_scaled = prediction_scaled.cpu().numpy()
+    if torch.is_tensor(ground_truth_scaled):
+        ground_truth_scaled = ground_truth_scaled.cpu().numpy()
+    channel = ds.request_targets.index(target_name)
     if reshape:
-        prediction_reshaped = prediction_scaled[:,channel].reshape(trainer.test_dataset.targets_shape[:-1]+(1,)).cpu().numpy()
-        ground_truth_reshaped = ground_truth_scaled[:,channel].reshape(trainer.test_dataset.targets_shape[:-1]+(1,)).cpu().numpy()
+        prediction_reshaped = prediction_scaled[:,channel].reshape(ds.targets_shape[:-1]+(1,)) #.cpu().numpy()
+        ground_truth_reshaped = ground_truth_scaled[:,channel].reshape(ds.targets_shape[:-1]+(1,)) #.cpu().numpy()
     else:
         prediction_reshaped = prediction_scaled[...,channel][...,np.newaxis]
         ground_truth_reshaped = ground_truth_scaled[...,channel][...,np.newaxis]
 
-    X, Y = rp.build_XY(f"{trainer.dataset_kwargs['data_folder']}/{trainer.test_dataset.filenames[0].rsplit('/',1)[0]}/",
+    X, Y = rp.build_XY(f"{trainer.dataset_kwargs['data_folder']}/{ds.filenames[0].rsplit('/',1)[0]}/",
                         choose_x=trainer.dataset_kwargs['read_features_targets_kwargs']['choose_x'],
                         choose_y = trainer.dataset_kwargs['read_features_targets_kwargs']['choose_y'])
     import os
+    if not os.path.exists(f'{trainer.work_dir}/img/{trainer.run}'):
+        os.makedirs(f'{trainer.work_dir}/img/{trainer.run}')
     # Create a figure and subplots
     _, axs = plt.subplots(3, 3, figsize=(12, 6))
-    if not os.path.exists('img'):
-        # Create the directory
-        os.makedirs('img')
+
     # Iterate over the panels
     for i in range(3):
         error = (ground_truth_reshaped[i,...,0] - prediction_reshaped[i,...,0])/(ground_truth_reshaped[i,...,0].max())
@@ -612,11 +629,13 @@ def graph_pred_targets(trainer, target_name: str, ground_truth_scaled, predictio
                     im = axes.pcolormesh(X, Y, data, vmax=vmax[j], vmin=vmin[j], cmap=cmaps[j])
                 except Exception as e:
                     print(f"Error plotting {label} {target_name}, {data.shape = }: {e}")
-                axes.set_title(f"{label} {target_name} @ {trainer.test_dataset.dataframe['filenames'].iloc[i].rsplit('_')[-1].rsplit('.')[0]}")
+                axes.set_title(f"{label} {target_name} @ {ds.dataframe['filenames'].iloc[i].rsplit('_')[-1].rsplit('.')[0]}")
                 axes.set_xlabel('X')
                 axes.set_ylabel('Y')
                 f.colorbar(im, ax=axes)
-                f.savefig(f'img/{target_name}_time{i}_{label}.png',bbox_inches='tight')
+
+                
+                f.savefig(f'{trainer.work_dir}/img/{trainer.run}/{target_name}_time{i}_{label}.png',bbox_inches='tight')
                 plt.close(f)
     # Adjust the layout of the subplots
     plt.tight_layout()
@@ -983,11 +1002,149 @@ def get_spectral_index(k,spec,N):
 	return np.array(k_red), np.array(slopes)
 
 
+
+def code2alfven(data, X, Y, B0x, nb):
+    "Rescale code units to Alfven units, using the normalisation  given by B0x and nb"
+    VA = B0x/np.sqrt(nb)
+    J0 = nb*VA
+    p0 = nb*VA**2
+    E0 = VA*B0x
+    for field_name in ['Bx', 'By', 'Bz']:
+        try:
+            data[field_name] = data[field_name]/B0x
+        except:
+            print(f"{field_name} not in data")
+    data['Bmagn'] = data['Bmagn']/B0x
+    for field_name in ['Ex', 'Ey', 'Ez','EPx', 'EPy', 'EPz','EHallx', 'EHally', 'EHallz','Ohmresx', 'Ohmresy', 'Ohmresz']:
+        try:
+            data[field_name] = data[field_name]/E0
+        except:
+            print(f"{field_name} not in data")
+    data['Emagn'] = data['Emagn']/E0
+    for field_name in ['Jx', 'Jy', 'Jz', 'Jmagn']:
+        try:
+            for spec in data[field_name].keys():
+                data[field_name][spec] = data[field_name][spec]/J0
+        except:
+            print(f"{field_name} not in data")
+    for field_name in ['Jtotx', 'Jtoty', 'Jtotz']:
+        try:
+            data[field_name] = data[field_name]/J0
+        except:
+            print(f"{field_name} not in data")
+    for field_name in ['rho']:
+        try:
+            for spec in data[field_name].keys():
+                data[field_name][spec] = data[field_name][spec]/nb
+        except:
+            print(f"{field_name} not in data")
+    for field_name in ['Vx', 'Vy', 'Vz']:
+        try:             
+            for spec in data[field_name].keys():
+                data[field_name][spec] = data[field_name][spec]/VA
+        except:
+            print(f"{field_name} not in data")
+    for field_name in ['Pxx', 'Pxy', 'Pxz', 'Pyx', 'Pyy', 'Pyz', 'Pzx', 'Pzy', 'Pzz', 'Ppar', 'Pperp']:
+        try:
+            for spec in data[field_name].keys():
+                data[field_name][spec] = data[field_name][spec]/p0  
+        except:
+            print(f"{field_name} not in data")
+    for field_name in ['qx', 'qy', 'qz','EFx', 'EFy', 'EFz']:
+        try:
+            for spec in data[field_name].keys():
+                data[field_name][spec] = data[field_name][spec]/(p0*VA)
+                
+        except:
+            print(f"{field_name} not in data")
+    for field_name in ['gyro_radius']:
+        try:
+            for spec in data[field_name].keys():
+                data[field_name][spec] = data[field_name][spec]/(VA/B0x)
+        except:
+            print(f"{field_name} not in data")
+
+    return X*np.sqrt(nb), Y*np.sqrt(nb)
+
 def do_dot(fx,fy,fz,gx,gy,gz):
 	return fx*gx+fy*gy+fz*gz
 	
 def do_cross(fx,fy,fz,gx,gy,gz):
 	return fy*gz-fz*gy, fz*gx-fx*gz, fx*gy-fy*gx	
+
+def get_PS_3D_field(data, x, y, z):
+    """
+    Get the pressure-strain term and theta
+    """
+    data['QJ'] = {}
+    data['Qomega'] = {}
+    data['QD'] = {}
+    data['PiD'] = {}
+    data['Ptheta'] = {}
+    data['PS'] = {}
+    data['theta'] = {}
+    data['Dxx'] = {}
+    data['Dyy'] = {}
+    data['Dzz'] = {}
+    data['Dxy'] = {}
+    data['Dxz'] = {}
+    data['Dyz'] = {}
+    data['Ppar'] = {}
+    data['Pperp'] = {}
+    data['P'] = {}
+    data['J*(E+VxB)'] = {}
+    data['Jtotx'] = np.sum([data['Jx'][species] for species in data['Jx'].keys()], axis=0)
+    data['Jtoty'] = np.sum([data['Jy'][species] for species in data['Jy'].keys()], axis=0)
+    data['Jtotz'] = np.sum([data['Jz'][species] for species in data['Jz'].keys()], axis=0)
+    E = np.array([data['Ex'], data['Ey'], data['Ez']]).transpose(1,2,3,4,0)
+    B = np.array([data['Bx'], data['By'], data['Bz']]).transpose(1,2,3,4,0)
+    J2 = data['Jtotx']**2 + data['Jtoty']**2 + data['Jtotz']**2
+    data['QJ'] = 0.25*J2/np.mean(J2, axis=(0,1))
+    for species in data['rho'].keys():
+        J = np.array([data['Jx'][species], data['Jy'][species], data['Jz'][species]]).transpose(1,2,3,4,0)
+        V = np.array([data['Vx'][species], data['Vy'][species], data['Vz'][species]]).transpose(1,2,3,4,0)
+        data['J*(E+VxB)'][species] = np.sum(J*(E + np.cross(V, B)),axis=-1)
+        uxx = np.gradient(data['Vx'][species],x, axis=0, edge_order=2)
+        uxy = np.gradient(data['Vx'][species],y, axis=1, edge_order=2)
+        uyx = np.gradient(data['Vy'][species],x, axis=0, edge_order=2)
+        uyy = np.gradient(data['Vy'][species],y, axis=1, edge_order=2)
+        uzx = np.gradient(data['Vz'][species],x, axis=0, edge_order=2)
+        uzy = np.gradient(data['Vz'][species],y, axis=1, edge_order=2)
+        uxz = np.gradient(data['Vx'][species],z, axis=2, edge_order=2)
+        uyz = np.gradient(data['Vy'][species],z, axis=2, edge_order=2)
+        uzz = np.gradient(data['Vz'][species],z, axis=2, edge_order=2)
+        omega2 = (uzy-uyz)**2 + (uxz-uzx)**2 + (uyx-uxy)**2
+        data['Qomega'][species] = 0.25*omega2/np.mean(omega2, axis=(0,1,2))
+        data['P'][species]=(data['Pxx'][species]+\
+                                data['Pyy'][species]+\
+                                    data['Pzz'][species])/3
+        data['Ppar'][species] = (data['Pxx'][species]*data['Bx']**2 + data['Pyy'][species]*data['By']**2  + data['Pzz'][species]*data['Bz']**2 + \
+                                        2*data['Pxy'][species]*data['Bx']*data['By']+2*data['Pxz'][species]*data['Bx']*data['Bz'] + \
+                                            2*data['Pyz'][species]*data['By']*data['Bz'])/(data['By']**2+data['Bx']**2+data['Bz']**2)
+        data['Pperp'][species] = (data['Pxx'][species] + data['Pyy'][species] + data['Pzz'][species] - data['Ppar'][species])/2
+        data['theta'][species]=uxx+uyy+uzz
+        data['PS'][species]=-data['Pxx'][species]*uxx-\
+            data['Pxy'][species]*uxy-data['Pxy'][species]*uyx-\
+                data['Pyy'][species]*uyy-data['Pxz'][species]*uzx-\
+                    data['Pyz'][species]*uzy-data['Pxz'][species]*uxz-\
+                        data['Pyz'][species]*uyz-data['Pzz'][species]*uzz
+        data['Ptheta'][species]=data['P'][species]*data['theta'][species]
+        data['Dxx'][species] = uxx - data['theta'][species]/3
+        data['Dyy'][species] = uyy - data['theta'][species]/3
+        data['Dzz'][species] = uzz - data['theta'][species]/3
+        data['Dxy'][species] = (uxy + uyx)/2
+        data['Dxz'][species] = (uxz + uzx)/2
+        data['Dyz'][species] = (uyz + uzy)/2
+        Dsum = data['Dxx'][species]**2 + data['Dyy'][species]**2 + data['Dzz'][species]**2 +\
+            2*(data['Dxy'][species]**2 + data['Dxz'][species]**2 + data['Dyz'][species]**2) 
+        data['QD'][species] = 0.25*Dsum/np.mean(Dsum, axis=(0,1,2))
+        # Using PiD = - (Pij - Pdelta_ij)Dij
+        data['PiD'][species]=-(data['Pxx'][species]-data['P'][species])*(uxx-data['theta'][species]/3)-\
+                (data['Pyy'][species]-data['P'][species])*(uyy-data['theta'][species]/3)-\
+                        (data['Pzz'][species]-data['P'][species])*(uzz-data['theta'][species]/3)-\
+                                data['Pxy'][species]*(uyx+uxy)-\
+                                    data['Pxz'][species]*(uzx+uxz)-\
+                                        data['Pyz'][species]*(uzy+uyz)
 
 def get_PS_2D_field(data, x, y):
     """
@@ -1263,8 +1420,9 @@ def highdiff(data, dx, dy, coeff = None, axis=0, **kwargs):
     else:
         raise ValueError("Invalid axis. Use 0 or 1.")
 
-def get_Ohm(data,qom, x,y, coeff=None):
+def get_Ohm(data,qom, x,y, coeff=None, small=1e-10):
     """
+    E_Ohm = - V x B + J x B / ne - grad P_e / ne
     Compute the electric field and other derived quantities based on the input data.
     This function calculates the electric field, ExB/B^2, EHall, EMHD, and other quantities
     using the provided data dictionary. It also computes the pressure gradient and other
@@ -1277,7 +1435,7 @@ def get_Ohm(data,qom, x,y, coeff=None):
     data['Jtoty'] = np.sum([data['Jy'][species] for species in data['Jy'].keys()], axis=0)
     data['Jtotz'] = np.sum([data['Jz'][species] for species in data['Jz'].keys()], axis=0)
     J = np.array([data['Jtotx'], data['Jtoty'], data['Jtotz']]).transpose(1,2,3,0)
-    data['EHall_x'], data['EHall_y'], data['EHall_z'] = (np.cross(J,B)/(-data['rho']['e'])[...,np.newaxis]).transpose(3,0,1,2)
+    data['EHallx'], data['EHally'], data['EHallz'] = (np.cross(J,B)/(-data['rho']['e']+small)[...,np.newaxis]).transpose(3,0,1,2)
     norm = 0
     data['uCMx'] = 0
     data['uCMy'] = 0
@@ -1291,52 +1449,74 @@ def get_Ohm(data,qom, x,y, coeff=None):
     data['uCMy'] /= norm
     data['uCMz'] /= norm
     uCM = np.array([data['uCMx'], data['uCMy'], data['uCMz']]).transpose(1,2,3,0)
-    data['EMHD_x'], data['EMHD_y'], data['EMHD_z'] = - np.cross(uCM,B).transpose(3,0,1,2)
+    data['EMHDx'], data['EMHDy'], data['EMHDz'] = - np.cross(uCM,B).transpose(3,0,1,2)
     dx = x[1]-x[0]
     dy = y[1]-y[0]
     #data['EP_x'] = (np.gradient(data['Pxx']['e'],x,axis=0,edge_order=2)+np.gradient(data['Pxy']['e'],y,axis=1,edge_order=2))/data['rho']['e']
     #data['EP_y'] = (np.gradient(data['Pxy']['e'],x,axis=0,edge_order=2)+np.gradient(data['Pyy']['e'],y,axis=1,edge_order=2))/data['rho']['e']
     #data['EP_z'] = (np.gradient(data['Pxz']['e'],x,axis=0,edge_order=2)+np.gradient(data['Pyz']['e'],y,axis=1,edge_order=2))/data['rho']['e']
-    data['EP_x'] = -(highdiff(data['Pxx']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap') + highdiff(data['Pxy']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
-    data['EP_y'] = -(highdiff(data['Pxy']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap') + highdiff(data['Pyy']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
-    data['EP_z'] = -(highdiff(data['Pxz']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap') + highdiff(data['Pyz']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
-    
+    data['EPx'] = -(highdiff(data['Pxx']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap') + highdiff(data['Pxy']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap'))/(-data['rho']['e']+small) # density in ECsim is negative (electron charge density)
+    data['EPy'] = -(highdiff(data['Pxy']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap') + highdiff(data['Pyy']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap'))/(-data['rho']['e']+small) # density in ECsim is negative (electron charge density)
+    data['EPz'] = -(highdiff(data['Pxz']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap') + highdiff(data['Pyz']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap'))/(-data['rho']['e']+small) # density in ECsim is negative (electron charge density)
 
+    data['mVgradVx/e'] = highdiff(data['Vx']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap')*data['Vx']['e']/qom[0] + \
+                                highdiff(data['Vx']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap')*data['Vy']['e']/qom[0]
+    data['mVgradVy/e'] = highdiff(data['Vy']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap')*data['Vx']['e']/qom[0] + \
+                                highdiff(data['Vy']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap')*data['Vy']['e']/qom[0]
+    data['mVgradVz/e'] = highdiff(data['Vz']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap')*data['Vx']['e']/qom[0] + \
+                                highdiff(data['Vz']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap')*data['Vy']['e']/qom[0]
+    
+def get_J_perp(data, x,y, coeff=None):
+    """
+    Calculate the perpendicular current contribution from pressure gradients and curvature
+    """
+    dx = x[1]-x[0]
+    dy = y[1]-y[0]
+    B = np.array([data['Bx'], data['By'], data['Bz']]).transpose(1,2,3,0)
+    data['gradPperpx'] = highdiff(data['Pperp']['e'], dx, dy, coeff=coeff, axis=0, mode='wrap')
+    data['gradPperpy'] = highdiff(data['Pperp']['e'], dx, dy, coeff=coeff, axis=1, mode='wrap')
+    data['gradPperpz'] = np.zeros_like(data['gradPperpx'])
+    gradPperp = np.array([data['gradPperpx'], data['gradPperpy'], data['gradPperpz']]).transpose(1,2,3,0)
+    data['cross(B,DPperp)/B^2'] = np.cross(B, gradPperp)/np.sum(B**2, axis=3, keepdims=True)
+    data['b'] = B / np.sqrt(np.sum(B**2, axis=3, keepdims=True))
+    print(f"data['b'] shape: {data['b'].shape}")
+    data['b*Db'] = data['b'][...,0,np.newaxis]*highdiff(data['b'], dx, dy, coeff=coeff, axis=0, mode='wrap') + \
+                data['b'][...,1,np.newaxis]*highdiff(data['b'], dx, dy, coeff=coeff, axis=1, mode='wrap')
+    data['(Ppar - Pperp) cros(B, b*Db)/B^2'] = (data['Ppar']['e'] - data['Pperp']['e'])[...,np.newaxis]*np.cross(B, data['b*Db'])/np.sum(B**2, axis=3, keepdims=True)
 
 def get_Az(x,y,data):
-    def get_Az(x, y, data):
-        """
-        Compute the vector potential component Az based on the input magnetic field components Bx and By.
-        This function calculates the Az component of the vector potential using the provided
-        magnetic field data (Bx and By) and spatial coordinates (x and y). The calculation
-        is performed using numerical integration along the x and y axes.
-        Parameters:
-        -----------
-        x : numpy.ndarray
-            1D array representing the x-coordinates of the grid points.
-        y : numpy.ndarray
-            1D array representing the y-coordinates of the grid points.
-        data : dict
-            Dictionary containing the magnetic field components:
-            - 'Bx': 3D numpy array representing the x-component of the magnetic field.
-            - 'By': 3D numpy array representing the y-component of the magnetic field.
-        Modifies:
-        ---------
-        data : dict
-            Adds a new key 'Az' to the input dictionary, which contains the computed
-            3D numpy array of the Az component of the vector potential.
-        Notes:
-        ------
-        - The function assumes that the input magnetic field components ('Bx' and 'By')
-          are defined on a regular grid.
-        - The grid spacing is computed as the difference between consecutive elements
-          in the x and y arrays (dx and dy).
-        - The integration is performed using a trapezoidal rule along the respective axes.
-        Example:
-        --------
-        >>> ut.get_Az(X[:,0],Y[0,:],data)
-        >>> print(data['Az'])  # Access the computed Az component
-        """
+    """
+    Compute the vector potential component Az based on the input magnetic field components Bx and By.
+    This function calculates the Az component of the vector potential using the provided
+    magnetic field data (Bx and By) and spatial coordinates (x and y). The calculation
+    is performed using numerical integration along the x and y axes.
+    Parameters:
+    -----------
+    x : numpy.ndarray
+        1D array representing the x-coordinates of the grid points.
+    y : numpy.ndarray
+        1D array representing the y-coordinates of the grid points.
+    data : dict
+        Dictionary containing the magnetic field components:
+        - 'Bx': 3D numpy array representing the x-component of the magnetic field.
+        - 'By': 3D numpy array representing the y-component of the magnetic field.
+    Modifies:
+    ---------
+    data : dict
+        Adds a new key 'Az' to the input dictionary, which contains the computed
+        3D numpy array of the Az component of the vector potential.
+    Notes:
+    ------
+    - The function assumes that the input magnetic field components ('Bx' and 'By')
+        are defined on a regular grid.
+    - The grid spacing is computed as the difference between consecutive elements
+        in the x and y arrays (dx and dy).
+    - The integration is performed using a trapezoidal rule along the respective axes.
+    Example:
+    --------
+    >>> ut.get_Az(X[:,0],Y[0,:],data)
+    >>> print(data['Az'])  # Access the computed Az component
+    """
     
     Nx=data['Bx'].shape[0]
     Ny=data['Bx'].shape[1]

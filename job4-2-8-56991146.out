@@ -1,0 +1,338 @@
+SLURM_JOB_ID: 56991146
+SLURM_JOB_USER: vsc36073
+SLURM_JOB_ACCOUNT: lp_cmpa
+SLURM_JOB_NAME: job4-2-8-
+SLURM_CLUSTER_NAME: genius
+SLURM_JOB_PARTITION: gpu_p100
+SLURM_NNODES: 4
+SLURM_NODELIST: r24g[37-38,40-41]
+SLURM_JOB_CPUS_PER_NODE: 16(x4)
+SLURM_JOB_GPUS: 1,3
+Date: Tue Sep  3 18:42:31 CEST 2024
+Walltime: 00-00:30:00
+========================================================================
+WORLD_SIZE=8
+MASTER_PORT=12340
+MASTER_ADDR=r24g37
+Hello from rank 0 of 8 on r24g37 where there are 2 allocated GPUs per node.
+Hello from rank 1 of 8 on r24g37 where there are 2 allocated GPUs per node.
+Hello from rank 2 of 8 on r24g38 where there are 2 allocated GPUs per node.
+Hello from rank 4 of 8 on r24g40 where there are 2 allocated GPUs per node.
+Hello from rank 3 of 8 on r24g38 where there are 2 allocated GPUs per node.
+Hello from rank 5 of 8 on r24g40 where there are 2 allocated GPUs per node.
+Hello from rank 6 of 8 on r24g41 where there are 2 allocated GPUs per node.
+Hello from rank 7 of 8 on r24g41 where there are 2 allocated GPUs per node.
+Group initialized? True
+host: r24g37, rank: 1, local_rank: 1,                 gpus_per_node: 2, num_workers: 8
+Creating Trainer object with args.work_dir = '/lustre1/project/stg_00032/georgem/closure/models/dev/dev21/'
+torch.cuda.is_available() = True
+host: r24g37, rank: 0, local_rank: 0,                 gpus_per_node: 2, num_workers: 8
+Creating Trainer object with args.work_dir = '/lustre1/project/stg_00032/georgem/closure/models/dev/dev21/'
+torch.cuda.is_available() = True
+Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+host: r24g38, rank: 3, local_rank: 1,                 gpus_per_node: 2, num_workers: 8
+Creating Trainer object with args.work_dir = '/lustre1/project/stg_00032/georgem/closure/models/dev/dev21/'
+torch.cuda.is_available() = True
+host: r24g38, rank: 2, local_rank: 0,                 gpus_per_node: 2, num_workers: 8
+Creating Trainer object with args.work_dir = '/lustre1/project/stg_00032/georgem/closure/models/dev/dev21/'
+torch.cuda.is_available() = True
+Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+host: r24g41, rank: 7, local_rank: 1,                 gpus_per_node: 2, num_workers: 8
+Creating Trainer object with args.work_dir = '/lustre1/project/stg_00032/georgem/closure/models/dev/dev21/'
+torch.cuda.is_available() = True
+host: r24g41, rank: 6, local_rank: 0,                 gpus_per_node: 2, num_workers: 8
+Creating Trainer object with args.work_dir = '/lustre1/project/stg_00032/georgem/closure/models/dev/dev21/'
+torch.cuda.is_available() = True
+host: r24g40, rank: 5, local_rank: 1,                 gpus_per_node: 2, num_workers: 8
+Creating Trainer object with args.work_dir = '/lustre1/project/stg_00032/georgem/closure/models/dev/dev21/'
+torch.cuda.is_available() = True
+host: r24g40, rank: 4, local_rank: 0,                 gpus_per_node: 2, num_workers: 8
+Creating Trainer object with args.work_dir = '/lustre1/project/stg_00032/georgem/closure/models/dev/dev21/'
+torch.cuda.is_available() = True
+Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+Optimization criterion MSELoss()
+Optimization criterion MSELoss()
+Optimization criterion MSELoss()
+Optimization criterion MSELoss()
+Tracking metrics [L1Loss()]
+Tracking metrics [L1Loss()]
+Tracking metrics [L1Loss()]
+Tracking metrics [L1Loss()]
+Optimization criterion MSELoss()
+Optimization criterion MSELoss()
+Tracking metrics [L1Loss()]
+Tracking metrics [L1Loss()]
+Optimization criterion MSELoss()
+Optimization criterion MSELoss()
+Tracking metrics [L1Loss()]
+Tracking metrics [L1Loss()]
+torch.cuda.is_available() = True
+torch.cuda.is_available() = True
+torch.cuda.is_available() = True
+torch.cuda.is_available() = True
+torch.cuda.is_available() = True
+torch.cuda.is_available() = True
+Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+torch.cuda.is_available() = True
+Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+torch.cuda.is_available() = True
+Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+Initializing model FCNN(
+  (seq_model): Sequential(
+    (0): Conv2d(10, 128, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (3): Conv2d(128, 64, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (4): ReLU()
+    (5): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+    (6): Conv2d(64, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (7): ReLU()
+    (8): BatchNorm2d(6, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  )
+)
+Optimization criterion MSELoss()
+Optimization criterion MSELoss()
+Optimization criterion MSELoss()
+Optimization criterion MSELoss()
+Optimization criterion MSELoss()
+Optimization criterion MSELoss()
+Optimization criterion MSELoss()
+Optimization criterion MSELoss()
+Tracking metrics [L1Loss()]
+Tracking metrics [L1Loss()]
+Tracking metrics [L1Loss()]
+Tracking metrics [L1Loss()]
+Tracking metrics [L1Loss()]
+Tracking metrics [L1Loss()]
+Tracking metrics [L1Loss()]
+Tracking metrics [L1Loss()]
+Epoch 1/2 | Train loss: {'L1Loss': 0.7427936947864034, 'criterion': 1.2571128554966138} | Validation loss: None | Time/epoch: 10.18659 seconds
+Epoch 1/2 | Train loss: {'L1Loss': 0.7482638747795768, 'criterion': 1.2101538025814553} | Validation loss: None | Time/epoch: 10.21199 seconds
+Epoch 1/2 | Train loss: {'L1Loss': 0.7245580450348232, 'criterion': 1.1127818563710088} | Validation loss: None | Time/epoch: 10.17834 seconds
+Epoch 1/2 | Train loss: {'L1Loss': 0.7499572479206583, 'criterion': 1.3280376506888347} | Validation loss: None | Time/epoch: 10.16217 seconds
+Epoch 1/2 | Train loss: {'L1Loss': 0.7434153194012849, 'criterion': 1.1742246643356655} | Validation loss: None | Time/epoch: 10.2343 seconds
+Epoch 1/2 | Train loss: {'L1Loss': 0.7184457467949908, 'criterion': 1.0318373778591985} | Validation loss: None | Time/epoch: 10.23962 seconds
+Epoch 1/2 | Train loss: {'L1Loss': 0.7506785729657048, 'criterion': 1.1817485949267512} | Validation loss: None | Time/epoch: 10.24534 seconds
+Epoch 1/2 | Train loss: {'L1Loss': 0.7373244891995969, 'criterion': 1.1106956238332002} | Validation loss: {'L1Loss': 0.5918542726172341, 'criterion': 0.847088775369856} | Time/epoch: 13.37797 seconds
+Epoch 2/2 | Train loss: {'L1Loss': 0.613617365774901, 'criterion': 0.8136846215828605} | Validation loss: None | Time/epoch: 5.05688 seconds
+Each forward pass had 23 train batches.
+Epoch 2/2 | Train loss: {'L1Loss': 0.6094701056895049, 'criterion': 0.8095609778943269} | Validation loss: None | Time/epoch: 5.07888 seconds
+Epoch 2/2 | Train loss: {'L1Loss': 0.644054871538411, 'criterion': 0.9330177449661753} | Validation loss: None | Time/epoch: 5.08383 seconds
+Epoch 2/2 | Train loss: {'L1Loss': 0.622493326663971, 'criterion': 0.8062004965284596} | Validation loss: None | Time/epoch: 5.0584 seconds
+Each forward pass had 23 train batches.
+Each forward pass had 23 train batches.
+Epoch 2/2 | Train loss: {'L1Loss': 0.6209213915078536, 'criterion': 0.8672012557154116} | Validation loss: None | Time/epoch: 5.08069 seconds
+Epoch 2/2 | Train loss: {'L1Loss': 0.6380544058654619, 'criterion': 0.9404781564422275} | Validation loss: None | Time/epoch: 5.08346 seconds
+Epoch 2/2 | Train loss: {'L1Loss': 0.6302140303280043, 'criterion': 0.8936154531395953} | Validation loss: None | Time/epoch: 5.08213 seconds
+Each forward pass had 23 train batches.
+Each forward pass had 23 train batches.
+Each forward pass had 23 train batches.
+Each forward pass had 23 train batches.
+Number of samples per batch: len(next(iter(train_loader))[0]) = 16
+End of training on | self.rank = 1, self.device = device(type='cuda', index=1). Total time: 15.29432 seconds
+Number of samples per batch: len(next(iter(train_loader))[0]) = 16
+End of training on | self.rank = 2, self.device = device(type='cuda', index=0). Total time: 15.3065 seconds
+Number of samples per batch: len(next(iter(train_loader))[0]) = 16
+End of training on | self.rank = 3, self.device = device(type='cuda', index=1). Total time: 15.29819 seconds
+Number of samples per batch: len(next(iter(train_loader))[0]) = 16
+Number of samples per batch: len(next(iter(train_loader))[0]) = 16
+End of training on | self.rank = 5, self.device = device(type='cuda', index=1). Total time: 15.30207 seconds
+End of training on | self.rank = 6, self.device = device(type='cuda', index=0). Total time: 15.27031 seconds
+Number of samples per batch: len(next(iter(train_loader))[0]) = 16
+End of training on | self.rank = 7, self.device = device(type='cuda', index=1). Total time: 15.33092 seconds
+Number of samples per batch: len(next(iter(train_loader))[0]) = 16
+End of training on | self.rank = 4, self.device = device(type='cuda', index=0). Total time: 15.29574 seconds
+Epoch 2/2 | Train loss: {'L1Loss': 0.632951575776805, 'criterion': 0.9118444245794545} | Validation loss: {'L1Loss': 0.560377859407001, 'criterion': 0.7877243518829345} | Time/epoch: 4.21661 seconds
+Best loss: 0.7877243518829345 at epoch 2, restoring the corresponding weights...
+Each forward pass had 23 train batches.
+Number of samples per batch: len(next(iter(train_loader))[0]) = 16
+End of training on | self.rank = 0, self.device = device(type='cuda', index=0). Total time: 17.84007 seconds
