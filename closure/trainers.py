@@ -10,15 +10,25 @@ Description:
     This module defines a Trainer class for orchestrating machine learning protocols.
 
 Usage in Python:
-    from closure.src.trainers import Trainer
+    from closure.trainers import Trainer
     trainer = Trainer(work_dir='path/to/work_dir', dataset_kwargs=dataset_kwargs, model_kwargs=model_kwargs)
     best_loss = trainer.fit()
 
 Usage in Command Line:
-    python -m src.trainers --config work_dir=path/to/work_dir --config run=run_name --config model_kwargs.model_name=ResNet
+    python -m closure.trainers --config work_dir=path/to/work_dir --config run=run_name --config model_kwargs.model_name=ResNet
 
 
 """
+
+__all__ = [
+    "Trainer",
+    "setup_device",
+    "create_datasets",
+    "save_results",
+    "remove_readonly",
+    "main",
+]
+
 import logging
 try:
     import torch
@@ -39,6 +49,7 @@ from . import datasets
 from . import dataloaders
 from . import models
 from . import utilities as ut
+from .config import set_nested_config, TrainerConfig
 
 from . import logconfig
 import logging
@@ -67,6 +78,88 @@ def remove_readonly(func, path, _):
     else:
         os.chmod(path, stat.S_IMODE(mode) | stat.S_IRUSR | stat.S_IWUSR)
     func(path)
+
+
+def setup_device(config: TrainerConfig) -> torch.device:
+    """Select the appropriate torch device from *config*.
+
+    Parameters
+    ----------
+    config : TrainerConfig
+        Trainer configuration.
+
+    Returns
+    -------
+    torch.device
+    """
+    if not torch.cuda.is_available():
+        return torch.device("cpu")
+    if config.device is None:
+        dev = torch.device("cuda")
+        logger.info(f"Number of GPUs: {torch.cuda.device_count()}")
+        for i in range(torch.cuda.device_count()):
+            logger.info(f"GPU {i}: {torch.cuda.get_device_name(i)}")
+        current = torch.cuda.current_device()
+        logger.info(f"Currently using GPU {current}: {torch.cuda.get_device_name(current)}")
+        warnings.warn(f"Device was automatically selected: {dev}")
+        return dev
+    return torch.device(config.device)
+
+
+def create_datasets(config: TrainerConfig):
+    """Create train/val/test datasets from *config*.
+
+    Parameters
+    ----------
+    config : TrainerConfig
+        Must have ``dataset_kwargs`` set with ``train_sample``, ``val_sample``,
+        ``test_sample`` keys.
+
+    Returns
+    -------
+    tuple
+        ``(train_dataset, val_dataset, test_dataset)`` — train/val may be ``None``
+        when ``config.mode_test`` is ``True``.
+    """
+    dk = copy.deepcopy(config.dataset_kwargs)
+    dk.pop("samples_file", None)
+    train_sample = dk.pop("train_sample")
+    val_sample = dk.pop("val_sample")
+    test_sample = dk.pop("test_sample")
+
+    train_ds = val_ds = None
+    if not config.mode_test:
+        train_ds = datasets.DataFrameDataset(
+            datalabel="train", samples_file=train_sample,
+            norm_folder=config.work_dir, **dk,
+        )
+        val_ds = datasets.DataFrameDataset(
+            datalabel="val", samples_file=val_sample,
+            norm_folder=config.work_dir, **dk,
+        )
+    test_ds = datasets.DataFrameDataset(
+        datalabel="test", samples_file=test_sample,
+        norm_folder=config.work_dir, **dk,
+    )
+    return train_ds, val_ds, test_ds
+
+
+def save_results(model, loss_dict: dict, path: str) -> None:
+    """Save model weights and loss history to *path*.
+
+    Parameters
+    ----------
+    model : PyNet
+        Trained model wrapper.
+    loss_dict : dict
+        Must contain ``train_loss``, ``val_loss``, ``time`` keys.
+    path : str
+        Directory to write into (created if needed).
+    """
+    os.makedirs(path, exist_ok=True)
+    torch.save(model.model.state_dict(), os.path.join(path, "model.pth"))
+    with open(os.path.join(path, "loss_dict.pkl"), "wb") as f:
+        pickle.dump(loss_dict, f)
 
 class Trainer:
     """
@@ -137,7 +230,7 @@ class Trainer:
             which loads the config and model state from the corresponding subfolder.
 
     """
-    def __init__(self, dataset_kwargs=None, load_data_kwargs=None, model_kwargs=None, mode_test=False,
+    def __init__(self, config: TrainerConfig | None = None, *, dataset_kwargs=None, load_data_kwargs=None, model_kwargs=None, mode_test=False,
                  device=None, work_dir=None, log_name=None, log_level=None, force=False, timing_name=None,
                  world_size=None, rank=None, gpus_per_node=None, local_rank=None, num_workers=None):
         """
@@ -172,27 +265,46 @@ class Trainer:
             Exception: If there is an error saving the configuration file.
             
         """
+        # --- Accept TrainerConfig or legacy kwargs -------------------------
+        if config is not None:
+            # Populate from dataclass fields
+            self.work_dir = config.work_dir
+            self.dataset_kwargs = copy.deepcopy(config.dataset_kwargs) if config.dataset_kwargs is not None else None
+            self.load_data_kwargs = copy.deepcopy(config.load_data_kwargs) if config.load_data_kwargs is not None else None
+            self.model_kwargs = copy.deepcopy(config.model_kwargs) if config.model_kwargs is not None else None
+            self.device = config.device
+            self.mode_test = config.mode_test
+            self.log_name = config.log_name
+            self.log_level = config.log_level
+            self.num_workers = config.num_workers or os.cpu_count()
+            self.force = config.force
+            self.timing_name = config.timing_name
+            self.world_size = config.world_size
+            self.rank = config.rank
+            self.gpus_per_node = config.gpus_per_node
+            self.local_rank = config.local_rank
+        else:
             # Set default values for optional parameters
-        self.log_name = log_name or "training.log"
-        self.log_level = getattr(logging, log_level or "INFO")
-        self.num_workers = num_workers or os.cpu_count()
-        
-        # Store initialization parameters
-        # Deepcopy to avoid modifying input arguments
-        self.work_dir = work_dir
-        self.dataset_kwargs = copy.deepcopy(dataset_kwargs) if dataset_kwargs is not None else None
-        self.load_data_kwargs = copy.deepcopy(load_data_kwargs) if load_data_kwargs is not None else None
-        self.model_kwargs = copy.deepcopy(model_kwargs) if model_kwargs is not None else None
-        self.device = device
-        self.mode_test = mode_test
-        self.force = force
-        self.timing_name = timing_name
-        
-        # Store distributed training parameters
-        self.world_size = world_size
-        self.rank = rank
-        self.gpus_per_node = gpus_per_node
-        self.local_rank = local_rank
+            self.log_name = log_name or "training.log"
+            self.log_level = getattr(logging, log_level or "INFO")
+            self.num_workers = num_workers or os.cpu_count()
+
+            # Store initialization parameters
+            # Deepcopy to avoid modifying input arguments
+            self.work_dir = work_dir
+            self.dataset_kwargs = copy.deepcopy(dataset_kwargs) if dataset_kwargs is not None else None
+            self.load_data_kwargs = copy.deepcopy(load_data_kwargs) if load_data_kwargs is not None else None
+            self.model_kwargs = copy.deepcopy(model_kwargs) if model_kwargs is not None else None
+            self.device = device
+            self.mode_test = mode_test
+            self.force = force
+            self.timing_name = timing_name
+
+            # Store distributed training parameters
+            self.world_size = world_size
+            self.rank = rank
+            self.gpus_per_node = gpus_per_node
+            self.local_rank = local_rank
         
         # Handle configuration file management
         self._handle_config_file()
@@ -380,44 +492,13 @@ class Trainer:
             raise FileNotFoundError(f"Config file {config_file} not found.")
         
     def _initialize_datasets(self):
-        """Initialize training, validation, and test datasets.
-        This method creates the datasets based on the provided dataset_kwargs.
-        It extracts the sample file paths for training, validation, and testing datasets,
-        and creates DataFrameDataset objects for each dataset.
-        If the mode_test is True, it will only create the test dataset (useful for inference mode testing).
-        If mode_test is False, it will create train and validation datasets as well."""
-        # Remove 'samples_file' from dataset_kwargs to prevent conflicts
-        self.dataset_kwargs.pop('samples_file', None)
-        
-        # Extract sample file paths
-        train_sample = self.dataset_kwargs.pop('train_sample')
-        val_sample = self.dataset_kwargs.pop('val_sample')
-        test_sample = self.dataset_kwargs.pop('test_sample')
-        
-        
-        # Create train and validation datasets only if not in test mode
-        if not self.mode_test:
-            self.train_dataset = datasets.DataFrameDataset(
-                datalabel="train",
-                samples_file=train_sample,
-                norm_folder=self.work_dir,
-                **self.dataset_kwargs
-            )
-            
-            self.val_dataset = datasets.DataFrameDataset(
-                datalabel="val",
-                samples_file=val_sample,
-                norm_folder=self.work_dir,
-                **self.dataset_kwargs
-            )
-        
-        # Always create test dataset
-        self.test_dataset = datasets.DataFrameDataset(
-            datalabel="test",
-            samples_file=test_sample,
-            norm_folder=self.work_dir,
-            **self.dataset_kwargs
+        """Initialize training, validation, and test datasets via :func:`create_datasets`."""
+        cfg = TrainerConfig(
+            work_dir=self.work_dir,
+            dataset_kwargs=self.dataset_kwargs,
+            mode_test=self.mode_test,
         )
+        self.train_dataset, self.val_dataset, self.test_dataset = create_datasets(cfg)
 
     def _handle_config_file(self):
         """ Handle the configuration file for the Trainer.
@@ -483,9 +564,8 @@ class Trainer:
 
     def _setup_device_and_logging(self):
         """Set up device selection and logging (cpu or cuda)."""
-        # Force CPU if CUDA is not available
-        if not torch.cuda.is_available():
-            self.device = torch.device('cpu')
+        cfg = TrainerConfig(device=self.device)
+        self.device = setup_device(cfg)
         
         # Set up logging if work directory is provided
         if self.work_dir is not None:
@@ -572,32 +652,17 @@ class Trainer:
         )
 
     def _save_training_results(self):
-        """Save model weights and training history.
-        This method saves the model weights and training history to a specified directory.
-        It checks if the local rank is None or 0 to ensure that only one process saves the results.
-        If the work directory is specified, it creates a subdirectory for the run and
-        saves the model weights and loss history in that directory."""
+        """Save model weights and training history via :func:`save_results`."""
         if self.local_rank is None or self.local_rank == 0:
             if self.work_dir is not None:
                 save_dir = os.path.join(self.work_dir, self.run)
                 logger.info(f"Saving the model weights and loss history to {save_dir}/")
-                
-                # Create directory
-                os.makedirs(save_dir, exist_ok=True)
-                
-                # Save model weights
-                model_path = os.path.join(save_dir, 'model.pth')
-                torch.save(self.model.model.state_dict(), model_path)
-                
-                # Save loss history
-                loss_path = os.path.join(save_dir, 'loss_dict.pkl')
-                loss_data = {
+                loss_dict = {
                     'train_loss': self.model.train_loss_,
                     'val_loss': self.model.val_loss_,
-                    'time': self.model.total_time
+                    'time': self.model.total_time,
                 }
-                with open(loss_path, 'wb') as f:
-                    pickle.dump(loss_data, f)
+                save_results(self.model, loss_dict, save_dir)
 
     def _get_device(self, device):
         """
@@ -711,7 +776,7 @@ def main():
         for update in args.config:
             key, value = update.split("=", 1)  # Split at the first '='
             if key != "work_dir":  # Skip work_dir as it is already handled
-                ut.set_nested_config(config, key, value)
+                set_nested_config(config, key, value)
                 print(f"Setting {key} to {value}")
         #print(config)
         trainer.fit(config=config)

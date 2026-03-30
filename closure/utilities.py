@@ -48,86 +48,9 @@ def alias(*names):
         return func
     return decorator
 
-def set_nested_config(config, key, value):
-    """
-    Set a nested configuration value in a dictionary.
-    
-    This function takes a configuration dictionary, a dot-separated key string, 
-    and a value. It sets the value in the dictionary at the location specified 
-    by the key string, creating nested dictionaries as needed. The value will 
-    be converted to an int, float, or list of ints/floats if possible.
-    
-    Args:
-        config (dict): The configuration dictionary to update.
-        key (str): A dot-separated string specifying the nested key.
-        value (str): The value to set. It will be converted to an int, float, 
-                     or list if possible.
-    
-    Example:
-        config = {}
-        set_nested_config(config, 'a.b.c', '123')
-        # config is now {'a': {'b': {'c': 123}}}
-        
-        set_nested_config(config, 'a.b.d', '45.67')
-        # config is now {'a': {'b': {'c': 123, 'd': 45.67}}}
-        
-        set_nested_config(config, 'a.e', '[1, 2, 3]')
-        # config is now {'a': {'b': {'c': 123, 'd': 45.67}, 'e': [1, 2, 3]}}
-        
-        set_nested_config(config, 'a.f', '[1.1, 2.2, 3.3]')
-        # config is now {'a': {'b': {'c': 123, 'd': 45.67}, 'e': [1, 2, 3], 'f': [1.1, 2.2, 3.3]}}
-        
-        set_nested_config(config, 'a.g', '[ReLU,ReLU,ReLU,ReLU]')
-        # config is now {'a': {'b': {'c': 123, 'd': 45.67}, 'e': [1, 2, 3], 'f': [1.1, 2.2, 3.3], 'g': ['ReLU', 'ReLU', 'ReLU', 'ReLU']}}
-    """
-
-    keys = key.split('.')
-    d = config
-    for k in keys[:-1]:
-        d = d.setdefault(k, {})
-    
-    # Convert value to appropriate type
-    if value.isdigit():
-        value = int(value)
-    else:
-        try:
-            value = float(value)
-        except ValueError:
-            try:
-                # Attempt to parse list using ast.literal_eval first
-                value = ast.literal_eval(value)
-                if isinstance(value, list):
-                    value = [float(v) if isinstance(v, (int, float)) and '.' in str(v) else int(v) if isinstance(v, (int, float)) else v for v in value]
-            except (ValueError, SyntaxError):
-                # If ast.literal_eval fails, try manual parsing for lists with unquoted strings
-                if value.startswith('[') and value.endswith(']'):
-                    try:
-                        # Remove brackets and split by comma
-                        inner = value[1:-1].strip()
-                        if inner:
-                            items = [item.strip() for item in inner.split(',')]
-                            parsed_items = []
-                            for item in items:
-                                # Try to convert to number, None, or keep as string
-                                if item == 'None':
-                                    parsed_items.append(None)
-                                elif item.isdigit():
-                                    parsed_items.append(int(item))
-                                else:
-                                    try:
-                                        parsed_items.append(float(item))
-                                    except ValueError:
-                                        parsed_items.append(item)
-                            value = parsed_items
-                        else:
-                            value = []
-                    except:
-                        pass  # Keep original string value if parsing fails
-                # Handle standalone 'None' string
-                elif value == 'None':
-                    value = None
-    
-    d[keys[-1]] = value
+def set_nested_config(*args, **kwargs):  # backward compat
+    from closure.config import set_nested_config as _f
+    return _f(*args, **kwargs)
 
 
 def species_to_list(input_list):
@@ -228,113 +151,17 @@ def get_git_revision_hash() -> str:
     """
     return subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode('ascii').strip()
 
-def parse_score(score):
-    """
-    This function takes a score name and converts them to class object of this scores"""
-    import torchmetrics
-    if score in ['MSE', 'L1Loss']:
-        return getattr(torch.nn, score)()
-    elif score == 'r2':
-        return torchmetrics.functional.r2_score
+def parse_score(*args, **kwargs):  # backward compat
+    from closure.evaluation import parse_score as _f
+    return _f(*args, **kwargs)
 
-def compare_runs(work_dirs=['./'], runs=['./0'], metric=None, rescale=True, renorm=True, verbose=True, **kwargs):
-    """
-    Compare metrics for different runs in the given work directories.
+def compare_runs(*args, **kwargs):  # backward compat
+    from closure.evaluation import compare_runs as _f
+    return _f(*args, **kwargs)
 
-    Args:
-        work_dirs (list, optional): List of work directories. Defaults to ['./'].
-        runs (list, optional): List of runs. Defaults to ['./0'].
-        metric (list, optional): List of metrics to compare. Defaults to None.
-        **kwargs (dict): Additional keyword arguments to be passed when loading the trainer
-
-    Returns:
-        pandas.DataFrame: DataFrame containing the comparison results.
-    """
-    loss_df = None
-    for i, (work_dir, run) in enumerate(zip(work_dirs,runs)):
-        if not os.path.exists(work_dir):
-            raise ValueError(f"Work directory '{work_dir}' does not exist.")
-        if i == 0 or (i > 0 and os.path.normpath(work_dir) != os.path.normpath(trainer.work_dir)): # only request new trainer if work_dir is different from the previous one
-            if verbose:
-                if i > 0:
-                    print(f"Loading trainer from {os.path.normpath(work_dir)} which is different from {os.path.normpath(trainer.work_dir)}")
-                else:
-                    print(f"Loading trainer from {work_dir} ")
-            trainer = tr.Trainer(work_dir=work_dir, **kwargs)
-        if verbose:
-            print(f"Loading run {run} ")
-        trainer.load_run(run)
-        ground_truth_scaled, prediction_scaled = transform_targets(trainer, rescale=rescale, renorm=renorm, verbose=verbose)
-        try:
-            score_total = evaluate_loss(trainer, ground_truth_scaled, prediction_scaled, 
-                                          'MSELoss', verbose=verbose)
-        except Exception as e:
-            print(f"{ground_truth_scaled.shape = }, {prediction_scaled.shape = }")
-            raise e
-        if metric is not None:
-            for metric_name in metric:
-                score_total.update(evaluate_loss(trainer, ground_truth_scaled, prediction_scaled, 
-                                                   metric_name, verbose=verbose))
-                
-        loss_dict = {'work_dir': work_dir, 'exp' : work_dir.rsplit('/')[-2],'run': run}
-        loss_dict.update(score_total)
-       
-        if loss_df is None:
-            loss_df = pd.DataFrame(columns=loss_dict.keys())
-        loss_df.loc[len(loss_df)] = loss_dict
-
-    return loss_df
-
-def compare_metrics(work_dirs=['./'], runs=['./0'], metric=None):
-    """
-    Compare metrics for different runs in the given work directories.
-
-    Args:
-        work_dirs (list, optional): List of work directories. Defaults to ['./'].
-        runs (list, optional): List of runs. Defaults to ['./0'].
-        metric (list, optional): List of metrics to compare. Defaults to None.
-
-    Returns:
-        pandas.DataFrame: DataFrame containing the comparison results.
-    """
-    loss_df = None
-
-    for work_dir, run in zip(work_dirs,runs):
-        if not os.path.exists(work_dir):
-            raise ValueError(f"Work directory '{work_dir}' does not exist.")
-        trainer = tr.Trainer(work_dir=work_dir)
-        trainer.load_run(run)
-        prediction = trainer.model.predict(trainer.test_dataset.features)
-        ground_truth = trainer.test_dataset.targets[:,trainer.test_loader.target_channels].squeeze()
-        # computing total loss
-        total_loss = trainer.model._compute_loss(ground_truth.flatten(),prediction.flatten(),trainer.model.criterion).cpu().numpy()
-        score = {}
-        if metric is not None:
-            for metric_name in metric:
-                score[f"total_{metric_name}"] = trainer.model._compute_loss(ground_truth.flatten(),prediction.flatten(),
-                                                                 parse_score(metric_name)).cpu().numpy()
-        if trainer.test_loader.target_channels is None:
-            list_of_target_indices = range(len(trainer.test_dataset.prescaler_targets))
-        else:
-            list_of_target_indices = trainer.test_loader.target_channels
-        loss_dict = {'work_dir': work_dir, 'exp' : work_dir.rsplit('/')[-2],'run': run, 'total_loss': total_loss}
-        if metric is not None:
-            loss_dict.update(score)
-        # computing per channel loss
-        for channel in list_of_target_indices:
-            target_loss = trainer.model._compute_loss(ground_truth[:, channel].flatten(), prediction[:, channel].flatten(), trainer.model.criterion)
-            loss_dict[trainer.test_dataset.request_targets[channel]] = target_loss.cpu().numpy()
-            if metric is not None:
-                for metric_name in metric:
-                    loss_dict[f"{trainer.test_dataset.request_targets[channel]}_{metric_name}"] = \
-                        trainer.model._compute_loss(ground_truth[:, channel].flatten(), prediction[:, channel].flatten(),
-                                                                 parse_score(metric_name)).cpu().numpy()
-
-        if loss_df is None:
-            loss_df = pd.DataFrame(columns=loss_dict.keys())
-        loss_df.loc[len(loss_df)] = loss_dict
-
-    return loss_df
+def compare_metrics(*args, **kwargs):  # backward compat
+    from closure.evaluation import compare_metrics as _f
+    return _f(*args, **kwargs)
 
 def conserved_quantities(folder, verbose=True):
     """
@@ -405,482 +232,47 @@ def conserved_quantities(folder, verbose=True):
     
     return data, column_names
 
-def transform_features(trainer, rescale=True, renorm=True, verbose=True):
-    """
-    Transforms the features based on the trainer's configuration.
-    Args:
-        trainer: The trainer object containing the model, test dataset, and train dataset.
-        rescale (bool): Whether to rescale the features.
-        renorm (bool): Whether to renormalize the features.
-        verbose (bool): Whether to print the loss values.
-    Returns:
-        features_scaled: The scaled features.
-    """
-    
-    ground_truth = trainer.test_dataset.features[:,trainer.test_loader.feature_channels].squeeze()
-    pred_shape = [1 for _ in ground_truth.cpu().numpy().shape]
-    pred_shape[1] = -1
-    pred_shape = tuple(pred_shape)
+def transform_features(*args, **kwargs):  # backward compat
+    from closure.evaluation import transform_features as _f
+    return _f(*args, **kwargs)
 
-    if trainer.val_Loader.feature_channels is None: 
-        list_of_feature_indices = range(len(trainer.dataset_kwargs['read_features_targets_kwargs']['request_features']))
-    else:
-        list_of_feature_indices = trainer.test_loader.feature_channels
+def transform_targets(*args, **kwargs):  # backward compat
+    from closure.evaluation import transform_targets as _f
+    return _f(*args, **kwargs)
 
-    if renorm:
-        ground_truth_scaled = (ground_truth*trainer.test_dataset.features_std[list_of_feature_indices].reshape(pred_shape)+
-                                trainer.test_dataset.features_mean[list_of_feature_indices].reshape(pred_shape))
-    if rescale:
-        for channel, _ in enumerate(trainer.test_dataset.request_features):
-            if trainer.test_loader.feature_channels is None:
-                list_of_feature_indices = range(len(trainer.dataset_kwargs['read_features_targets_kwargs']['request_features']))
-            else:
-                list_of_feature_indices = trainer.test_loader.feature_channels
-            if trainer.test_dataset.prescaler_features is not None:
-                func = [trainer.test_dataset.prescaler_features[i] for i in list_of_feature_indices][channel]
-                if func == None:
-                    invfunc = lambda a: a
-                elif func.__name__ == 'log':
-                    invfunc = torch.exp
-                elif func.__name__ == 'arcsinh':
-                    invfunc = torch.sinh
-                if verbose:
-                    print(f"{invfunc = }")
-                ground_truth_scaled[:,channel] = invfunc(ground_truth_scaled[:,channel])
-    return ground_truth_scaled
+def compute_loss(*args, **kwargs):  # backward compat
+    from closure.evaluation import compute_loss as _f
+    return _f(*args, **kwargs)
 
-def transform_targets(trainer, rescale=True, renorm=True, verbose=True, reshape=False, test_features=None, dataset='test'):
-    """
-    Transforms the predicted and ground truth targets based on the trainer's configuration.
-    Args:
-        trainer: The trainer object containing the model, test dataset, and train dataset.
-        rescale (bool): Whether to rescale the targets.
-        renorm (bool): Whether to renormalize the targets.
-        verbose (bool): Whether to print the loss values.
-        reshape (bool): Whether to reshape the targets for visualization. Defaults to False
-            reshape = False is how the function was intended to be used in past with functions such as
-            graph_pred_targets and plot_pred_targets, which expect the targets to not be reshaped
-        test_features (torch.Tensor, optional): If provided, uses this features for prediction 
-            instead of the dataset's features.
-        dataset (str): Which dataset to use - 'test', 'val', or 'train'. Defaults to 'test'.
-    Returns:
-        prediction_scaled: The scaled predicted targets.
-        ground_truth_scaled: The scaled ground truth targets.
-    """
-    # Get the appropriate dataset
-    ds = getattr(trainer, f'{dataset}_dataset')
-    loader = getattr(trainer, f'{dataset}_loader')
+def evaluate_loss(*args, **kwargs):  # backward compat
+    from closure.evaluation import evaluate_loss as _f
+    return _f(*args, **kwargs)
 
-    if test_features is None:
-        prediction = trainer.model.predict(ds.features).cpu()
-    else:
-        prediction = trainer.model.predict(test_features).cpu()
-    ground_truth = ds.targets[:,loader.target_channels].squeeze()
-    pred_shape = [1 for _ in prediction.shape]
-    pred_shape[1] = -1
-    pred_shape = tuple(pred_shape)
+def graph_pred_targets(*args, **kwargs):  # backward compat
+    from closure.visualization import graph_pred_targets as _f
+    return _f(*args, **kwargs)
 
-    if loader.target_channels is None:
-        list_of_target_indices = range(len(ds.prescaler_targets))
-    else:
-        list_of_target_indices = loader.target_channels
+def pred_ground_targets(*args, **kwargs):  # backward compat
+    from closure.evaluation import pred_ground_targets as _f
+    return _f(*args, **kwargs)
 
-    if renorm:
-        prediction_scaled = (prediction*ds.targets_std[list_of_target_indices].reshape(pred_shape)+
-                            ds.targets_mean[list_of_target_indices].reshape(pred_shape))
-        ground_truth_scaled = (ground_truth*ds.targets_std[list_of_target_indices].reshape(pred_shape)+
-                                ds.targets_mean[list_of_target_indices].reshape(pred_shape))
-    if rescale:
-        for channel, _ in enumerate(ds.request_targets):
-            if loader.target_channels is None:
-                list_of_target_indices = range(len(ds.prescaler_targets))
-            else:
-                list_of_target_indices = loader.target_channels
-            func = [ds.prescaler_targets[i] for i in list_of_target_indices][channel]
-            if func == None:
-                invfunc = lambda a: a
-            elif func.__name__ == 'log':
-                invfunc = torch.exp
-            elif func.__name__ == 'arcsinh':
-                invfunc = torch.sinh
-            if verbose:
-                print(f"{invfunc = }")
-            prediction_scaled[:,channel] = invfunc(prediction_scaled[:,channel])
-            ground_truth_scaled[:,channel] = invfunc(ground_truth_scaled[:,channel])
-    
-    if reshape:
-        if ds.flatten:
-            prediction_scaled = prediction_scaled.reshape((-1,)+ds.targets_shape[1:])
-            ground_truth_scaled = ground_truth_scaled.reshape((-1,)+ds.targets_shape[1:])
-        #else:
-        #    prediction_scaled = (prediction_scaled.reshape(ds.targets_shape[1:] + (-1,))).permute(3, 2, 0, 1)
-        #    ground_truth_scaled = (ground_truth_scaled.reshape(ds.targets_shape[1:] + (-1,))).permute(3, 2, 0, 1)
-    prediction_scaled = prediction_scaled.cpu().numpy()
-    ground_truth_scaled = ground_truth_scaled.cpu().numpy()
-    return ground_truth_scaled, prediction_scaled 
+def plot_pred_targets(*args, **kwargs):  # backward compat
+    from closure.visualization import plot_pred_targets as _f
+    return _f(*args, **kwargs)
 
-def compute_loss(ground_truth, prediction, criterion):
-     # Convert to torch.Tensor if not already
-    if isinstance(ground_truth, np.ndarray):
-        ground_truth = torch.from_numpy(ground_truth)
-    if isinstance(prediction, np.ndarray):
-        prediction = torch.from_numpy(prediction)
-    if criterion == 'r2':
-        #loss = (1- torch.nn.MSELoss()(ground_truth,prediction)/torch.var(ground_truth)).cpu().numpy()
-        ss_total = torch.sum((ground_truth - torch.mean(ground_truth)) ** 2)
-        ss_residual = torch.sum((ground_truth - prediction) ** 2)
-        loss = 1 - (ss_residual / ss_total)
-    else:
-        try:
-            if isinstance(criterion, str):
-                loss = getattr(torch.nn, criterion)()(ground_truth,prediction).cpu().numpy()
-            elif hasattr(criterion, "__class__") and criterion.__class__.__module__.startswith("torch.nn"):
-                loss = criterion(ground_truth, prediction).cpu().numpy()
-            else:
-                raise ValueError(f"Invalid criterion type: {type(criterion)}")
-            loss = getattr(torch.nn, criterion)()(ground_truth,prediction).cpu().numpy()
-        except Exception as e:
-            print(f"Error computing loss with criterion {criterion = }, {ground_truth.shape = }, {prediction.shape = }, {type(ground_truth) = }, {type(prediction) = }")
-            raise e
-    return loss
+def normalize_input(*args, **kwargs):  # backward compat
+    from closure.evaluation import normalize_input as _f
+    return _f(*args, **kwargs)
 
-def evaluate_loss(trainer, ground_truth, prediction, criterion, verbose=True):
-    """
-    This function takes a trainer object assuming that the run has already been loaded and 
-    returns the loss
+def pred_unnormalize(*args, **kwargs):  # backward compat
+    from closure.evaluation import pred_unnormalize as _f
+    return _f(*args, **kwargs)
 
-    Args:
-        trainer (Trainer): A Trainer object.
-        ground_truth (torch.Tensor): The ground truth targets.
-        prediction (torch.Tensor): The predicted targets.
-        criterion (str): The loss function to use, e.g. 'MSELoss', 'L1Loss', 'r2'.
-    Returns:
-        tuple: A tuple containing the predicted and ground truth targets.
-    """
-    label = f'total_{criterion}'
-    loss = {label : compute_loss(ground_truth.flatten(),prediction.flatten(),criterion)}
-    if verbose:
-        print(f"Total loss {loss[label]}")
-    if trainer.test_loader.target_channels is None:
-        list_of_target_indices = range(len(trainer.test_dataset.prescaler_targets))
-    else:
-        list_of_target_indices = trainer.test_loader.target_channels
-    for channel in list_of_target_indices:
-        label = f'{trainer.test_dataset.request_targets[channel]}_{criterion}'
-        loss[label] = compute_loss(ground_truth[:,channel].flatten(),prediction[:,channel].flatten(),criterion)
-        if verbose:
-            print(f'Loss for channel {channel}:  {trainer.test_dataset.request_targets[channel]}, loss = {loss[label]}')
-    return loss
+unnormalize_output = pred_unnormalize  # backward compat alias
 
-def graph_pred_targets(trainer, target_name: str, ground_truth_scaled, prediction_scaled, reshape=True, dataset='test'):
-    """
-    Generate and display a grid of subplots showing the ground truth, predictions, and error for a specific target variable.
-    Parameters:
-    - trainer: The trainer object containing the datasets and other necessary information.
-    - target_name: The name of the target variable to visualize.
-    - ground_truth_scaled: The scaled ground truth values for the target variable.
-    - prediction_scaled: The scaled predicted values for the target variable.
-    - reshape (bool): Whether to reshape the data for visualization. Defaults to True, set to False if already reshaped.
-    Returns:
-    None
-    """
-    # Get the appropriate dataset
-    ds = getattr(trainer, f'{dataset}_dataset')
-    # Convert to numpy if torch tensors
-    if torch.is_tensor(prediction_scaled):
-        prediction_scaled = prediction_scaled.cpu().numpy()
-    if torch.is_tensor(ground_truth_scaled):
-        ground_truth_scaled = ground_truth_scaled.cpu().numpy()
-    channel = ds.request_targets.index(target_name)
-    if reshape:
-        prediction_reshaped = prediction_scaled[:,channel].reshape(ds.targets_shape[:-1]+(1,)) #.cpu().numpy()
-        ground_truth_reshaped = ground_truth_scaled[:,channel].reshape(ds.targets_shape[:-1]+(1,)) #.cpu().numpy()
-    else:
-        prediction_reshaped = prediction_scaled[...,channel][...,np.newaxis]
-        ground_truth_reshaped = ground_truth_scaled[...,channel][...,np.newaxis]
-
-    X, Y = rp.build_XY(f"{trainer.dataset_kwargs['data_folder']}/{ds.filenames[0].rsplit('/',1)[0]}/",
-                        choose_x=trainer.dataset_kwargs['read_features_targets_kwargs']['choose_x'],
-                        choose_y = trainer.dataset_kwargs['read_features_targets_kwargs']['choose_y'])
-    import os
-    if not os.path.exists(f'{trainer.work_dir}/img/{trainer.run}'):
-        os.makedirs(f'{trainer.work_dir}/img/{trainer.run}')
-    # Create a figure and subplots
-    _, axs = plt.subplots(3, 3, figsize=(12, 6))
-
-    # Iterate over the panels
-    for i in range(3):
-        error = (ground_truth_reshaped[i,...,0] - prediction_reshaped[i,...,0])/(ground_truth_reshaped[i,...,0].max())
-        vmax = ground_truth_reshaped[i,...,0].max()
-        vmax = [vmax, vmax, .5]
-        if ground_truth_reshaped[i,...,0].min()*ground_truth_reshaped[i,...,0].max() > 0:
-            vmin = 0
-            cmaps = ['plasma', 'plasma', 'seismic']
-        else:
-            vmin = -ground_truth_reshaped[i,...,0].max()
-            cmaps = ['seismic', 'seismic', 'seismic']
-        vmin = [vmin, vmin, -.5]
-        
-        for j, (data,label) in enumerate(zip([ground_truth_reshaped[i,...,0], prediction_reshaped[i,...,0], error],
-                                            ['real', 'predict', 'error'])):
-            f, ax = plt.subplots(1, 1, figsize=(6, 3))
-            for axes in [ax, axs[i,j]]:
-                try:
-                    im = axes.pcolormesh(X, Y, data, vmax=vmax[j], vmin=vmin[j], cmap=cmaps[j])
-                except Exception as e:
-                    print(f"Error plotting {label} {target_name}, {data.shape = }: {e}")
-                axes.set_title(f"{label} {target_name} @ {ds.dataframe['filenames'].iloc[i].rsplit('_')[-1].rsplit('.')[0]}")
-                axes.set_xlabel('X')
-                axes.set_ylabel('Y')
-                f.colorbar(im, ax=axes)
-
-                
-                f.savefig(f'{trainer.work_dir}/img/{trainer.run}/{target_name}_time{i}_{label}.png',bbox_inches='tight')
-                plt.close(f)
-    # Adjust the layout of the subplots
-    plt.tight_layout()
-    plt.show()
-
-def pred_ground_targets(trainer, verbose=True):
-    """
-    This function takes a trainer object assuming that the run has already been loaded and 
-    returns the predicted and ground truth targets.
-
-    Args:
-        trainer (Trainer): A Trainer object.
-
-    Returns:
-        tuple: A tuple containing the predicted and ground truth targets.
-    """
-    print("The function pred_ground_targets is deprecated. Use transform_targets instead.")
-    prediction = trainer.model.predict(trainer.test_dataset.features)
-    ground_truth = trainer.test_dataset.targets[:,trainer.test_loader.target_channels].squeeze()
-    loss = trainer.model._compute_loss(ground_truth.flatten(),prediction.flatten(),trainer.model.criterion)
-    if verbose:
-        print(f"Total loss {loss}")
-    if trainer.test_loader.target_channels is None:
-        list_of_target_indices = range(len(trainer.test_dataset.prescaler_targets))
-    else:
-        list_of_target_indices = trainer.test_loader.target_channels
-    for channel in list_of_target_indices:
-        try:
-            loss = trainer.model._compute_loss(ground_truth[:,channel].flatten(),prediction[:,channel].flatten(),trainer.model.criterion)
-        except Exception as e:
-            print(f"{ground_truth.shape = }, {prediction.shape = }, {channel = }, {trainer.model.criterion = }")
-            raise e
-        if verbose:
-            print(f'Loss for channel {channel}:  {trainer.test_dataset.request_targets[channel]}, loss = {loss}')
-    return prediction, ground_truth, list_of_target_indices
-
-def plot_pred_targets(trainer, target_name: str, prediction=None, ground_truth=None, 
-                      list_of_target_indices=None, plot_indices=None, **kwargs):
-    """
-    This function takes a trainer object and a channel index and plots the predicted and ground truth targets along with the errors.
-    Each panel is saved as a figure to a file
-
-    Args:
-        trainer (Trainer): A Trainer object.
-        target_name (str): The name of the target variable to visualize.
-        prediction (torch.Tensor): The predicted values for the target variable.
-        ground_truth (torch.Tensor): The ground truth values for the target variable.
-        list_of_target_indices (list): A list of target indices.
-        plot_indices (list): A list of indices to plot, basically which times to plot.
-        **kwargs: Additional keyword arguments to be passed to the plotting functions: axes.pcolormesh
-    """
-    if prediction is None or ground_truth is None or list_of_target_indices is None:
-        prediction, ground_truth, list_of_target_indices = pred_ground_targets(trainer)
-    
-    pred_shape = [1 for _ in prediction.cpu().numpy().shape]
-    pred_shape[1] = -1
-    pred_shape = tuple(pred_shape)
-
-    channel = trainer.test_dataset.request_targets.index(target_name)
-    if trainer.test_loader.target_channels is None:
-        list_of_target_indices = range(len(trainer.test_dataset.prescaler_targets))
-    else:
-        list_of_target_indices = trainer.test_loader.target_channels
-
-    func = [trainer.test_dataset.prescaler_targets[i] for i in list_of_target_indices][channel]
-    if func == None:
-        invfunc = lambda a: a
-    elif func.__name__ == 'log':
-        invfunc = np.exp
-    elif func.__name__ == 'arcsinh':
-        invfunc = np.sinh
-
-    print(f"{invfunc = }")
-    X, Y = rp.build_XY(f"{trainer.dataset_kwargs['data_folder']}/{trainer.test_dataset.filenames[0].rsplit('/',1)[0]}/",
-                        choose_x=trainer.dataset_kwargs['read_features_targets_kwargs']['choose_x'],
-                        choose_y = trainer.dataset_kwargs['read_features_targets_kwargs']['choose_y'])
-    prediction_reshaped = invfunc((prediction.cpu().numpy()*trainer.test_dataset.targets_std[list_of_target_indices].reshape(pred_shape)+
-                       trainer.test_dataset.targets_mean[list_of_target_indices].reshape(pred_shape))[:,channel]).reshape(trainer.test_dataset.targets_shape[:-1]+(1,))
-    ground_truth_reshaped = invfunc((ground_truth.cpu().numpy()*trainer.test_dataset.targets_std[list_of_target_indices].reshape(pred_shape)+
-                         trainer.test_dataset.targets_mean[list_of_target_indices].reshape(pred_shape))[:,channel]).reshape(trainer.test_dataset.targets_shape[:-1]+(1,))
-    # Create a figure and subplots
-    if plot_indices is None:
-        plot_indices = range(prediction.shape[-1])
-    figsize = kwargs.pop('figsize', (12, 2*len(plot_indices)))
-    fig, axs = plt.subplots(len(plot_indices), 3, figsize=figsize)
-    if not os.path.exists('img'):
-        # Create the directory
-        os.makedirs('img')
-    # Iterate over the panels
-    for figindex, i in enumerate(plot_indices):
-        error = (ground_truth_reshaped[i,...,0] - prediction_reshaped[i,...,0])/(ground_truth_reshaped[i,...,0].max())
-        vmax = ground_truth_reshaped[i,...,0].max()
-        vmax = [vmax, vmax, .5]
-        if ground_truth_reshaped[i,...,0].min()*ground_truth_reshaped[i,...,0].max() > 0:
-            vmin = 0
-            cmaps = ['plasma', 'plasma', 'seismic']
-        else:
-            vmin = -ground_truth_reshaped[i,...,0].max()
-            cmaps = ['seismic', 'seismic', 'seismic']
-        vmin = [vmin, vmin, -.5]
-        
-        for j, (data,label) in enumerate(zip([ground_truth_reshaped[i,...,0], prediction_reshaped[i,...,0], error],
-                                            ['real', 'predict', 'error'])):
-            f, ax = plt.subplots(1, 1, figsize=(figsize[0]/2, figsize[1]/2)) # we are also saving the individual plots
-            for axes in [ax, axs[figindex,j]]:
-                im = axes.pcolormesh(X, Y, data, vmax=vmax[j], vmin=vmin[j], cmap=cmaps[j], **kwargs)
-                axes.set_title(f"{label} {target_name} @ {trainer.test_dataset.dataframe['filenames'].iloc[i].rsplit('_')[-1].rsplit('.')[0]}")
-                axes.set_xlabel('X')
-                axes.set_ylabel('Y')
-                f.colorbar(im, ax=axes)
-                f.savefig(f'img/{target_name}_time{i}_{label}.png',bbox_inches='tight')
-                plt.close(f)
-    # Adjust the layout of the subplots
-    plt.tight_layout()
-    plt.show()
-
-def normalize_input(data, trainer):
-    """
-    Normalize the input data based on the trainer's dataset settings.
-
-    Parameters:
-    data (dict): Dictionary containing the simulation data.
-    trainer (Trainer): Trainer object containing the model and normalization settings.
-
-    Returns:
-    torch.Tensor: Normalized test features ready for model prediction.
-    """
-    test_features = []
-    for key in trainer.test_dataset.request_features:
-        if '_' in key:
-            key1, key2 = key.split('_')
-            if key1 in data and key2 in data[key1]:
-                test_features.append(data[key1][key2])
-        else:
-            if key in data:
-                test_features.append(data[key])
-    test_features = np.array(test_features, dtype=trainer.test_dataset.features_dtype_numpy).transpose(3,1,2,0)
-    if trainer.test_dataset.filter_features is not None:
-        test_features = trainer.filter_features(test_features, **trainer.filter_features_kwargs)
-
-    if trainer.test_dataset.flatten:
-        # Flatten for pixel-wise processing (MLP models)
-        test_features = test_features.reshape(-1, test_features.shape[-1])
-    else:
-        # Convert to channel-first format for CNN models (NCHW)
-        test_features = test_features.transpose(0, 3, 1, 2)
-
-    print(f"{test_features.shape = }")
-    trainer.test_dataset._apply_prescaling(test_features, trainer.test_dataset.prescaler_features, "features")
-    trainer.test_dataset._apply_normalization(test_features, "features")
-    test_features = torch.tensor(test_features, dtype=trainer.test_dataset.features_dtype)
-
-
-    return test_features
-
-
-
-@alias('unnormalize_output') 
-def pred_unnormalize(data, test_features, trainer, scaler_targets=None, prescaler_targets=None):
-    """
-    Unnormalize the output predictions based on the trainer's dataset settings.
-
-    Parameters:
-    data (dict): Dictionary containing the simulation data.
-    test_features (torch.Tensor): Normalized test features used for model prediction.
-    trainer (Trainer): Trainer object containing the model and normalization settings.
-
-    Returns:
-    None: The function updates the `data` dictionary with the unnormalized predictions.
-    """
-    prediction = trainer.model.predict(test_features).cpu()
-    pred_shape = [1 for _ in prediction.shape]
-    pred_shape[1] = -1
-    pred_shape = tuple(pred_shape)
-    if scaler_targets is None:
-        scaler_targets = trainer.test_dataset.scaler_targets
-    if prescaler_targets is None:
-        prescaler_targets = trainer.test_dataset.prescaler_targets
-
-    if trainer.test_loader.target_channels is None:
-        list_of_target_indices = range(len(trainer.test_dataset.prescaler_targets))
-    else:
-        list_of_target_indices = trainer.test_loader.target_channels
-
-    if scaler_targets:
-        prediction_scaled = (prediction*trainer.test_dataset.targets_std[list_of_target_indices].reshape(pred_shape)+
-                            trainer.test_dataset.targets_mean[list_of_target_indices].reshape(pred_shape))
-    else:
-        prediction_scaled = prediction
-    if prescaler_targets is not None and prescaler_targets is not False:
-        for channel, _ in enumerate(trainer.test_dataset.request_targets):
-            if trainer.test_loader.target_channels is None:
-                list_of_target_indices = range(len(trainer.test_dataset.prescaler_targets))
-            else:
-                list_of_target_indices = trainer.test_loader.target_channels
-
-            func = [trainer.test_dataset.prescaler_targets[i] for i in list_of_target_indices][channel]
-            if func == None:
-                invfunc = lambda a: a
-            elif func.__name__ == 'log':
-                invfunc = torch.exp
-            elif func.__name__ == 'arcsinh':
-                invfunc = torch.sinh
-            prediction_scaled[:,channel] = invfunc(prediction_scaled[:,channel])
-
-    if trainer.test_dataset.flatten:
-        # Flatten for pixel-wise processing (MLP models)
-        prediction_scaled = (prediction_scaled.reshape(trainer.test_dataset.targets_shape[1:] + (-1,))).permute(3, 2, 0, 1)
-    print(f"{prediction_scaled.shape = }")
-    for i, key in enumerate(trainer.test_dataset.request_targets):
-        if '_' in key:
-            key1, key2 = key.split('_')
-            if key1 in data and key2 in data[key1]:
-                data[key1][key2] = prediction_scaled[:, i, ...].numpy().transpose([1, 2, 0])
-        else:
-            if key in data:
-                data[key] = prediction_scaled[:, i, ...].numpy().transpose([1, 2, 0])
-
-def prediction2data(data, trainer, prediction_scaled):
-    """
-    Convert the model's predictions into a format suitable for analysis.
-
-    Parameters:
-    data (dict): The data dictionary containing the model's predictions.
-    trainer (Trainer): The trainer object containing the model and dataset information.
-    prediction_scaled (torch.Tensor): The scaled predictions from the model.
-
-    Returns:
-    None: The function updates the `data` dictionary in place.
-    """
-    for i, key in enumerate(trainer.test_dataset.request_targets):
-        if '_' in key:
-            key1, key2 = key.split('_')
-            if key1 in data and key2 in data[key1]:
-                if trainer.test_dataset.flatten:
-                    data[key1][key2] = prediction_scaled[...,i].transpose([1, 2, 0])
-                else:
-                    data[key1][key2] = prediction_scaled[:,i, ...].transpose([1, 2, 0])
-        else:
-            if key in data:
-                if trainer.test_dataset.flatten:
-                    data[key] = prediction_scaled[...,i].transpose([1, 2, 0])
-                else:
-                    data[key] = prediction_scaled[:,i, ...].transpose([1, 2, 0])
-    return data
+def prediction2data(*args, **kwargs):  # backward compat
+    from closure.evaluation import prediction2data as _f
+    return _f(*args, **kwargs)
 
 # The scripts below are adapted from G. Arrò
 

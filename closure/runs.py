@@ -81,6 +81,7 @@ import torch.distributed as dist
 
 from . import trainers
 from . import utilities as ut
+from .config import set_nested_config
 from . import logconfig
 import logging
 logger = logging.getLogger(__name__)
@@ -264,7 +265,7 @@ def main():
                     key, value = update.split("=", 1)
                     if key != "work_dir":
                         parsed_value = parse_config_value(value)
-                        ut.set_nested_config(config, key, parsed_value)
+                        set_nested_config(config, key, parsed_value)
             
             # Set run name
             config['run'] = run_spec['run']
@@ -299,7 +300,7 @@ def main():
             key, value = update.split("=", 1)
             if key != "work_dir":
                 parsed_value = parse_config_value(value)
-                ut.set_nested_config(config, key, parsed_value)
+                set_nested_config(config, key, parsed_value)
                 print(f"Setting {key} to {parsed_value}")
         trainer.fit(config=config)
     else:
