@@ -1,9 +1,53 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "closure"
+version = "0.1.0"
+description = "ML framework for fluid closure of PIC plasma simulations"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+readme = "README.md"
+authors = [
+    {name = "George Miloshevich"},
+]
+dependencies = [
+    "torch>=2.0",
+    "numpy>=1.24,<2.0",
+    "pandas>=1.5",
+    "scipy>=1.10",
+    "h5py>=3.8",
+    "matplotlib>=3.6",
+    "joblib>=1.2",
+    "torchmetrics>=1.0",
+    "pyyaml>=6.0",
+    "psutil>=5.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "pytest-cov>=4.0", "ruff>=0.4", "pre-commit>=3.0"]
+optuna = ["optuna>=3.0"]
+# NOTE: For GPU/CUDA support, install torch separately with the appropriate
+# --index-url for your CUDA version. See README for instructions.
+
+[project.scripts]
+closure-train = "closure.trainers:main"
+closure-runs = "closure.runs:main"
 
 [tool.pytest.ini_options]
 minversion = "7.0"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-q"
+markers = ["slow: marks tests as slow", "gpu: requires GPU"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["closure*"]

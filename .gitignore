@@ -16,3 +16,9 @@ agent_planning_v2_large.md
 agent_planning.md
 agent_planning_v2_agent_post_phase_0_from_agent_A.md
 phase1_modifications_and_deviations.md
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+.coverage
