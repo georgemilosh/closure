@@ -15,13 +15,10 @@ Outputs:
     evaluation.pkl: A pickle file containing the loss dictionaries, configuration data, and comparison results.
 
 Example usage:
-    python -m src.run_compare_runs.py --work_dir /path/to/trainer/folder
+    python scripts/run_compare_runs.py --work_dir /path/to/trainer/folder
 """
 import os
 import sys
-sys.path.insert(0, '/dodrio/scratch/projects/2025_112/georgem/closure/')  # Add FIRST, not append
-
-from turtle import pd
 import logging
 logging.basicConfig(
     level=logging.INFO,
@@ -35,7 +32,7 @@ import json
 import matplotlib.pyplot as plt
 import itertools
 import pandas as pd
-from . import trainers as tr  # This will now use the correct path
+from closure import trainers as tr
 
 loss_dicts = {}
 

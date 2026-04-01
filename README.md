@@ -25,7 +25,7 @@
 
 ## Directory Structure
 
-- `closure/src/` — Core source code (trainers, datasets, models, utilities, etc.)
+- `closure/closure/` — Core source code (trainers, datasets, models, utilities, etc.)
 - `closure/examples/` — Example notebooks and scripts (see `tuto_train_haydn.ipynb`)
 - `work_dir/` — User-specified experiment directory; each run is a subfolder (e.g., `work_dir/0`, `work_dir/nosubsample`, etc.)
 
@@ -56,7 +56,7 @@ Option 2: Install dependencies manually:
 See [examples/tuto_train_haydn.ipynb](examples/tuto_train_haydn.ipynb) for a full walkthrough.
 
 ```python
-from closure.src.trainers import Trainer
+from closure.trainers import Trainer
 
 dataset_kwargs = {...}      # See notebook for details
 load_data_kwargs = {...}
@@ -77,7 +77,7 @@ trainer.fit()
 A tutorial on the usage of the trainer can be found in `Tutorial_trainer.pdf` in the `examples` folder.
 
 ```bash
-python -m closure.src.trainers --config work_dir=work_dir --config run=run_name --config model_kwargs.model_name=ResNet
+python -m closure.trainers --config work_dir=work_dir --config run=run_name --config model_kwargs.model_name=ResNet
 ```
 
 - Use `--config key=value` to override config values (supports nested keys with dot notation).
@@ -134,11 +134,11 @@ See [examples/tuto_train_haydn.ipynb](closure/examples/tuto_train_haydn.ipynb) f
 
 ## Main Components
 
-- **src/trainers.py** — The `Trainer` class: manages configs, logging, datasets, models, and training.
-- **src/datasets.py** — Data loading utilities: distributed/serial samplers, normalization, filtering, patch extraction.
-- **src/models.py** — Model definitions: MLP, FCNN, ResNet, and the `PyNet` training wrapper.
-- **src/utilities.py** — Utility functions: config handling, evaluation, plotting, and more.
-- **src/read_pic.py** — Functions for reading iPiC3D/ECsim simulation data in h5 or pickle format.
+- **closure/trainers.py** — The `Trainer` class: manages configs, logging, datasets, models, and training.
+- **closure/datasets.py** — Data loading utilities: distributed/serial samplers, normalization, filtering, patch extraction.
+- **closure/models.py** — Model definitions: MLP, FCNN, ResNet, and the `PyNet` training wrapper.
+- **closure/utilities.py** — Utility functions: config handling, evaluation, plotting, and more.
+- **closure/read_pic.py** — Functions for reading iPiC3D/ECsim simulation data in h5 or pickle format.
 
 ## Datasets and Data Loading
 
@@ -170,7 +170,8 @@ closure provides a powerful and flexible system for loading, preprocessing, and 
 ### Example Usage
 
 ```python
-from closure.src.datasets import DataFrameDataset, ChannelDataLoader
+from closure.datasets import DataFrameDataset
+from closure.dataloaders import ChannelDataLoader
 
 dataset = DataFrameDataset(
     data_folder='/path/to/data',

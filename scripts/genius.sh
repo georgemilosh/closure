@@ -37,4 +37,4 @@ echo "pwd     : [$(pwd)]" >> ~/job_logs/job_${SLURM_JOB_ID}.log
 source ~/.bashrc
 mamba activate huggingface_hub
 cd $REPO_DIR
-srun python -m src.trainers --work_dir "$OUTPUT_DIR" --force --run "$SLURM_NNODES-$SLURM_NTASKS-$SLURM_CPUS_PER_TASK"
+srun python -m closure.trainers --work_dir "$OUTPUT_DIR" --force --run "$SLURM_NNODES-$SLURM_NTASKS-$SLURM_CPUS_PER_TASK"

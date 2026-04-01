@@ -24,7 +24,7 @@ The `Trainer` class manages the full lifecycle of a machine learning experiment:
 ### Command Line
 
 ```bash
-python -m src.trainers --config work_dir=work_dir --config run=run --config model_kwargs.model_name=ResNet
+python -m closure.trainers --config work_dir=work_dir --config run=run --config model_kwargs.model_name=ResNet
 ```
 
 - Use `--config key=value` to update nested config keys. For nested keys, use dot notation (e.g., `model_kwargs.model_name=ResNet`).
@@ -33,7 +33,7 @@ python -m src.trainers --config work_dir=work_dir --config run=run --config mode
 ### Example (Python)
 
 ```python
-from closure.src.trainers import Trainer
+from closure.trainers import Trainer
 
 trainer = Trainer(
     work_dir="experiments/my_experiment",
@@ -47,7 +47,7 @@ trainer.fit()
 
 Assuming you ran a series of experiments you may now run the following line to compute the metrics over all the runs in the `work_dir`:
 ```bash
-python -m src.run_compare_runs --work_dir /volume1/scratch/georgem/closure/models/peppe/sigma0_haydn/FCNN/P
+python scripts/run_compare_runs.py --work_dir /volume1/scratch/georgem/closure/models/peppe/sigma0_haydn/FCNN/P
 ```
 This allows us to precompute the prediction skills over the range of training runs in this folder
 

@@ -1,5 +1,5 @@
 """
-Docstring for closure.src.logconfig
+Docstring for closure.logconfig
 
 To be used for setting up logging configuration for the closure library. 
 This includes setting up a root logger with a console handler, and providing a function to add file handlers to specific loggers. 

@@ -51,5 +51,5 @@ echo "pwd     : [$(pwd)]" >> ~/job_logs/job_${SLURM_JOB_ID}.log
 
 # Run the program
 cd $REPO_DIR
-#srun python -m src.trainers --force --work_dir "$OUTPUT_DIR"
-srun python -m src.trainers --force --config work_dir="$OUTPUT_DIR" --config run="test" --config model_kwargs.optimizer_kwargs.lr=0.001
+#srun python -m closure.trainers --force --work_dir "$OUTPUT_DIR"
+srun python -m closure.trainers --force --config work_dir="$OUTPUT_DIR" --config run="test" --config model_kwargs.optimizer_kwargs.lr=0.001

@@ -15,7 +15,7 @@ Features:
 - Provides logging and timing options.
 Usage:
     # Option 1: Single run with complex config (your original example)
-        srun python -m src.runs --force \
+        srun python -m closure.runs --force \
         --config work_dir="$OUTPUT_DIR" \
         --config run="shallow" \
         --config 'model_kwargs.channels=[10,64,16,6]' \
@@ -24,7 +24,7 @@ Usage:
         --config model_kwargs.optimizer_kwargs.lr=0.001
 
     # Option 2: Learning rate sweep (uncomment to use)
-        srun python -m src.runs --force \
+        srun python -m closure.runs --force \
           --config work_dir="$OUTPUT_DIR" \
           --lr-sweep 0.0001 0.0005 0.001 0.005
 
@@ -49,7 +49,7 @@ Usage:
              }
            }
          ]'
-        srun python -m src.runs --force --config work_dir="$OUTPUT_DIR" --runs "$MULTIPLE_RUNS"
+        srun python -m closure.runs --force --config work_dir="$OUTPUT_DIR" --runs "$MULTIPLE_RUNS"
 Arguments:
     --force              : Force the training to start even if the run exists.
     --timing_name        : Name of the timing CSV file.

@@ -66,5 +66,5 @@ echo "pwd     : [$(pwd)]" >> ~/job_logs/job_${SLURM_JOB_ID}.log
 cd $REPO_DIR
 
 # Run the downscale.py script with the provided arguments
-echo python -m src.run_compare_runs --work_dir $WORK_DIR
-python -m src.run_compare_runs --work_dir $WORK_DIR
+echo python scripts/run_compare_runs.py --work_dir $WORK_DIR
+python scripts/run_compare_runs.py --work_dir $WORK_DIR

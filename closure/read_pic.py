@@ -1,14 +1,39 @@
-import numpy as np
-import os
-import re
-from . import utilities as ut
-import scipy.ndimage as nd
-import pickle
+from __future__ import annotations
+
 import glob
+import os
+import pickle
+import re
 import shutil
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import scipy.ndimage as nd
+
+from .config import load_paths
+from .plasma import do_cross, highdiff
+from .utilities import species_to_list
 
 import logging
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "apply_filters",
+    "build_XY",
+    "convert_ipic3d_to_ecsim_h5",
+    "find_field_in_hdf5",
+    "get_exp_times",
+    "get_experiments",
+    "get_saved_iterations",
+    "ipic3D_available_cycles",
+    "parse_simulation_data",
+    "read_data",
+    "read_data_ipic3d",
+    "read_features_targets",
+    "read_fieldname",
+    "read_ipic3d_field",
+]
 
 # Define global default values
 DEFAULT_CHOOSE_X = None
@@ -17,8 +42,16 @@ DEFAULT_CHOOSE_Z = None
 DEFAULT_INDEXING = 'ij'
 DEFAULT_VERBOSE = False
 
+
+def _resolve_files_path(files_path: str | os.PathLike[str] | None) -> str:
+    """Resolve a data path, falling back to ``paths.yaml`` when omitted."""
+    if files_path is None:
+        files_path = load_paths().get("data_dir", "./data")
+    return str(Path(files_path).expanduser())
+
 def get_saved_iterations(files_path, experiment, choose_times=None):
     """Return sorted saved field iterations and corresponding simulation times."""
+    files_path = _resolve_files_path(files_path)
     exp_path = os.path.join(files_path, experiment)
     parser = parse_simulation_data(exp_path)
     
@@ -42,6 +75,7 @@ def ipic3D_available_cycles(files_path):
     Returns:
     - list: A sorted list of available cycle identifiers.
     """
+    files_path = _resolve_files_path(files_path)
     all_hdf_files = sorted(glob.glob(os.path.join(files_path, "proc*.hdf")))
     sim_data = parse_simulation_data(files_path)
     dt = sim_data['dt']
@@ -102,6 +136,7 @@ def read_ipic3d_field(files_path, cycles, fieldname, choose_x=DEFAULT_CHOOSE_X, 
     - numpy.ndarray: A subset of the field, with the z-dimension removed.
 
     """
+    files_path = _resolve_files_path(files_path)
     sim_data = parse_simulation_data(files_path)
     nxc = sim_data['nxc']
     nyc = sim_data['nyc']
@@ -175,6 +210,7 @@ def read_data_ipic3d(files_path, cycles, fields_to_read, qom=None, choose_specie
     - q: The heat flux.
     
     """
+    files_path = _resolve_files_path(files_path)
     if choose_species is None:
         choose_species = _detect_ipic3d_species(files_path)
 
@@ -354,9 +390,9 @@ def read_data_ipic3d(files_path, cycles, fields_to_read, qom=None, choose_specie
         if not 'e' in choose_species:
             raise ValueError(f"Calculating divP_e or Ohmres without electron species cannot be done")
 
-        data['EPx'] = -(ut.highdiff(data['Pxx']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pxy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
-        data['EPy'] = -(ut.highdiff(data['Pxy']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pyy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
-        data['EPz'] = -(ut.highdiff(data['Pxz']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pyz']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
+        data['EPx'] = -(highdiff(data['Pxx']['e'], dx, dy, axis=0, mode='wrap') + highdiff(data['Pxy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
+        data['EPy'] = -(highdiff(data['Pxy']['e'], dx, dy, axis=0, mode='wrap') + highdiff(data['Pyy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
+        data['EPz'] = -(highdiff(data['Pxz']['e'], dx, dy, axis=0, mode='wrap') + highdiff(data['Pyz']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
         
         if "Ohmres" in fields_to_read and fields_to_read["Ohmres"]:
             #logger.info(f"{data['Bx'].shape = }")
@@ -578,6 +614,7 @@ def parse_simulation_data(files_path):
     Returns:
     - dict: A dictionary containing Lx, Ly, Lz, nxc, nyc, nzc, dt, and qom values
     """
+    files_path = _resolve_files_path(files_path)
     try:
         sim_path = files_path
         if os.path.isdir(files_path):
@@ -682,6 +719,7 @@ def build_XY(files_path, choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y,
     Read grid parameters from SimulationData.txt and build coordinate meshgrids.
     Supports both old and new SimulationData.txt formats.
     """
+    files_path = _resolve_files_path(files_path)
     sim_data = parse_simulation_data(files_path)
     
     Lx = sim_data['Lx']
@@ -781,6 +819,7 @@ def read_features_targets(files_path, filenames, fields_to_read=None, request_fe
         features (ndarray): An array containing the extracted features.
         targets (ndarray): An array containing the extracted targets.
     """
+    files_path = _resolve_files_path(files_path)
     # Determine the correct path for SimulationData.txt
     # Try looking in the subdirectory of the first filename, or fall back to files_path
     lookup_path = files_path
@@ -804,13 +843,13 @@ def read_features_targets(files_path, filenames, fields_to_read=None, request_fe
             assert len(choose_x) == len(choose_y), "choose_x and choose_y must have the same length"
             
             features.append(read_files(files_path, filenames, fields_to_read, qom, features_dtype, 
-                          extract_fields=ut.species_to_list(request_features), choose_species=choose_species, 
+                          extract_fields=species_to_list(request_features), choose_species=choose_species, 
                           choose_x=choose_x[i], choose_y=choose_y[i], choose_z=choose_z[i], verbose=verbose))
             if verbose:
                 logger.info(f"{features[-1].shape =}")
             
             targets.append(read_files(files_path, filenames, fields_to_read, qom, targets_dtype,
-                            extract_fields=ut.species_to_list(request_targets), choose_species=choose_species, 
+                            extract_fields=species_to_list(request_targets), choose_species=choose_species, 
                             choose_x=choose_x[i], choose_y=choose_y[i], choose_z=choose_z[i], verbose=verbose)) 
             if verbose:
                 logger.info(f"{targets[-1].shape =}")
@@ -818,10 +857,10 @@ def read_features_targets(files_path, filenames, fields_to_read=None, request_fe
         targets = np.concatenate(targets,axis=2) 
     else:
         features = read_files(files_path, filenames, fields_to_read, qom, features_dtype, 
-                            extract_fields=ut.species_to_list(request_features), choose_species=choose_species, 
+                            extract_fields=species_to_list(request_features), choose_species=choose_species, 
                             choose_x=choose_x, choose_y=choose_y, choose_z=choose_z, verbose=verbose)
         targets = read_files(files_path, filenames, fields_to_read, qom, targets_dtype, 
-                            extract_fields=ut.species_to_list(request_targets), choose_species=choose_species, 
+                            extract_fields=species_to_list(request_targets), choose_species=choose_species, 
                             choose_x=choose_x, choose_y=choose_y, choose_z=choose_z, verbose=verbose)
 
     return features, targets
@@ -881,12 +920,6 @@ def read_files(files_path, filenames, fields_to_read, qom, dtype, extract_fields
     return out2  # we want to have the time as the first index, then x, then y, then the field
 
 
-def do_dot(fx,fy,fz,gx,gy,gz):
-	return fx*gx+fy*gy+fz*gz
-	
-def do_cross(fx,fy,fz,gx,gy,gz):
-	return fy*gz-fz*gy, fz*gx-fx*gz, fx*gy-fy*gx	
-
 def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, 
               choose_z=DEFAULT_CHOOSE_Z, verbose=DEFAULT_VERBOSE, small=1e-10, **kwargs):
     """
@@ -922,6 +955,7 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
     - q: The heat flux.
     
     """
+    files_path = _resolve_files_path(files_path)
     #logger.info(f"{files_path = }")
     #logger.info(f"{filenames = }")
     try:
@@ -1083,9 +1117,9 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
         
         
 
-        data['EPx'] = -(ut.highdiff(data['Pxx']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pxy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
-        data['EPy'] = -(ut.highdiff(data['Pxy']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pyy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
-        data['EPz'] = -(ut.highdiff(data['Pxz']['e'], dx, dy, axis=0, mode='wrap') + ut.highdiff(data['Pyz']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
+        data['EPx'] = -(highdiff(data['Pxx']['e'], dx, dy, axis=0, mode='wrap') + highdiff(data['Pxy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
+        data['EPy'] = -(highdiff(data['Pxy']['e'], dx, dy, axis=0, mode='wrap') + highdiff(data['Pyy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
+        data['EPz'] = -(highdiff(data['Pxz']['e'], dx, dy, axis=0, mode='wrap') + highdiff(data['Pyz']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
         
         if "Ohmres" in fields_to_read and fields_to_read["Ohmres"]:
             #logger.info(f"{data['Bx'].shape = }")
@@ -1230,6 +1264,7 @@ def get_exp_times(experiments, files_path, fields_to_read, choose_species=None, 
     """    
     # Read qom, Lx, Ly, Lz, nxc, nyc, nzc and dt from the SimulationData.txt file.
     
+    files_path = _resolve_files_path(files_path)
     data = {}
     for experiment in experiments:
         logger.info(f" reading {files_path}/{experiment}/SimulationData.txt")
@@ -1300,6 +1335,7 @@ def _detect_ipic3d_species(files_path, sample_file=None):
 
     Returns a list of species suffixes (e.g., ["0", "1"]).
     """
+    files_path = _resolve_files_path(files_path)
     all_hdf_files = sorted(glob.glob(os.path.join(files_path, "proc*.hdf")))
     if not all_hdf_files:
         raise FileNotFoundError(f"No proc*.hdf files found in {files_path}")
@@ -1655,6 +1691,8 @@ def convert_ipic3d_to_ecsim_h5(
     Parameters are provided as kwargs with defaults so the function can be called
     programmatically or via a thin CLI wrapper.
     """
+    input_folder = _resolve_files_path(input_folder)
+    output_folder = str(Path(output_folder).expanduser())
     if fields_to_read is None:
         fields_to_read = _default_ipic3d_fields_to_read()
     if aux_globs is None:

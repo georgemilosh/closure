@@ -32,4 +32,4 @@ echo "MASTER_ADDR="$MASTER_ADDR
 source ~/.bashrc
 mamba activate huggingface_hub
 
-srun python -m src.trainers --work_dir "$OUTPUT_DIR" --force --run "2-2-8"
+srun python -m closure.trainers --work_dir "$OUTPUT_DIR" --force --run "2-2-8"

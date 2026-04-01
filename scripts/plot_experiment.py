@@ -34,14 +34,11 @@ Example:
 """
 
 import argparse
-import sys
 import matplotlib.pyplot as plt
 import matplotlib
+from closure import read_pic as rp
 #matplotlib.use("Agg")
 matplotlib.use("TkAgg")   # or "QtAgg" if your Qt stack works
-
-sys.path.append('/dodrio/scratch/projects/2025_065/georgem/2024_109/closure/')
-import src.read_pic as rp
 
 
 def parse_args():

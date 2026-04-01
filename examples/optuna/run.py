@@ -1,6 +1,6 @@
 import sys
 sys.path.append('/lustre1/project/stg_00032/georgem/closure/')
-import src.trainers as tr
+import closure.trainers as tr
 import optuna
 import pickle
 import logging

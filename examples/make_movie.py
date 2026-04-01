@@ -1,8 +1,8 @@
 import matplotlib.pyplot as plt
 import sys
 sys.path.append('../')
-import src.trainers as tr
-import src.read_pic as rp
+import closure.trainers as tr
+import closure.read_pic as rp
 import os
 import numpy as  np
 import matplotlib.animation as animation

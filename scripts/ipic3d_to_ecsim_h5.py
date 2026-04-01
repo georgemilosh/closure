@@ -17,15 +17,13 @@ Optional overrides:
 """
 
 import argparse
-import sys
-import os
-import logging
 import glob
+import logging
+import os
+import sys
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-import src.read_pic as rp
-import src.utilities as ut
+from closure import read_pic as rp
+from closure.utilities import set_nested_config
 
 
 def _parse_csv_ints(value):
@@ -142,7 +140,7 @@ def main():
         if "=" not in override:
             raise ValueError(f"Invalid --set value: {override}. Expected key=value.")
         key, value = override.split("=", 1)
-        ut.set_nested_config(kwargs, key, value)
+        set_nested_config(kwargs, key, value)
 
     rp.convert_ipic3d_to_ecsim_h5(
         input_folder=args.input_folder,

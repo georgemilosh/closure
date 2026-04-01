@@ -703,11 +703,11 @@ class Trainer:
         """
         if log_dir is not None:
             logconfig.add_file_logger("__main__", log_dir, level=self.log_level, rank=self.rank, local_rank=self.local_rank) 
-            logconfig.add_file_logger("src.trainers", log_dir, level=self.log_level, rank=self.rank, local_rank=self.local_rank)
-            logconfig.add_file_logger("src.models",   log_dir, level=self.log_level, rank=self.rank, local_rank=self.local_rank)
-            logconfig.add_file_logger("src.datasets", log_dir, level=self.log_level, rank=self.rank, local_rank=self.local_rank)
-            logconfig.add_file_logger("src.dataloaders", log_dir, level=self.log_level, rank=self.rank, local_rank=self.local_rank)
-            logconfig.add_file_logger("src.read_pic", log_dir, level=self.log_level, rank=self.rank, local_rank=self.local_rank)
+            logconfig.add_file_logger("closure.trainers", log_dir, level=self.log_level, rank=self.rank, local_rank=self.local_rank)
+            logconfig.add_file_logger("closure.models",   log_dir, level=self.log_level, rank=self.rank, local_rank=self.local_rank)
+            logconfig.add_file_logger("closure.datasets", log_dir, level=self.log_level, rank=self.rank, local_rank=self.local_rank)
+            logconfig.add_file_logger("closure.dataloaders", log_dir, level=self.log_level, rank=self.rank, local_rank=self.local_rank)
+            logconfig.add_file_logger("closure.read_pic", log_dir, level=self.log_level, rank=self.rank, local_rank=self.local_rank)
             logger.info(f" ")
             logger.info(f"===Logging to {log_dir} on level {self.log_level}, @ {self.rank=}, {self.local_rank=}") 
             logger.info(f"host: {os.uname().nodename}, {self.device=} ===")
@@ -723,7 +723,7 @@ def main():
     parser.add_argument('--timing_name', type=str, default=False,
                         help='Name of the timing CSV file. If not provided no timing file will be created')
     parser.add_argument('--config', action='append', default=None, help="Update nested config keys. Use 'key.subkey=value' format")
-    # example usage: python -m closure.src.trainers --config work_dir=work_dir --config run=run --config model_kwargs.model_name=ResNet --config model_kwargs.model_depth=18
+    # example usage: python -m closure.trainers --config work_dir=work_dir --config run=run --config model_kwargs.model_name=ResNet --config model_kwargs.model_depth=18
 
     args = parser.parse_args()
 
