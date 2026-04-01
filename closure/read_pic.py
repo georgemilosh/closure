@@ -476,16 +476,16 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
         try:
             if filename.endswith(".h5"):
                 import h5py
-                with h5py.File(files_path + filename, "r") as n:
+                with h5py.File(os.path.join(files_path, filename), "r") as n:
                     try:
                         temp = np.array(n[f"/Step#0/Block/{fieldname}/0"])
                     except Exception as e:
                         logger.error(f"Unable to open {fieldname = } from {files_path = } of {filename = }")
             elif filename.endswith(".h5.pkl"):
-                with open(files_path + filename, "rb") as n:
+                with open(os.path.join(files_path, filename), "rb") as n:
                     temp = pickle.load(n)[fieldname]
             elif filename.endswith(".npz"):
-                with np.load(files_path + filename) as n:
+                with np.load(os.path.join(files_path, filename)) as n:
                     temp = n[fieldname]
             else:
                 # Assuming that string of integers was passed
@@ -959,10 +959,11 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
     #logger.info(f"{files_path = }")
     #logger.info(f"{filenames = }")
     try:
-        if isinstance(filenames, list):
-            folder_path = files_path + "/" + filenames[0].rsplit("/", 1)[0] + "/"
+        first = filenames[0] if isinstance(filenames, list) else filenames
+        if "/" in first:
+            folder_path = os.path.join(files_path, first.rsplit("/", 1)[0])
         else:
-            folder_path = files_path + "/" + filenames.rsplit("/", 1)[0] + "/"
+            folder_path = files_path
     except Exception as e:
         logger.error(f"Error determining folder path from files_path and filenames: {files_path = }, {filenames = }")
         raise e
@@ -1270,7 +1271,7 @@ def get_exp_times(experiments, files_path, fields_to_read, choose_species=None, 
         logger.info(f" reading {files_path}/{experiment}/SimulationData.txt")
         
         # Parse simulation data using the new unified parser
-        experiment_path = f"{files_path}{experiment}" + os.sep
+        experiment_path = os.path.join(files_path, experiment)
         sim_data = parse_simulation_data(experiment_path)
         
         qom = sim_data['qom']
@@ -1291,7 +1292,7 @@ def get_exp_times(experiments, files_path, fields_to_read, choose_species=None, 
         #dx = Lx/nxc
         #dy = Ly/nyc
         # sorted(os.listdir()) creates a sorted list containing the .h5 filenames, os.listdir() alone would put them in random order.
-        filenames = _collect_experiment_filenames(f"{files_path}{experiment}")
+        filenames = _collect_experiment_filenames(os.path.join(files_path, experiment))
         selected_filenames = _select_filenames_by_time(filenames, choose_times)
         try:
             logger.info(f"selected_filenames = {selected_filenames}")
@@ -1302,7 +1303,7 @@ def get_exp_times(experiments, files_path, fields_to_read, choose_species=None, 
             raise e
         #logger.info(times)
         #logger.info(f"Selected filenames for experiment {experiment}: {selected_filenames}")
-        data[experiment] = read_data(f"{files_path}{experiment}/",selected_filenames,fields_to_read,qom,
+        data[experiment] = read_data(os.path.join(files_path, experiment) + os.sep,selected_filenames,fields_to_read,qom,
                                      choose_species=choose_species,choose_x=choose_x,choose_y=choose_y,choose_z=choose_z,verbose=verbose, **kwargs)
         if choose_x is None:
             choose_x = [0, x.shape[0] - 1]

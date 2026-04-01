@@ -76,3 +76,37 @@ def mock_simulation_dir(tmp_path: pathlib.Path) -> pathlib.Path:
 @pytest.fixture
 def mock_hdf5_path(mock_simulation_dir: pathlib.Path) -> pathlib.Path:
     return mock_simulation_dir / "proc0.hdf"
+
+
+@pytest.fixture
+def mock_ecsim_dir(tmp_path: pathlib.Path) -> pathlib.Path:
+    """Create a mock directory with ECSIM-style field HDF5 files."""
+    sim_dir = tmp_path / "ecsim_mock"
+    sim_dir.mkdir()
+    (sim_dir / "SimulationData.txt").write_text(
+        "Simulation domain = 4 x 3 x 1\n"
+        "Grid resolution = 4 x 3 x 1\n"
+        "Time step size (dt) = 0.25\n"
+        "Charge-to-mass ratio = -1\n"
+        "Charge-to-mass ratio = 1\n"
+    )
+
+    # ECSIM field shape: stored as (nxc+1, nyc+1, nzc+1)
+    shape = (5, 4, 2)
+    rng = np.random.default_rng(42)
+
+    field_names = [
+        "Bx", "By", "Bz", "Ex", "Ey", "Ez",
+        "rho_0", "rho_1",
+        "Jx_0", "Jy_0", "Jz_0", "Jx_1", "Jy_1", "Jz_1",
+    ]
+
+    for cycle_idx, cycle_num in enumerate([0, 2]):
+        fname = f"experiment-Fields_{cycle_num:06d}.h5"
+        with h5py.File(sim_dir / fname, "w") as h5f:
+            block = h5f.create_group("Step#0/Block")
+            for name in field_names:
+                grp = block.create_group(name)
+                grp.create_dataset("0", data=rng.random(shape) + cycle_idx)
+
+    return sim_dir

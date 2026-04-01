@@ -42,10 +42,10 @@ class TestIpic3dIO:
         assert set(data["rho"].keys()) == {"e", "i"}
         assert data["Pxx"]["e"].shape == (4, 3, 2)
 
-    def test_get_exp_times(self, mock_simulation_dir):
-        fields_to_read = {"B": True, "E": False, "rho": False, "J": False, "P": False, "PI": False, "divB": False, "B_ext": False, "E_ext": False, "N": False, "Qrem": False, "Heat_flux": False}
-        data, x, y, qom, times = rp.get_exp_times([mock_simulation_dir.name], str(mock_simulation_dir.parent) + "/", fields_to_read, choose_species=["e", "i"])
-        assert mock_simulation_dir.name in data
+    def test_get_exp_times(self, mock_ecsim_dir):
+        fields_to_read = {"B": True, "E": False, "rho": False, "J": False, "P": False, "PI": False, "divB": False, "B_ext": False, "E_ext": False, "N": False, "Qrem": False, "Heat_flux": False, "EF": False}
+        data, x, y, qom, times = rp.get_exp_times([mock_ecsim_dir.name], str(mock_ecsim_dir.parent) + "/", fields_to_read, choose_species=["e", "i"])
+        assert mock_ecsim_dir.name in data
         assert x.shape == (4, 3)
         assert y.shape == (4, 3)
         assert qom == [-1.0, 1.0]
