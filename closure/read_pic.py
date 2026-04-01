@@ -824,7 +824,7 @@ def read_features_targets(files_path, filenames, fields_to_read=None, request_fe
     # Try looking in the subdirectory of the first filename, or fall back to files_path
     lookup_path = files_path
     try:
-        lookup_path = files_path + filenames[0].rsplit("/", 1)[0] + os.sep
+        lookup_path = os.path.join(files_path, filenames[0].rsplit("/", 1)[0]) + os.sep
     except Exception:
         lookup_path = files_path
     
