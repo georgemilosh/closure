@@ -57,6 +57,8 @@ from  . import read_pic as rp
 import logging
 logger = logging.getLogger(__name__)
 
+__all__ = ["DataFrameDataset"]
+
 
 import copy
 

@@ -52,7 +52,7 @@ except ImportError:
 import logging
 logger = logging.getLogger(__name__)
 
-__all__ = ["DistributedSampler", ]
+__all__ = ["DistributedSampler", "SubSampler", "ChannelDataLoader"]
 
 T_co = TypeVar('T_co', covariant=True)
 
