@@ -88,6 +88,31 @@ def _extract_fields_and_species_from_names(names):
     return fields, species_indices
 
 
+def _is_empty_data_value(value):
+    """Return whether a loaded data value should be considered empty."""
+    if value is None:
+        return True
+    if isinstance(value, dict):
+        return len(value) == 0
+    if isinstance(value, (list, tuple, set, str)):
+        return len(value) == 0
+    if isinstance(value, np.ndarray):
+        return value.size == 0
+    return False
+
+
+def _collect_empty_data_keys(data):
+    """Collect empty top-level keys and nested empty dict entries."""
+    empty_keys = [key for key, value in data.items() if _is_empty_data_value(value)]
+    empty_nested_keys = {
+        key: [subkey for subkey, subvalue in value.items() if _is_empty_data_value(subvalue)]
+        for key, value in data.items()
+        if isinstance(value, dict)
+    }
+    empty_nested_keys = {key: subkeys for key, subkeys in empty_nested_keys.items() if subkeys}
+    return empty_keys, empty_nested_keys
+
+
 def ecsim_available_run_info(files_path, experiment=None):
     """Return available cycles, fields, and species indices for an ECSIM run.
 
@@ -560,14 +585,27 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
     if not isinstance(filenames, list):
         filenames = [filenames]
     for filename in filenames:
+        current_file_path = os.path.join(files_path, filename)
         try:
             if filename.endswith(".h5"):
                 import h5py
-                with h5py.File(os.path.join(files_path, filename), "r") as n:
+                with h5py.File(current_file_path, "r") as n:
                     try:
                         temp = np.array(n[f"/Step#0/Block/{fieldname}/0"])
                     except Exception as e:
-                        logger.error(f"Unable to open {fieldname = } from {files_path = } of {filename = }")
+                        available_fields = []
+                        try:
+                            if "/Step#0/Block" in n:
+                                available_fields = list(n["/Step#0/Block"].keys())
+                            else:
+                                available_fields = list(n.keys())
+                        except Exception:
+                            available_fields = []
+                        logger.error(
+                            f"Unable to open {fieldname = } from {files_path = } of {filename = }. "
+                            f"Available fields: {available_fields}"
+                        )
+                        raise e
             elif filename.endswith(".h5.pkl"):
                 with open(os.path.join(files_path, filename), "rb") as n:
                     temp = pickle.load(n)[fieldname]
@@ -644,7 +682,13 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
             #temp = temp.reshape([d for d in temp.shape if d != 0]) # remove dimensions of size 0
             field.append(temp)
         except Exception as e:
-            logger.warning(f"Failed to read {fieldname} from {filename} using path {files_path}. Available fields: {list(n.keys())}")
+            if isinstance(e, PermissionError):
+                logger.error(
+                    f"Permission denied while reading {fieldname} from {current_file_path}. "
+                    "Check file/folder ACLs and group permissions."
+                )
+            else:
+                logger.warning(f"Failed to read {fieldname} from {filename} using path {files_path}: {e}")
             #logger.warning(f"{temp.shape = }")
             raise e
     a = np.moveaxis(np.array(field), 0, -1)
@@ -1266,6 +1310,11 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                 #logger.info(f"{data[f'q{component}'].keys() = }")
             if 'EF' not in fields_to_read or not fields_to_read['EF']:
                 del data[f'EF{component}']
+    empty_keys, empty_nested_keys = _collect_empty_data_keys(data)
+    if empty_keys:
+        logger.warning(f"read_data empty top-level keys: {empty_keys}")
+    if empty_nested_keys:
+        logger.warning(f"read_data empty nested keys: {empty_nested_keys}")
     return data
 
 
