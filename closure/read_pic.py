@@ -22,6 +22,7 @@ __all__ = [
     "apply_filters",
     "build_XY",
     "convert_ipic3d_to_ecsim_h5",
+    "ecsim_available_run_info",
     "find_field_in_hdf5",
     "get_exp_times",
     "get_experiments",
@@ -67,6 +68,92 @@ def get_saved_iterations(files_path, experiment, choose_times=None):
     saved_times = [parser['dt']*iteration for iteration in saved_iterations]
 
     return saved_iterations, saved_times    
+
+
+def _extract_fields_and_species_from_names(names):
+    """Parse field names and species indices from dataset/key names.
+
+    Species-dependent fields are commonly stored as e.g. ``Jx_0`` or
+    ``rho_1`` in ECSIM-style outputs.
+    """
+    fields = set()
+    species_indices = set()
+    for name in names:
+        match = re.match(r"(.+)_([0-9]+)$", str(name))
+        if match:
+            fields.add(match.group(1))
+            species_indices.add(int(match.group(2)))
+        else:
+            fields.add(str(name))
+    return fields, species_indices
+
+
+def ecsim_available_run_info(files_path, experiment=None):
+    """Return available cycles, fields, and species indices for an ECSIM run.
+
+    Parameters:
+    - files_path (str): Base data directory, or the run directory itself.
+    - experiment (str, optional): Run subdirectory name under ``files_path``.
+
+    Returns:
+    - dict with keys:
+        - ``cycles`` (list[int]): Sorted available iterations/cycles.
+        - ``fields`` (list[str]): Sorted available field names.
+        - ``species_indices`` (list[int]): Sorted available species indices.
+        - ``qom`` (list[float]): Charge-to-mass ratios from SimulationData.txt.
+    """
+    files_path = _resolve_files_path(files_path)
+    run_path = os.path.join(files_path, experiment) if experiment else files_path
+    if not os.path.isdir(run_path):
+        raise FileNotFoundError(f"Run directory not found: {run_path}")
+
+    filenames = _collect_experiment_filenames(run_path)
+    if not filenames:
+        raise FileNotFoundError(f"No ECSIM field files found in {run_path}")
+
+    sim_data = parse_simulation_data(run_path)
+    qom = sim_data.get("qom", [])
+
+    cycles = sorted({
+        int(match.group(1))
+        for name in filenames
+        for match in [re.search(r"(\d+)(?:\.h5(?:\.pkl)?|\.npz)?$", str(name))]
+        if match
+    })
+
+    sample = filenames[0]
+    fields = set()
+    species_indices = set()
+
+    if str(sample).endswith(".h5"):
+        import h5py
+
+        with h5py.File(os.path.join(run_path, sample), "r") as h5f:
+            if "Step#0" in h5f and "Block" in h5f["Step#0"]:
+                names = list(h5f["Step#0"]["Block"].keys())
+                fields, species_indices = _extract_fields_and_species_from_names(names)
+            elif "Fields" in h5f:
+                names = list(h5f["Fields"].keys())
+                fields, species_indices = _extract_fields_and_species_from_names(names)
+            else:
+                names = list(h5f.keys())
+                fields, species_indices = _extract_fields_and_species_from_names(names)
+    elif str(sample).endswith(".npz"):
+        with np.load(os.path.join(run_path, sample)) as npzf:
+            names = list(npzf.keys())
+            fields, species_indices = _extract_fields_and_species_from_names(names)
+    elif str(sample).endswith(".h5.pkl"):
+        with open(os.path.join(run_path, sample), "rb") as pklf:
+            data = pickle.load(pklf)
+        names = list(data.keys())
+        fields, species_indices = _extract_fields_and_species_from_names(names)
+
+    return {
+        "cycles": cycles,
+        "fields": sorted(fields),
+        "species_indices": sorted(species_indices),
+        "qom": qom,
+    }
 
 def ipic3D_available_cycles(files_path):
     """
