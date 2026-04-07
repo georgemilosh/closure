@@ -51,7 +51,11 @@ def _resolve_files_path(files_path: str | os.PathLike[str] | None) -> str:
     return str(Path(files_path).expanduser())
 
 def get_saved_iterations(files_path, experiment, choose_times=None):
-    """Return sorted saved field iterations and corresponding simulation times."""
+    """Return sorted saved field iterations and corresponding simulation times.
+    Example:
+        saved_iterations, saved_times  = rp.get_saved_iterations(files_path, experiment)
+        saved_iterations.index(17100)
+    """
     files_path = _resolve_files_path(files_path)
     exp_path = os.path.join(files_path, experiment)
     parser = parse_simulation_data(exp_path)

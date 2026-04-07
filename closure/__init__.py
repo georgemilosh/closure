@@ -2,21 +2,24 @@
 closure — ML framework for fluid closure of PIC plasma simulations.
 """
 
-from closure.config import TrainerConfig, load_paths, load_config
-from closure.trainers import Trainer
-from closure.models import PyNet
+from closure.config import load_paths
+from closure.module import ClosureLitModule
+from closure.datamodule import ClosureDataModule
+from closure.models import CNet, FCNN, ResNet, MLP
 from closure.datasets import DataFrameDataset
 from closure.plasma import get_Ohm, get_PS_2D_field, get_Az, get_J_perp
 from closure.read_pic import get_exp_times, read_data_ipic3d, build_XY
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
-    "TrainerConfig",
     "load_paths",
-    "load_config",
-    "Trainer",
-    "PyNet",
+    "ClosureLitModule",
+    "ClosureDataModule",
+    "CNet",
+    "FCNN",
+    "ResNet",
+    "MLP",
     "DataFrameDataset",
     "get_Ohm",
     "get_PS_2D_field",

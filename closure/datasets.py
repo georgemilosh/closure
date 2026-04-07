@@ -38,6 +38,7 @@ Description:
     
 """
 
+import inspect
 import numpy
 try:
     import torch
@@ -243,12 +244,27 @@ class DataFrameDataset(torch.utils.data.Dataset):
         self.filenames = self.dataframe[self.image_file_name_column].tolist()
         
         
+        # Keep only kwargs accepted by read_pic.read_features_targets to avoid
+        # breaking when notebook/config carries stale keys from older APIs.
+        valid_params = set(inspect.signature(rp.read_features_targets).parameters.keys())
+        filtered_kwargs = {
+            k: v for k, v in self.read_features_targets_kwargs.items() if k in valid_params
+        }
+        dropped_kwargs = sorted(
+            k for k in self.read_features_targets_kwargs.keys() if k not in valid_params
+        )
+        if dropped_kwargs:
+            logger.warning(
+                "Ignoring unsupported read_features_targets kwargs: %s",
+                dropped_kwargs,
+            )
+
         # Load features and targets from files
         self.features, self.targets = rp.read_features_targets(
             self.data_folder, self.filenames,
             features_dtype=self.features_dtype_numpy,
             targets_dtype=self.targets_dtype_numpy,
-            **self.read_features_targets_kwargs
+            **filtered_kwargs
         )
         
         # Apply filtering if configured

@@ -70,40 +70,38 @@ class TestComputeLoss:
 # ---------------------------------------------------------------------------
 # evaluate_loss
 # ---------------------------------------------------------------------------
-def _make_trainer_stub(n_samples=10, n_channels=2):
-    """Create a minimal Trainer mock with the attributes evaluation.py accesses."""
-    trainer = MagicMock()
-    trainer.test_loader.target_channels = list(range(n_channels))
-    trainer.test_dataset.prescaler_targets = [None] * n_channels
-    trainer.test_dataset.request_targets = [f"target_{i}" for i in range(n_channels)]
-    return trainer
+def _make_dataset_stub(n_channels=2):
+    """Create a minimal dataset mock with the attributes evaluation.py accesses."""
+    dataset = MagicMock()
+    dataset.prescaler_targets = [None] * n_channels
+    dataset.request_targets = [f"target_{i}" for i in range(n_channels)]
+    return dataset
 
 
 class TestEvaluateLoss:
     def test_returns_dict(self):
-        trainer = _make_trainer_stub(n_samples=10, n_channels=2)
+        dataset = _make_dataset_stub(n_channels=2)
         gt = torch.rand(10, 2)
         pred = gt.clone()
-        result = ev.evaluate_loss(trainer, gt, pred, "MSELoss", verbose=False)
+        result = ev.evaluate_loss(dataset, gt, pred, "MSELoss", verbose=False)
         assert isinstance(result, dict)
         assert "total_MSELoss" in result
         assert "target_0_MSELoss" in result
         assert "target_1_MSELoss" in result
 
     def test_perfect_prediction_zero_loss(self):
-        trainer = _make_trainer_stub(n_samples=10, n_channels=2)
+        dataset = _make_dataset_stub(n_channels=2)
         gt = torch.rand(10, 2)
         pred = gt.clone()
-        result = ev.evaluate_loss(trainer, gt, pred, "MSELoss", verbose=False)
+        result = ev.evaluate_loss(dataset, gt, pred, "MSELoss", verbose=False)
         assert float(result["total_MSELoss"]) == pytest.approx(0.0, abs=1e-6)
 
-    def test_target_channels_none(self):
-        trainer = _make_trainer_stub(n_samples=10, n_channels=3)
-        trainer.test_loader.target_channels = None
+    def test_target_channels_subset(self):
+        dataset = _make_dataset_stub(n_channels=3)
         gt = torch.rand(10, 3)
         pred = gt.clone()
-        result = ev.evaluate_loss(trainer, gt, pred, "MSELoss", verbose=False)
-        assert len(result) == 4  # total + 3 channels
+        result = ev.evaluate_loss(dataset, gt, pred, "MSELoss", target_channels=[0, 2], verbose=False)
+        assert len(result) == 3  # total + 2 channels
 
 
 # ---------------------------------------------------------------------------
@@ -111,37 +109,37 @@ class TestEvaluateLoss:
 # ---------------------------------------------------------------------------
 class TestPrediction2Data:
     def test_simple_targets(self):
-        trainer = MagicMock()
-        trainer.test_dataset.request_targets = ["Bx", "By"]
-        trainer.test_dataset.flatten = False
+        dataset = MagicMock()
+        dataset.request_targets = ["Bx", "By"]
+        dataset.flatten = False
 
         data = {"Bx": np.zeros((4, 5, 3)), "By": np.zeros((4, 5, 3))}
         # shape (N, C, H, W) = (3, 2, 4, 5)
         pred = np.random.randn(3, 2, 4, 5)
-        result = ev.prediction2data(data, trainer, pred)
+        result = ev.prediction2data(data, dataset, pred)
         assert result is data
         np.testing.assert_array_equal(result["Bx"], pred[:, 0, ...].transpose([1, 2, 0]))
         np.testing.assert_array_equal(result["By"], pred[:, 1, ...].transpose([1, 2, 0]))
 
     def test_nested_targets(self):
-        trainer = MagicMock()
-        trainer.test_dataset.request_targets = ["ions_vx"]
-        trainer.test_dataset.flatten = False
+        dataset = MagicMock()
+        dataset.request_targets = ["ions_vx"]
+        dataset.flatten = False
 
         data = {"ions": {"vx": np.zeros((4, 5, 3))}}
         pred = np.random.randn(3, 1, 4, 5)
-        ev.prediction2data(data, trainer, pred)
+        ev.prediction2data(data, dataset, pred)
         np.testing.assert_array_equal(data["ions"]["vx"], pred[:, 0, ...].transpose([1, 2, 0]))
 
     def test_flatten_mode(self):
-        trainer = MagicMock()
-        trainer.test_dataset.request_targets = ["Bx"]
-        trainer.test_dataset.flatten = True
+        dataset = MagicMock()
+        dataset.request_targets = ["Bx"]
+        dataset.flatten = True
 
         data = {"Bx": np.zeros((4, 5, 3))}
         # shape (H, W, T, C) when flatten
         pred = np.random.randn(4, 5, 3, 1)
-        ev.prediction2data(data, trainer, pred)
+        ev.prediction2data(data, dataset, pred)
         np.testing.assert_array_equal(data["Bx"], pred[..., 0].transpose([1, 2, 0]))
 
 
@@ -172,12 +170,12 @@ class TestBackwardCompat:
 
     def test_prediction2data_via_utilities(self):
         from closure.utilities import prediction2data
-        trainer = MagicMock()
-        trainer.test_dataset.request_targets = ["Bx"]
-        trainer.test_dataset.flatten = False
+        dataset = MagicMock()
+        dataset.request_targets = ["Bx"]
+        dataset.flatten = False
         data = {"Bx": np.zeros((4, 5, 3))}
         pred = np.random.randn(3, 1, 4, 5)
-        prediction2data(data, trainer, pred)
+        prediction2data(data, dataset, pred)
         assert data["Bx"].shape == (4, 5, 3)
 
     def test_unnormalize_output_via_utilities(self):
