@@ -113,23 +113,60 @@ class ClosureLitModule(L.LightningModule):
         if self.hparams.scheduler is None:
             return optimizer
 
-        scheduler_cls = getattr(torch.optim.lr_scheduler, self.hparams.scheduler)
         scheduler_kw = dict(self.hparams.scheduler_kwargs or {})
+        interval = scheduler_kw.pop("interval", "epoch")
+        frequency = scheduler_kw.pop("frequency", 1)
 
         # Backward compatibility: older configs sometimes pass scheduler name
         # inside scheduler_kwargs; remove it before scheduler init.
         scheduler_kw.pop("scheduler", None)
-        scheduler = scheduler_cls(optimizer, **scheduler_kw)
+        scheduler = self._build_scheduler(
+            optimizer=optimizer,
+            scheduler_name=self.hparams.scheduler,
+            scheduler_kwargs=scheduler_kw,
+        )
+
+        scheduler_config = {
+            "scheduler": scheduler,
+            "interval": interval,
+            "frequency": frequency,
+        }
+        if self.hparams.scheduler == "ReduceLROnPlateau":
+            scheduler_config["monitor"] = "val_loss"
 
         return {
             "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "monitor": "val_loss",
-                "interval": "epoch",
-                "frequency": 1,
-            },
+            "lr_scheduler": scheduler_config,
         }
+
+    def _build_scheduler(
+        self,
+        optimizer: torch.optim.Optimizer,
+        scheduler_name: str,
+        scheduler_kwargs: dict,
+    ):
+        scheduler_cls = getattr(torch.optim.lr_scheduler, scheduler_name)
+
+        if scheduler_name in {"SequentialLR", "ChainedScheduler"}:
+            scheduler_specs = scheduler_kwargs.pop("schedulers", None)
+            if not scheduler_specs:
+                raise ValueError(
+                    f"{scheduler_name} requires a non-empty 'schedulers' list in scheduler_kwargs."
+                )
+            schedulers = []
+            for spec in scheduler_specs:
+                child_name = spec["name"]
+                child_kwargs = dict(spec.get("kwargs", {}))
+                schedulers.append(
+                    self._build_scheduler(
+                        optimizer=optimizer,
+                        scheduler_name=child_name,
+                        scheduler_kwargs=child_kwargs,
+                    )
+                )
+            return scheduler_cls(optimizer, schedulers=schedulers, **scheduler_kwargs)
+
+        return scheduler_cls(optimizer, **scheduler_kwargs)
 
     # ------------------------------------------------------------------
     # Helpers

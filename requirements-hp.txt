@@ -1,0 +1,19 @@
+# Hyperparameter optimization dependencies
+# Install with: pip install -r requirements-hp.txt
+# This includes all core dependencies plus optuna and analysis tools
+
+-r requirements.txt
+
+# Hyperparameter optimization
+optuna>=3.0
+optuna-integration>=3.0
+
+# Analysis and visualization
+scikit-learn>=1.0
+plotly>=5.0
+
+# Notebook support
+nbformat>=4.2
+jupyter>=1.0
+ipykernel>=6.0
+notebook>=6.0

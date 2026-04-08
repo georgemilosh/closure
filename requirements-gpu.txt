@@ -1,0 +1,28 @@
+# GPU/CUDA dependencies for closure package
+# 
+# Choose ONE of the following based on your CUDA version and install AFTER the core requirements.
+# 
+# CUDA 12.4 (Recommended):
+#   pip install -r requirements.txt
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+#
+# CUDA 12.1:
+#   pip install -r requirements.txt
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+#
+# CUDA 11.8:
+#   pip install -r requirements.txt
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+#
+# CPU-only (no GPU):
+#   pip install -r requirements.txt
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+#
+# For GPU + Hyperparameter Optimization:
+#   pip install -r requirements-hp.txt
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+
+# GPU-enabled PyTorch packages (specify one index-url above)
+torch>=2.6.0
+torchvision>=0.21.0
+torchaudio>=2.6.0

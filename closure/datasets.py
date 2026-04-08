@@ -65,6 +65,49 @@ import copy
 
 T_co = TypeVar('T_co', covariant=True)
 
+
+class _Compose:
+    """Lightweight transform compose to avoid torchvision dependency."""
+
+    def __init__(self, transforms):
+        self.transforms = transforms
+
+    def __call__(self, x):
+        for transform in self.transforms:
+            x = transform(x)
+        return x
+
+
+class _RandomCrop:
+    """Random crop for CHW tensors using torch RNG state."""
+
+    def __init__(self, size):
+        if not isinstance(size, (list, tuple)) or len(size) != 2:
+            raise ValueError(f"RandomCrop size must be a 2-item list/tuple, got: {size}")
+        self.crop_h = int(size[0])
+        self.crop_w = int(size[1])
+
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        if x.ndim != 3:
+            raise ValueError(f"RandomCrop expects CHW tensor, got shape {tuple(x.shape)}")
+
+        _, height, width = x.shape
+        if self.crop_h > height or self.crop_w > width:
+            raise ValueError(
+                f"Crop size {(self.crop_h, self.crop_w)} exceeds input spatial shape {(height, width)}"
+            )
+
+        max_top = height - self.crop_h
+        max_left = width - self.crop_w
+        top = 0 if max_top == 0 else int(torch.randint(0, max_top + 1, (1,)).item())
+        left = 0 if max_left == 0 else int(torch.randint(0, max_left + 1, (1,)).item())
+        return x[:, top:top + self.crop_h, left:left + self.crop_w]
+
+
+_LOCAL_TRANSFORMS = {
+    "RandomCrop": _RandomCrop,
+}
+
 class DataFrameDataset(torch.utils.data.Dataset):
     
     """
@@ -495,11 +538,18 @@ class DataFrameDataset(torch.utils.data.Dataset):
         apply_to_splits = transform.pop('apply', [])
         
         if self.datalabel in apply_to_splits:
-            from torchvision.transforms import v2
             logger.info(f"Applying transforms to {self.datalabel} set: {list(transform.keys())}")
-            
-            transform_list = [getattr(v2, name)(**params) for name, params in transform.items()]
-            self.transform = v2.Compose(transform_list)
+
+            transform_list = []
+            for name, params in transform.items():
+                if name not in _LOCAL_TRANSFORMS:
+                    raise ValueError(
+                        f"Unsupported transform '{name}'. Supported transforms without torchvision: "
+                        f"{sorted(_LOCAL_TRANSFORMS.keys())}"
+                    )
+                transform_list.append(_LOCAL_TRANSFORMS[name](**params))
+
+            self.transform = _Compose(transform_list)
         else:
             logger.info(f"No transforms applied to {self.datalabel} set")
             self.transform = None

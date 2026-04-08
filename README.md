@@ -23,14 +23,151 @@ The training stack is now based on PyTorch Lightning.
 
 ## Installation
 
+### Basic Installation
+
 ```bash
 pip install -e .
 ```
 
-Optional hyper-parameter search extras:
+This installs the core framework with PyTorch, PyTorch Lightning, and essential utilities.
+
+### Optional Dependencies
+
+We provide several optional extras for different use cases:
+
+**Hyperparameter Optimization (Optuna)**
+
+For hyperparameter search with Optuna, install the `hp` extra:
 
 ```bash
 pip install -e ".[hp]"
+```
+
+Includes: `optuna`, `optuna-integration`, `scikit-learn`, `plotly`, `nbformat`
+
+**Jupyter Notebooks**
+
+For interactive notebook development:
+
+```bash
+pip install -e ".[notebook]"
+```
+
+Includes: `jupyter`, `ipykernel`, `notebook`
+
+**Combined Installation (HP + Notebooks)**
+
+```bash
+pip install -e ".[hp,notebook]"
+```
+
+**Development**
+
+For development, testing, and linting:
+
+```bash
+pip install -e ".[dev]"
+```
+
+Includes: `pytest`, `pytest-cov`, `ruff`, `pre-commit`
+
+### GPU/CUDA Support
+
+The package includes PyTorch but defaults to CPU. To enable GPU support, install PyTorch with the appropriate CUDA toolkit:
+
+**CUDA 12.4 (Recommended):**
+
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+```
+
+**CUDA 12.1:**
+
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
+
+**CPU-only (no GPU):**
+
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+```
+
+Verify GPU support after installation:
+
+```python
+import torch
+print(f"CUDA available: {torch.cuda.is_available()}")
+print(f"Device count: {torch.cuda.device_count()}")
+```
+
+### Recommended Installation for Hyperparameter Sweep Workflows
+
+If you want to use the Optuna hyperparameter sweep functionality with GPU acceleration:
+
+```bash
+# Install core + hyperparameter optimization + notebooks
+pip install -e ".[hp,notebook]"
+
+# Then add GPU support for your platform (e.g., CUDA 12.4)
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+```
+
+### Quick Start with Requirements Files
+
+We provide pre-made requirements files for common workflows:
+
+**Core only (CPU):**
+```bash
+pip install -r requirements.txt
+```
+
+**Hyperparameter optimization (Optuna + analysis):**
+```bash
+pip install -r requirements-hp.txt
+```
+
+**Development and testing:**
+```bash
+pip install -r requirements-dev.txt
+```
+
+**GPU support with CUDA 12.4:**
+```bash
+pip install -r requirements.txt
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+```
+
+**Full stack (HP + GPU + Dev):**
+```bash
+pip install -r requirements-dev.txt
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+```
+
+See `requirements-gpu.txt` for detailed instructions on GPU installation for different CUDA versions.
+
+## Verifying Installation
+
+Test that everything is installed correctly:
+
+```bash
+# Test core imports
+python -c "import closure; import lightning; import torch; print('✅ Core packages OK')"
+
+# Test optional imports (if installed with [hp])
+python -c "import optuna; import plotly; import sklearn; print('✅ HP packages OK')"
+
+# Test notebook imports (if installed with [notebook])
+python -c "import jupyter; import ipykernel; print('✅ Notebook packages OK')"
+
+# Test GPU (if CUDA enabled)
+python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}'); print(f'Device count: {torch.cuda.device_count()}')"
+
+# Test CLI
+closure-train --help
+
+# Test Optuna sweep (hyperparameter optimization)
+python examples/optuna/harris_optuna_sweep.py --help
 ```
 
 ## Quick Start (Python API)
@@ -107,6 +244,7 @@ Legacy files like `loss_dict.pkl` are no longer used.
 - `examples/tuto_train_haydn.ipynb`: real-data tutorial (Lightning update section added at top)
 - `examples/tuto_train_synthetic.ipynb`: synthetic-data tutorial (Lightning update section added at top)
 - `examples/optuna/optuna_sweep.py`: Optuna sweep example with Lightning
+- `examples/optuna/harris_optuna_sweep.py`: Harris Le2GEM15ppc Optuna sweep for FCNN experiments
 
 ## Notes on Migration
 

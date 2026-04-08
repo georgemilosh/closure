@@ -29,7 +29,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "pytest-cov>=4.0", "ruff>=0.4", "pre-commit>=3.0"]
-hp = ["optuna>=3.0", "optuna-integration>=3.0"]
+hp = ["optuna>=3.0", "optuna-integration>=3.0", "scikit-learn>=1.0", "plotly>=5.0", "nbformat>=4.2"]
+notebook = ["jupyter>=1.0", "ipykernel>=6.0", "notebook>=6.0"]
 # NOTE: For GPU/CUDA support, install torch separately with the appropriate
 # --index-url for your CUDA version. See README for instructions.
 
