@@ -1173,25 +1173,58 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
     if fields_to_read["P"] or fields_to_read["PI"]:
         if verbose:
             logger.info(f"loading P and/or PI")
+        # Cache shapes of diagonal components so we can build zero-fill arrays when
+        # off-diagonal components are absent.  The cache persists across the full
+        # (component_1, component_2) nested loop because PI/P entries may be
+        # deleted at the end of each inner iteration.
+        _diag_shape: dict = {}  # key: (component, species) → numpy shape tuple
+
         for component_1 in ['x','y','z']:
             for component_2 in ['x','y','z']:
                 data[f'PI{component_1}{component_2}'] = {}
                 data[f'P{component_1}{component_2}'] = {}
-                
+
                 for i, species in enumerate(choose_species):
                     if species is not None:
-                        try:
-                            if component_1 <= component_2: # we only read the upper triangular part of the pressure tensor, because it is symmetric, and we will fill the lower triangular part later
-                                PIread = read_fieldname(files_path,filenames,f'P{component_1}{component_2}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
-                            #else:
-                            #    PIread = read_fieldname(files_path,filenames,f'PI{component_2}{component_1}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
-                            if species in data[f'PI{component_1}{component_2}']:
-                                data[f'PI{component_1}{component_2}'][species] += PIread
-                            else:
-                                data[f'PI{component_1}{component_2}'][species] = PIread
-                        except:
-                            if verbose:
-                                logger.info(f'Component P{component_1}{component_2} for species {species} missing because tensor is symmetric')
+                        if component_1 <= component_2:
+                            # Upper triangular (and diagonal): read from file.
+                            try:
+                                PIread = read_fieldname(files_path, filenames, f'P{component_1}{component_2}_{i}', choose_x, choose_y, choose_z, verbose=verbose, **kwargs)
+                                if component_1 == component_2:
+                                    # Cache shape for later zero-fill fallback.
+                                    _diag_shape[(component_1, species)] = PIread.shape
+                                if species in data[f'PI{component_1}{component_2}']:
+                                    data[f'PI{component_1}{component_2}'][species] += PIread
+                                else:
+                                    data[f'PI{component_1}{component_2}'][species] = PIread
+                            except Exception:
+                                if component_1 == component_2:
+                                    # Diagonal components must be present; propagate the error.
+                                    raise
+                                # Off-diagonal component absent from file(s).  This can happen when
+                                # the simulation did not store the full pressure tensor (e.g. early
+                                # time-steps or reduced output). Physically, absent off-diagonal
+                                # stress is best represented as zero rather than silently dropped.
+                                cached_shape = _diag_shape.get((component_1, species))
+                                if cached_shape is not None:
+                                    zero_field = np.zeros(cached_shape, dtype=np.float32)
+                                    logger.warning(
+                                        f"Off-diagonal pressure P{component_1}{component_2}_{i} "
+                                        f"absent for species '{species}'. Filling with zeros "
+                                        f"(shape {cached_shape}). If this field should be "
+                                        f"present, check your simulation output."
+                                    )
+                                    if species in data[f'PI{component_1}{component_2}']:
+                                        data[f'PI{component_1}{component_2}'][species] += zero_field
+                                    else:
+                                        data[f'PI{component_1}{component_2}'][species] = zero_field
+                                else:
+                                    logger.warning(
+                                        f"Off-diagonal pressure P{component_1}{component_2}_{i} "
+                                        f"absent for species '{species}' and no diagonal reference "
+                                        f"shape available yet. Skipping this component."
+                                    )
+                        # Lower triangular: symmetric tensor — skip here, filled via symmetry below.
                 for species in data[f'PI{component_1}{component_2}']: # because now the number of species has potentially changed
                     i = choose_species.index(species)
                     data[f'P{component_1}{component_2}'][species]  = (data[f'PI{component_1}{component_2}'][species] - \

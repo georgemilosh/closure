@@ -54,10 +54,16 @@ class ClosureLitModule(L.LightningModule):
         # Instantiate criterion
         self.criterion = getattr(torch.nn, self.hparams.criterion)()
 
-        # Instantiate extra metrics
+        # Instantiate extra metrics.
+        # Each entry in ``metrics`` may be:
+        #   - a plain string name resolved first in ``torch.nn``, then in
+        #     ``torchmetrics`` (e.g. ``"L1Loss"``, ``"R2Score"``).
+        #   - a dict ``{"name": "R2Score", "num_outputs": 6, ...}`` for
+        #     metric classes that require constructor arguments (common for
+        #     multi-output torchmetrics metrics such as R2Score).
         if self.hparams.metrics:
             self.metric_fns = torch.nn.ModuleList(
-                [getattr(torch.nn, m)() for m in self.hparams.metrics]
+                [self._build_metric(m) for m in self.hparams.metrics]
             )
         else:
             self.metric_fns = None
@@ -171,8 +177,47 @@ class ClosureLitModule(L.LightningModule):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_metric(spec) -> torch.nn.Module:
+        """Instantiate a metric from a string name or a dict spec.
+
+        String form (no constructor args, resolved via torch.nn then torchmetrics)::
+
+            "L1Loss"
+            "R2Score"      # resolved from torchmetrics
+
+        Dict form (for metrics that require constructor arguments)::
+
+            {"name": "R2Score", "num_outputs": 6}
+            {"name": "MeanAbsoluteError"}
+        """
+        if isinstance(spec, dict):
+            spec = dict(spec)  # copy so we don't mutate hparams
+            name = spec.pop("name")
+            kwargs = spec
+        else:
+            name = spec
+            kwargs = {}
+
+        if hasattr(torch.nn, name):
+            return getattr(torch.nn, name)(**kwargs)
+
+        try:
+            import torchmetrics  # optional dependency
+            if hasattr(torchmetrics, name):
+                return getattr(torchmetrics, name)(**kwargs)
+        except ImportError:
+            pass
+
+        raise ValueError(
+            f"Metric '{name}' not found in torch.nn or torchmetrics. "
+            "Install torchmetrics for metrics such as R2Score, "
+            "MeanAbsoluteError, etc."
+        )
+
     def _log_metrics(self, prediction, targets, prefix: str):
-        """Log additional metrics (e.g. L1Loss) if configured."""
+        """Log additional metrics (e.g. L1Loss, R2Score) if configured."""
         if self.metric_fns is None:
             return
         for fn in self.metric_fns:
