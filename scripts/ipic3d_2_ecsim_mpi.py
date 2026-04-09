@@ -24,6 +24,9 @@ import numpy as np
 import h5py
 from mpi4py import MPI
 
+import logging
+logger = logging.getLogger(__name__)
+
 from datetime import datetime
 
 startTime = datetime.now()
@@ -195,47 +198,111 @@ def get_all_proc_files(input_folder):
     return files
 
 
-def infer_global_layout(all_hdf_files, time_cycle, sample_dataset_prefix):
+def parse_simulation_data(input_folder):
     """
-    Infer global grid size from topology/cartesian_coord and one sample dataset.
-    """
-    max_coords = np.array([0, 0, 0], dtype=int)
-    local_shape = None
-    dtype = None
+    Read SimulationData.txt from input_folder.
 
+    Expected examples:
+        Simulation domain                      = 20 x 20 x 0.1
+        Grid resolution                        = 1024 x 1024 x 1
+        Time step size (dt)                    = 0.0625
+        Charge-to-mass ratio       = -400
+    """
+    sim_path = os.path.join(input_folder, "SimulationData.txt")
+
+    if not os.path.isfile(sim_path):
+        raise FileNotFoundError(f"Could not find SimulationData.txt at: {sim_path}")
+
+    result = {
+        "Lx": None, "Ly": None, "Lz": None,
+        "nxc": None, "nyc": None, "nzc": None,
+        "dt": None, "qom": []
+    }
+
+    with open(sim_path, "r") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            # Simulation domain = 20 x 20 x 0.1
+            if line.startswith("Simulation domain"):
+                rhs = line.split("=", 1)[1].strip()
+                vals = [v.strip() for v in rhs.split("x")]
+                if len(vals) == 3:
+                    result["Lx"] = float(vals[0])
+                    result["Ly"] = float(vals[1])
+                    result["Lz"] = float(vals[2])
+
+            # Grid resolution = 1024 x 1024 x 1
+            elif line.startswith("Grid resolution"):
+                rhs = line.split("=", 1)[1].strip()
+                vals = [v.strip() for v in rhs.split("x")]
+                if len(vals) == 3:
+                    result["nxc"] = int(vals[0])
+                    result["nyc"] = int(vals[1])
+                    result["nzc"] = int(vals[2])
+
+            # Time step size (dt) = 0.0625
+            elif "Time step size" in line and "(dt)" in line:
+                rhs = line.split("=", 1)[1].strip()
+                result["dt"] = float(rhs)
+
+            # Charge-to-mass ratio = ...
+            elif line.startswith("Charge-to-mass ratio"):
+                rhs = line.split("=", 1)[1].strip()
+                result["qom"].append(float(rhs))
+
+    missing = [k for k in ["nxc", "nyc", "nzc"] if result[k] is None]
+    if missing:
+        raise ValueError(f"Missing required keys in {sim_path}: {missing}")
+
+    return result
+
+def infer_global_layout(input_folder, all_hdf_files):
+    """
+    Infer global layout using:
+      - global grid size from SimulationData.txt
+      - process grid size from proc*.hdf topology/cartesian_coord
+    """
+    sim_data = parse_simulation_data(input_folder)
+
+    max_coords = np.array([0, 0, 0], dtype=int)
     for file_path in all_hdf_files:
         with h5py.File(file_path, "r") as f:
             coords = np.array(f["topology/cartesian_coord"][()], dtype=int)
             max_coords = np.maximum(max_coords, coords)
 
-            if local_shape is None:
-                dset = f[f"{sample_dataset_prefix}/{time_cycle}"]
-                local_shape = dset.shape
-                dtype = dset.dtype
+    xlen, ylen, zlen = (max_coords + 1).astype(int)
 
-    nx_local, ny_local, nz_local = local_shape
-    xlen, ylen, zlen = max_coords + 1
+    nx_global = int(sim_data["nxc"])
+    ny_global = int(sim_data["nyc"])
+    nz_global = int(sim_data["nzc"])
 
-    nx_global = xlen * nx_local
-    ny_global = ylen * ny_local
-    nz_global = zlen * nz_local
+    if nx_global % xlen != 0 or ny_global % ylen != 0:
+        raise ValueError(
+            f"Global grid ({nx_global}, {ny_global}) is not divisible by "
+            f"process grid ({xlen}, {ylen})."
+        )
 
     return {
-        "local_shape": local_shape,
-        "dtype": dtype,
+        "nx_global": nx_global,
+        "ny_global": ny_global,
+        "nz_global": nz_global,
         "xlen": int(xlen),
         "ylen": int(ylen),
         "zlen": int(zlen),
-        "nx_global": int(nx_global),
-        "ny_global": int(ny_global),
-        "nz_global": int(nz_global),
     }
 
 
-def assemble_fields_mpi(all_hdf_files, requests, time_cycle, nx_global, ny_global):
+def assemble_fields_mpi(all_hdf_files, requests, time_cycle, nx_global, ny_global, xlen, ylen):
     """
-    Each rank reads a subset of proc*.hdf files and fills local global arrays.
-    Then arrays are reduced to rank 0.
+    Assemble global 2D fields from proc*.hdf tiles using MPI.
+
+    Placement rule:
+      - global tile size is inferred from SimulationData global shape / process grid
+      - tile origin comes from cartesian_coord
+      - raw local block is cropped to the target tile size if needed
     """
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
@@ -248,30 +315,52 @@ def assemble_fields_mpi(all_hdf_files, requests, time_cycle, nx_global, ny_globa
         for req in requests
     }
 
+    tile_nx = nx_global // xlen
+    tile_ny = ny_global // ylen
+
     for file_path in local_files:
         rank_id = int(os.path.basename(file_path).replace("proc", "").replace(".hdf", ""))
 
         with h5py.File(file_path, "r") as f:
-            cartesian_rank = int(f["topology/cartesian_rank"][()])
+            topology = f["topology"]
+            cartesian_coord = np.array(topology["cartesian_coord"][()], dtype=int)
+            cartesian_rank = int(np.array(topology["cartesian_rank"][()]).item())
+
             if cartesian_rank != rank_id:
                 raise ValueError(
                     f"Rank mismatch in {file_path}: filename rank {rank_id}, topology rank {cartesian_rank}"
                 )
 
-            cartesian_coord = np.array(f["topology/cartesian_coord"][()], dtype=int)
+            cx, cy, cz = cartesian_coord
+            x0 = cx * tile_nx
+            y0 = cy * tile_ny
 
             for req in requests:
                 full_path = f"{req['raw_path_prefix']}/{time_cycle}"
                 if full_path not in f:
                     continue
 
-                data = np.array(f[full_path])
-                nx_local, ny_local, nz_local = data.shape
+                field_data = np.array(f[full_path])
+                if field_data.ndim != 3:
+                    raise ValueError(
+                        f"Expected 3D dataset for {full_path}, got shape {field_data.shape}"
+                    )
 
-                x0 = cartesian_coord[0] * nx_local
-                y0 = cartesian_coord[1] * ny_local
+                nx_local, ny_local, nz_local = field_data.shape
 
-                local_fields[req["output_name"]][x0:x0 + nx_local, y0:y0 + ny_local] = data[:, :, 0]
+                # Crop to the target tile size if raw tiles contain extra cells/ghost cells
+                use_nx = min(tile_nx, nx_local)
+                use_ny = min(tile_ny, ny_local)
+
+                if x0 + use_nx > nx_global or y0 + use_ny > ny_global:
+                    raise ValueError(
+                        f"Tile placement exceeds bounds for {req['output_name']} in {file_path}: "
+                        f"coord={cartesian_coord}, x0={x0}, y0={y0}, "
+                        f"use_nx={use_nx}, use_ny={use_ny}, "
+                        f"nx_global={nx_global}, ny_global={ny_global}"
+                    )
+
+                local_fields[req["output_name"]][x0:x0 + use_nx, y0:y0 + use_ny] = field_data[:use_nx, :use_ny, 0]
 
     if rank == 0:
         global_fields = {
@@ -282,25 +371,63 @@ def assemble_fields_mpi(all_hdf_files, requests, time_cycle, nx_global, ny_globa
         global_fields = {name: None for name in local_fields}
 
     for name in local_fields:
-        MPI.COMM_WORLD.Reduce(local_fields[name], global_fields[name], op=MPI.SUM, root=0)
+        comm.Reduce(local_fields[name], global_fields[name], op=MPI.SUM, root=0)
 
     return global_fields
 
 
 def write_ecsim_h5(output_path, field_datasets, compression="gzip", compression_opts=4):
+    """
+    Write fields in the ECSIM-style layout expected by read_fieldname():
+
+        dataset shape = (2, ny+1, nx+1)   # interpreted as (z, y, x)
+
+    Why:
+    - read_fieldname() assumes .h5 datasets are ordered as (z, y, x)
+    - it uses default slices [0:shape-1], i.e. exclusive upper bounds
+    - old ECSIM files therefore use an extra point in x and y, and 2 planes in z
+
+    We store the physical 2D field in plane 0, upper-left block:
+        out[0, :ny, :nx] = field_data.T
+
+    Duplicating into plane 1 is optional, but safer for compatibility.
+    """
     with h5py.File(output_path, "w") as h5f:
         step_group = h5f.create_group("Step#0")
         block_group = step_group.create_group("Block")
 
         for field_name, field_data in field_datasets.items():
-            # Ensure 3D shape: (nx, ny, 1) for 2D data
-            if field_data.ndim == 2:
-                field_data = field_data[:, :, np.newaxis]
+            arr = np.asarray(field_data)
+
+            # Reduce to 2D if needed
+            if arr.ndim == 3:
+                if arr.shape[-1] == 1:
+                    arr = arr[:, :, 0]
+                elif arr.shape[0] == 1:
+                    arr = arr[0, :, :]
+                else:
+                    raise ValueError(
+                        f"{field_name}: expected 2D field or singleton 3D field, got shape {arr.shape}"
+                    )
+
+            if arr.ndim != 2:
+                raise ValueError(f"{field_name}: expected 2D array, got shape {arr.shape}")
+
+            nx, ny = arr.shape
+
+            # ECSIM-compatible on-disk layout: (z, y, x)
+            out = np.zeros((2, ny + 1, nx + 1), dtype=arr.dtype)
+
+            # arr is in (x, y); store as (y, x) in plane 0
+            out[0, :ny, :nx] = arr.T
+
+            # Duplicate into second plane for compatibility
+            out[1, :ny, :nx] = arr.T
 
             field_group = block_group.create_group(field_name)
             field_group.create_dataset(
                 "0",
-                data=field_data,
+                data=out,
                 compression=compression,
                 compression_opts=compression_opts,
             )
@@ -330,10 +457,17 @@ def main():
         print(f"Detected {len(all_hdf_files)} proc*.hdf files")
         print(f"Selected species: {species_list}")
         print(f"Cycles to convert: {cycles}")
-        print(f"Cycles to convert: {cycles}")
 
     for cycle in cycles:
         time_cycle = f"cycle_{cycle}"
+
+        if rank == 0:
+            max_coords = np.array([0, 0, 0], dtype=int)
+            for fp in all_hdf_files:
+                with h5py.File(fp, "r") as f:
+                    cc = np.array(f["topology/cartesian_coord"][()], dtype=int)
+                    max_coords = np.maximum(max_coords, cc)
+            print("Max cartesian coords:", max_coords)
 
         if rank == 0:
             print(f"\nProcessing {time_cycle}")
@@ -350,22 +484,24 @@ def main():
             for req in requests:
                 print(f"  {req['output_name']} <- {req['raw_path_prefix']}/{time_cycle}")
 
-        sample_dataset_prefix = requests[0]["raw_path_prefix"]
-        layout = infer_global_layout(all_hdf_files, time_cycle, sample_dataset_prefix)
+        
+        layout = infer_global_layout(args.input_folder, all_hdf_files)
 
         nx_global = layout["nx_global"]
         ny_global = layout["ny_global"]
         nz_global = layout["nz_global"]
 
         if rank == 0:
-            print(f"Global shape inferred: ({nx_global}, {ny_global}, {nz_global})")
-
+            print(f"Global shape inferred: ({nz_global}, {ny_global}, {nx_global})")
+        
         global_fields = assemble_fields_mpi(
             all_hdf_files=all_hdf_files,
             requests=requests,
             time_cycle=time_cycle,
-            nx_global=nx_global,
-            ny_global=ny_global,
+            nx_global=layout["nx_global"],
+            ny_global=layout["ny_global"],
+            xlen=layout["xlen"],
+            ylen=layout["ylen"],
         )
 
         if rank == 0:
