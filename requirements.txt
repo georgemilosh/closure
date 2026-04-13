@@ -3,9 +3,11 @@
 # For GPU support, see requirements-gpu.txt
 
 torch>=2.0
+torchvision>=0.17
+torchaudio>=2.0
 lightning>=2.0
 jsonargparse[signatures]>=4.27
-numpy>=1.24,<2.0
+numpy>=1.24
 pandas>=1.5
 scipy>=1.10
 h5py>=3.8

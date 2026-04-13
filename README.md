@@ -53,7 +53,7 @@ For interactive notebook development:
 pip install -e ".[notebook]"
 ```
 
-Includes: `jupyter`, `ipykernel`, `notebook`
+Includes: `jupyter`, `ipykernel`, `notebook`, `ipywidgets`
 
 **Combined Installation (HP + Notebooks)**
 
@@ -73,25 +73,27 @@ Includes: `pytest`, `pytest-cov`, `ruff`, `pre-commit`
 
 ### GPU/CUDA Support
 
-The package includes PyTorch but defaults to CPU. To enable GPU support, install PyTorch with the appropriate CUDA toolkit:
+The package includes PyTorch, torchvision, and torchaudio but defaults to CPU builds. To enable GPU support, **force-reinstall** the PyTorch packages from the appropriate CUDA index (required because pip will otherwise skip the reinstall if versions match):
 
-**CUDA 12.4 (Recommended):**
+**CUDA 12.4 (Recommended for driver ≥ 525.60):**
 
 ```bash
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+pip install torch torchvision torchaudio --force-reinstall --index-url https://download.pytorch.org/whl/cu124
 ```
 
 **CUDA 12.1:**
 
 ```bash
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+pip install torch torchvision torchaudio --force-reinstall --index-url https://download.pytorch.org/whl/cu121
 ```
 
 **CPU-only (no GPU):**
 
 ```bash
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+pip install torch torchvision torchaudio --force-reinstall --index-url https://download.pytorch.org/whl/cpu
 ```
+
+> **Note:** Check your NVIDIA driver version with `nvidia-smi`. The driver's CUDA version must be ≥ the toolkit version. For example, driver CUDA 12.8 supports cu124 but **not** cu130.
 
 Verify GPU support after installation:
 
@@ -109,8 +111,8 @@ If you want to use the Optuna hyperparameter sweep functionality with GPU accele
 # Install core + hyperparameter optimization + notebooks
 pip install -e ".[hp,notebook]"
 
-# Then add GPU support for your platform (e.g., CUDA 12.4)
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+# Then force-reinstall GPU-enabled PyTorch for your platform (e.g., CUDA 12.4)
+pip install torch torchvision torchaudio --force-reinstall --index-url https://download.pytorch.org/whl/cu124
 ```
 
 ### Quick Start with Requirements Files
@@ -135,13 +137,17 @@ pip install -r requirements-dev.txt
 **GPU support with CUDA 12.4:**
 ```bash
 pip install -r requirements.txt
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+pip install torch torchvision torchaudio --force-reinstall --index-url https://download.pytorch.org/whl/cu124
 ```
 
-**Full stack (HP + GPU + Dev):**
+**Full stack (HP + Notebooks + Dev — matches `closure-test` env):**
 ```bash
 pip install -r requirements-dev.txt
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+```
+
+For GPU support, force-reinstall PyTorch from the appropriate CUDA index:
+```bash
+pip install torch torchvision torchaudio --force-reinstall --index-url https://download.pytorch.org/whl/cu124
 ```
 
 See `requirements-gpu.txt` for detailed instructions on GPU installation for different CUDA versions.

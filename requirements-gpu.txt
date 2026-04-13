@@ -1,26 +1,28 @@
 # GPU/CUDA dependencies for closure package
-# 
+#
+# WARNING: This file is NOT pip-installable standalone. You must specify --index-url.
+# Use the commands below instead of "pip install -r requirements-gpu.txt".
+#
 # Choose ONE of the following based on your CUDA version and install AFTER the core requirements.
 # 
-# CUDA 12.4 (Recommended):
+# IMPORTANT: Use --force-reinstall so pip replaces the PyPI (CPU/wrong CUDA) builds
+# with the correct CUDA-specific builds. Without it, pip sees "already satisfied".
+#
+# CUDA 12.4 (Recommended for driver >= 525.60):
 #   pip install -r requirements.txt
-#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+#   pip install torch torchvision torchaudio --force-reinstall --index-url https://download.pytorch.org/whl/cu124
 #
 # CUDA 12.1:
 #   pip install -r requirements.txt
-#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-#
-# CUDA 11.8:
-#   pip install -r requirements.txt
-#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+#   pip install torch torchvision torchaudio --force-reinstall --index-url https://download.pytorch.org/whl/cu121
 #
 # CPU-only (no GPU):
 #   pip install -r requirements.txt
-#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+#   pip install torch torchvision torchaudio --force-reinstall --index-url https://download.pytorch.org/whl/cpu
 #
 # For GPU + Hyperparameter Optimization:
 #   pip install -r requirements-hp.txt
-#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+#   pip install torch torchvision torchaudio --force-reinstall --index-url https://download.pytorch.org/whl/cu124
 
 # GPU-enabled PyTorch packages (specify one index-url above)
 torch>=2.6.0
