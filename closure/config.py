@@ -32,4 +32,12 @@ def load_paths(paths_file: str = "paths.yaml") -> dict[str, str]:
         with open(paths_file, "r") as f:
             loaded = yaml.safe_load(f) or {}
         defaults.update(loaded)
+
+    # Resolve relative paths against the directory containing paths_file
+    base_dir = os.path.dirname(os.path.abspath(paths_file))
+    for key in ("work_dir", "data_dir"):
+        val = defaults.get(key, "")
+        if val and not os.path.isabs(val):
+            defaults[key] = os.path.normpath(os.path.join(base_dir, val))
+
     return defaults

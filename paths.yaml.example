@@ -1,2 +1,2 @@
-work_dir: ./outputs
+work_dir: ./models
 data_dir: ./data
