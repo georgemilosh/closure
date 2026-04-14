@@ -75,7 +75,7 @@ from closure.visualization import plot_pred_targets
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="End-to-end Closure MLP training tutorial (uses bundled fixture data)",
+        description="End-to-end Closure training tutorial (uses bundled fixture data)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument(
@@ -143,7 +143,7 @@ def write_experiment_config(config_dir: Path, args: argparse.Namespace) -> Path:
     norm_folder_cfg = "tuto"
 
     run_config = {
-        "name": "mlp_baseline",
+        "name": "baseline",
         "data": {
             "data_folder": data_folder_cfg,
             "norm_folder": norm_folder_cfg,
@@ -206,7 +206,7 @@ def write_experiment_config(config_dir: Path, args: argparse.Namespace) -> Path:
         },
     }
 
-    config_path = config_dir / "mlp.yaml"
+    config_path = config_dir / "model.yaml"
     with open(config_path, "w") as f:
         yaml.safe_dump(run_config, f, sort_keys=False)
 
@@ -517,7 +517,7 @@ def export_artifacts(module_eval, cfg, datamodule, work_dir: Path):
     ds = datamodule.test_dataset
 
     # Inference bundle
-    bundle_path = artifact_dir / "mlp_inference_bundle.pt"
+    bundle_path = artifact_dir / "inference_bundle.pt"
     artifact_bundle = {
         "state_dict": module_eval.network.state_dict(),
         "model_kwargs": {
@@ -540,7 +540,7 @@ def export_artifacts(module_eval, cfg, datamodule, work_dir: Path):
     print("Saved inference bundle:", bundle_path)
 
     # TorchScript model
-    torchscript_path = artifact_dir / "mlp_torchscript.pt"
+    torchscript_path = artifact_dir / "torchscript.pt"
     module_eval.network.eval()
     example_input = torch.randn(32, model_cfg["feature_dims"][0])
     try:
