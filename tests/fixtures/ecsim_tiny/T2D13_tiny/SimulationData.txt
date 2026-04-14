@@ -1,0 +1,17 @@
+---------------------------
+-  Simulation Parameters  -
+---------------------------
+Number of species    = 2
+Number of particles per proc of species 0 = 65536        (MAX = 786432)  QOM = -100
+Number of particles per proc of species 1 = 65536        (MAX = 786432)  QOM = 1
+---------------------------
+x-Length                 = 8
+y-Length                 = 8
+z-Length                 = 0.001
+Number of cells (x)      = 128
+Number of cells (y)      = 128
+Number of cells (z)      = 1
+---------------------------
+Time step                = 0.05
+Number of cycles         = 30001
+---------------------------

@@ -247,7 +247,7 @@ Legacy files like `loss_dict.pkl` are no longer used.
 
 ## Examples
 
-- `examples/tuto_train_haydn.ipynb`: real-data tutorial (Lightning update section added at top)
+- `examples/tuto_train.ipynb`: real-data tutorial (Lightning update section added at top)
 - `examples/tuto_train_synthetic.ipynb`: synthetic-data tutorial (Lightning update section added at top)
 - `examples/optuna/optuna_sweep.py`: Optuna sweep example with Lightning
 - `examples/optuna/harris_optuna_sweep.py`: Harris Le2GEM15ppc Optuna sweep for FCNN experiments
@@ -284,7 +284,7 @@ If you use **closure** in your research, please cite:
 
 ## Further Reading
 
-- [examples/tuto_train_haydn.ipynb](closure/examples/tuto_train_haydn.ipynb) — Full tutorial notebook
+- [examples/tuto_train.ipynb](closure/examples/tuto_train.ipynb) — Full tutorial notebook
 - Source code docstrings for detailed API documentation
 
 ---

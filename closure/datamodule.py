@@ -11,6 +11,7 @@ from __future__ import annotations
 __all__ = ["ClosureDataModule"]
 
 import os
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -19,6 +20,7 @@ from torch.utils.data import DataLoader, Subset
 
 import lightning as L
 
+from closure.config import load_paths
 from closure.datasets import DataFrameDataset
 
 
@@ -111,15 +113,49 @@ class ClosureDataModule(L.LightningDataModule):
         self.target_channels: list[int] | None = None
 
     # ------------------------------------------------------------------
+    # path resolution
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _resolve_path(value: str, paths_yaml_key: str) -> str:
+        """Resolve a relative path against the corresponding ``paths.yaml`` root.
+
+        * Absolute paths are returned unchanged.
+        * Paths starting with ``./`` or ``../`` are treated as explicitly
+          relative to the current working directory (resolved to absolute).
+        * All other relative paths (bare identifiers such as
+          ``ecsim/Harris/Le``) are joined with the directory indicated by
+          *paths_yaml_key* (``"data_dir"`` or ``"work_dir"``) from
+          ``paths.yaml``.
+        """
+        p = Path(value)
+        if p.is_absolute():
+            return str(p)
+        if value.startswith(("./", "../")):
+            return str(p.resolve())
+        root = Path(load_paths().get(paths_yaml_key, "."))
+        return str(root / p)
+
+    # ------------------------------------------------------------------
     # setup
     # ------------------------------------------------------------------
     def setup(self, stage: str | None = None):
         hp = self.hparams
 
+        # Resolve relative paths against paths.yaml roots
+        data_folder = self._resolve_path(hp.data_folder, "data_dir")
+        norm_folder = self._resolve_path(hp.norm_folder, "work_dir")
+        train_samples_file = self._resolve_path(hp.train_samples_file, "data_dir")
+        val_samples_file = self._resolve_path(hp.val_samples_file, "data_dir")
+        test_samples_file = (
+            self._resolve_path(hp.test_samples_file, "data_dir")
+            if hp.test_samples_file is not None
+            else None
+        )
+
         # Build common dataset kwargs
         common = dict(
-            data_folder=hp.data_folder,
-            norm_folder=hp.norm_folder,
+            data_folder=data_folder,
+            norm_folder=norm_folder,
             flatten=hp.flatten,
             features_dtype=hp.features_dtype,
             targets_dtype=hp.targets_dtype,
@@ -142,13 +178,13 @@ class ClosureDataModule(L.LightningDataModule):
 
         if stage in ("fit", None):
             self.train_dataset = DataFrameDataset(
-                samples_file=hp.train_samples_file,
+                samples_file=train_samples_file,
                 datalabel="train",
                 transform=transform,
                 **common,
             )
             self.val_dataset = DataFrameDataset(
-                samples_file=hp.val_samples_file,
+                samples_file=val_samples_file,
                 datalabel="val",
                 **common,
             )
@@ -156,18 +192,18 @@ class ClosureDataModule(L.LightningDataModule):
             self._resolve_channel_indices(self.train_dataset)
 
         if stage in ("test", None):
-            if hp.test_samples_file is not None:
+            if test_samples_file is not None:
                 self.test_dataset = DataFrameDataset(
-                    samples_file=hp.test_samples_file,
+                    samples_file=test_samples_file,
                     datalabel="test",
                     **common,
                 )
                 self._resolve_channel_indices(self.test_dataset)
 
         if stage == "predict":
-            if hp.test_samples_file is not None:
+            if test_samples_file is not None:
                 self.test_dataset = DataFrameDataset(
-                    samples_file=hp.test_samples_file,
+                    samples_file=test_samples_file,
                     datalabel="test",
                     **common,
                 )

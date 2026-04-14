@@ -127,11 +127,12 @@ ARCHITECTURES = {
 
 
 def build_config(
-    experiment_dir: Path,
     run_name: str,
     spec: dict,
     data_folder: str,
     split_root: str,
+    norm_folder_rel: str,
+    run_dir_rel: str,
     num_workers: int,
     max_epochs: int,
     devices: int,
@@ -140,7 +141,6 @@ def build_config(
     n_outputs = len(spec["targets"])
     arch_depth = int(run_name[0])
     arch = ARCHITECTURES[arch_depth]
-    run_dir = experiment_dir / run_name
 
     fields = deepcopy(COMMON_FIELDS)
     for key, value in spec.get("extra_fields", {}).items():
@@ -171,7 +171,7 @@ def build_config(
         },
         "data": {
             "data_folder": data_folder,
-            "norm_folder": str(experiment_dir),
+            "norm_folder": norm_folder_rel,
             "train_samples_file": f"{split_root}/train.csv",
             "val_samples_file": f"{split_root}/val.csv",
             "test_samples_file": f"{split_root}/test.csv",
@@ -197,7 +197,7 @@ def build_config(
             "accelerator": "gpu",
             "devices": devices,
             "strategy": "ddp",
-            "default_root_dir": str(run_dir),
+            "default_root_dir": run_dir_rel,
             "callbacks": [
                 {
                     "class_path": "lightning.pytorch.callbacks.EarlyStopping",
@@ -227,7 +227,7 @@ def build_config(
             "logger": {
                 "class_path": "lightning.pytorch.loggers.CSVLogger",
                 "init_args": {
-                    "save_dir": str(run_dir),
+                    "save_dir": run_dir_rel,
                     "name": "logs",
                 },
             },
@@ -300,13 +300,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--data-folder",
-        default="/volume1/scratch/share_dir/ecsim/Harris/Le",
-        help="Harris data root passed to ClosureDataModule.",
+        default="ecsim/Harris/Le",
+        help="Data folder relative to data_dir in paths.yaml.",
     )
     parser.add_argument(
         "--split-root",
-        default="/volume1/scratch/share_dir/ecsim/sampling/ecsim/Harris/Le/Le2GEM15ppc",
-        help="Folder containing train.csv, val.csv, and test.csv.",
+        default="ecsim/sampling/ecsim/Harris/Le/Le2GEM15ppc",
+        help="Split folder relative to data_dir in paths.yaml.",
     )
     parser.add_argument(
         "--account",
@@ -333,6 +333,12 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # Resolve work_dir from paths.yaml so we can compute relative norm_folder
+    from closure.config import load_paths
+
+    paths = load_paths()
+    work_dir = Path(paths["work_dir"]).resolve()
+
     output_root = args.output_root.resolve()
     output_root.mkdir(parents=True, exist_ok=True)
 
@@ -343,13 +349,21 @@ def main() -> None:
             experiment_dir.mkdir(parents=True, exist_ok=True)
             created.append(experiment_dir)
 
+            # norm_folder relative to work_dir (resolved by ClosureDataModule)
+            norm_folder_rel = str(experiment_dir.relative_to(work_dir))
+
             for run_name in spec["run_names"]:
+                # run_dir relative to project root (CWD at training time)
+                run_dir_rel = str(
+                    args.output_root / variant_name / target_name / run_name
+                )
                 cfg = build_config(
-                    experiment_dir=experiment_dir,
                     run_name=run_name,
                     spec=spec,
                     data_folder=args.data_folder,
                     split_root=args.split_root,
+                    norm_folder_rel=norm_folder_rel,
+                    run_dir_rel=run_dir_rel,
                     num_workers=args.num_workers,
                     max_epochs=args.max_epochs,
                     devices=args.devices,

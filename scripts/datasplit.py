@@ -243,7 +243,14 @@ def main():
             missing_folders.append(full_path)
     
     if missing_folders:
-        print(f"Warning: The following folders do not exist: {missing_folders}")
+        print(f"\nERROR: The following data folders do not exist:")
+        for mf in missing_folders:
+            print(f"  - {mf}")
+        if root_folder:
+            print(f"\nroot_folder was set to: {root_folder}")
+            print("Check that 'data_dir' in paths.yaml points to the correct location")
+            print("and that the sub-folders listed in 'folders' exist under it.")
+        sys.exit(1)
     
     # Run the function
     create_files_csv(folders, csv_filename, pattern, root_folder, max_number, min_number)
