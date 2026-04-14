@@ -26,10 +26,13 @@ __all__ = [
 ]
 
 import os
+import logging
 from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
+
+_logger = logging.getLogger(__name__)
 
 try:
     import torch
@@ -208,7 +211,7 @@ def evaluate_loss(
     label = f"total_{criterion}"
     loss = {label: compute_loss(ground_truth.flatten(), prediction.flatten(), criterion)}
     if verbose:
-        print(f"Total loss {loss[label]}")
+        _logger.info("Total loss %s", loss[label])
 
     if target_channels is None:
         list_of_target_indices = range(len(dataset.prescaler_targets))
@@ -221,9 +224,9 @@ def evaluate_loss(
             ground_truth[:, channel].flatten(), prediction[:, channel].flatten(), criterion
         )
         if verbose:
-            print(
-                f"Loss for channel {channel}: "
-                f"{dataset.request_targets[channel]}, loss = {loss[label]}"
+            _logger.info(
+                "Loss for channel %s: %s, loss = %s",
+                channel, dataset.request_targets[channel], loss[label],
             )
     return loss
 

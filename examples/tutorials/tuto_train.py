@@ -49,12 +49,20 @@ _closure_logger.addHandler(_stream_handler)
 
 
 def _attach_file_logger(log_dir: Path) -> None:
-    """Add a timestamped FileHandler so every closure.* message is persisted."""
+    """Add a timestamped FileHandler so every closure.* message is persisted.
+
+    Also attaches the same handler to the Lightning logger so that model
+    summaries and training progress appear in ``closure.log``.
+    """
     log_dir.mkdir(parents=True, exist_ok=True)
     file_fmt = logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
     fh = logging.FileHandler(log_dir / "closure.log")
     fh.setFormatter(file_fmt)
     _closure_logger.addHandler(fh)
+
+    # Mirror Lightning output into the same log file.
+    lightning_logger = logging.getLogger("lightning.pytorch")
+    lightning_logger.addHandler(fh)
 
 matplotlib.use("Agg")  # non-interactive backend; safe on headless machines
 import matplotlib.pyplot as plt
@@ -122,12 +130,12 @@ def setup_paths():
     for p in [work_dir, config_dir, artifact_dir]:
         p.mkdir(parents=True, exist_ok=True)
 
-    print("project_root:", project_root)
-    print("data_root   :", data_root)
-    print("work_dir    :", work_dir)
-    print("split_dir   :", split_dir)
-    print("config_dir  :", config_dir)
-    print("artifact_dir:", artifact_dir)
+    _closure_logger.info("project_root: %s", project_root)
+    _closure_logger.info("data_root   : %s", data_root)
+    _closure_logger.info("work_dir    : %s", work_dir)
+    _closure_logger.info("split_dir   : %s", split_dir)
+    _closure_logger.info("config_dir  : %s", config_dir)
+    _closure_logger.info("artifact_dir: %s", artifact_dir)
 
     return project_root, work_dir, split_dir, config_dir, artifact_dir
 
@@ -210,8 +218,8 @@ def write_experiment_config(config_dir: Path, args: argparse.Namespace) -> Path:
     with open(config_path, "w") as f:
         yaml.safe_dump(run_config, f, sort_keys=False)
 
-    print("\nWrote config:", config_path)
-    print(config_path.read_text()[:1200], "\n...")
+    _closure_logger.info("Wrote config: %s", config_path)
+    _closure_logger.info("\n%s\n...", config_path.read_text()[:1200])
     return config_path
 
 
@@ -282,7 +290,7 @@ def build_components(config_path: Path, work_dir: Path):
     trainer_precision = trainer_cfg["precision"]
 
     if requested_accelerator in {"gpu", "cuda"} and not torch.cuda.is_available():
-        print("CUDA unavailable; falling back to CPU.")
+        _closure_logger.info("CUDA unavailable; falling back to CPU.")
         trainer_accelerator = "cpu"
         trainer_devices = 1
         if trainer_precision == "16-mixed":
@@ -311,13 +319,13 @@ def build_components(config_path: Path, work_dir: Path):
 # ---------------------------------------------------------------------------
 
 def run_training(module, datamodule, trainer, ckpt_callback):
-    print("\n--- Starting training ---")
+    _closure_logger.info("--- Starting training ---")
     datamodule.setup("fit")
-    print("  train samples:", len(datamodule.train_dataset))
-    print("  val samples  :", len(datamodule.val_dataset))
+    _closure_logger.info("  train samples: %d", len(datamodule.train_dataset))
+    _closure_logger.info("  val samples  : %d", len(datamodule.val_dataset))
 
     trainer.fit(module, datamodule=datamodule)
-    print("Best checkpoint:", ckpt_callback.best_model_path)
+    _closure_logger.info("Best checkpoint: %s", ckpt_callback.best_model_path)
 
 
 # ---------------------------------------------------------------------------
@@ -325,15 +333,15 @@ def run_training(module, datamodule, trainer, ckpt_callback):
 # ---------------------------------------------------------------------------
 
 def run_evaluation(module, network, datamodule, ckpt_callback, work_dir: Path):
-    print("\n--- Evaluation ---")
+    _closure_logger.info("--- Evaluation ---")
 
     best_ckpt = ckpt_callback.best_model_path if ckpt_callback.best_model_path else None
     if best_ckpt and Path(best_ckpt).exists():
         module_eval = ClosureLitModule.load_from_checkpoint(best_ckpt, network=network)
-        print("Loaded checkpoint:", best_ckpt)
+        _closure_logger.info("Loaded checkpoint: %s", best_ckpt)
     else:
         module_eval = module
-        print("No checkpoint found, using current module state.")
+        _closure_logger.info("No checkpoint found, using current module state.")
 
     datamodule.setup("test")
     ground_truth, prediction = ev.transform_targets(
@@ -346,8 +354,8 @@ def run_evaluation(module, network, datamodule, ckpt_callback, work_dir: Path):
         reshape=False,
         test_features=datamodule.test_dataset.features,
     )
-    print("prediction shape :", prediction.shape)
-    print("ground_truth shape:", ground_truth.shape)
+    _closure_logger.info("prediction shape : %s", prediction.shape)
+    _closure_logger.info("ground_truth shape: %s", ground_truth.shape)
 
     # MSE and R² reports
     mse_report = ev.evaluate_loss(
@@ -364,8 +372,8 @@ def run_evaluation(module, network, datamodule, ckpt_callback, work_dir: Path):
         datamodule.test_dataset, ground_truth, prediction,
         target_channels=datamodule.target_channels,
     )
-    print("\nPer-channel regression metrics:")
-    print(metrics_df.sort_values("r2", ascending=False).to_string(index=False))
+    _closure_logger.info("Per-channel regression metrics:\n%s",
+                         metrics_df.sort_values("r2", ascending=False).to_string(index=False))
 
     return module_eval, ground_truth, prediction, metrics_df
 
@@ -393,14 +401,14 @@ def save_metric_plots(metrics_df: pd.DataFrame, work_dir: Path):
     plt.tight_layout()
     plt.savefig(out, dpi=150)
     plt.close()
-    print("Saved:", out)
+    _closure_logger.info("Saved: %s", out)
 
 
 def save_training_curves(work_dir: Path):
     log_root = work_dir / "lightning_logs"
     version_dirs = sorted(log_root.glob("version_*"))
     if not version_dirs:
-        print("No training logs found, skipping curve plot.")
+        _closure_logger.info("No training logs found, skipping curve plot.")
         return
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 4))
@@ -429,7 +437,7 @@ def save_training_curves(work_dir: Path):
     plt.tight_layout()
     plt.savefig(out, dpi=150)
     plt.close()
-    print("Saved:", out)
+    _closure_logger.info("Saved: %s", out)
 
 
 def save_prediction_plots(cfg, datamodule, prediction, ground_truth, work_dir: Path):
@@ -452,7 +460,7 @@ def save_prediction_plots(cfg, datamodule, prediction, ground_truth, work_dir: P
         error_mode="relative",
         signed_target_names=["Pxy_e", "Pxz_e", "Pyz_e"],
     )
-    print("Saved Pxx_e prediction plots to:", work_dir)
+    _closure_logger.info("Saved Pxx_e prediction plots to: %s", work_dir)
 
     # Off-diagonal example
     target_to_plot = (
@@ -472,7 +480,7 @@ def save_prediction_plots(cfg, datamodule, prediction, ground_truth, work_dir: P
         error_limit=0.5,
         signed_target_names=["Pxy_e", "Pxz_e", "Pyz_e"],
     )
-    print("Saved", target_to_plot, "prediction plots to:", work_dir)
+    _closure_logger.info("Saved %s prediction plots to: %s", target_to_plot, work_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -482,13 +490,12 @@ def save_prediction_plots(cfg, datamodule, prediction, ground_truth, work_dir: P
 def compare_logged_runs(work_dir: Path):
     log_dirs = [str(p) for p in sorted((work_dir / "lightning_logs").glob("version_*"))[-5:]]
     if not log_dirs:
-        print("No logged runs to compare.")
+        _closure_logger.info("No logged runs to compare.")
         return
 
     run_summary = ev.compare_runs(log_dirs=log_dirs, metric_key="val_loss")
     run_summary = run_summary.sort_values("best_val_loss", na_position="last")
-    print("\nRun comparison:")
-    print(run_summary.to_string(index=False))
+    _closure_logger.info("Run comparison:\n%s", run_summary.to_string(index=False))
 
     if not run_summary.dropna(subset=["best_val_loss"]).empty:
         fig, ax = plt.subplots(figsize=(8, 4))
@@ -501,7 +508,7 @@ def compare_logged_runs(work_dir: Path):
         plt.tight_layout()
         plt.savefig(out, dpi=150)
         plt.close()
-        print("Saved:", out)
+        _closure_logger.info("Saved: %s", out)
 
 
 # ---------------------------------------------------------------------------
@@ -509,7 +516,7 @@ def compare_logged_runs(work_dir: Path):
 # ---------------------------------------------------------------------------
 
 def export_artifacts(module_eval, cfg, datamodule, work_dir: Path):
-    print("\n--- Exporting artifacts ---")
+    _closure_logger.info("--- Exporting artifacts ---")
     artifact_dir = work_dir / "artifacts"
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
@@ -537,7 +544,7 @@ def export_artifacts(module_eval, cfg, datamodule, work_dir: Path):
         "flatten": ds.flatten,
     }
     torch.save(artifact_bundle, bundle_path)
-    print("Saved inference bundle:", bundle_path)
+    _closure_logger.info("Saved inference bundle: %s", bundle_path)
 
     # TorchScript model
     torchscript_path = artifact_dir / "torchscript.pt"
@@ -546,16 +553,16 @@ def export_artifacts(module_eval, cfg, datamodule, work_dir: Path):
     try:
         scripted = torch.jit.script(module_eval.network.cpu())
     except Exception as err:
-        print("script failed, falling back to trace:", err)
+        _closure_logger.info("script failed, falling back to trace: %s", err)
         scripted = torch.jit.trace(module_eval.network.cpu(), example_input)
     scripted.save(str(torchscript_path))
-    print("Saved TorchScript model:", torchscript_path)
+    _closure_logger.info("Saved TorchScript model: %s", torchscript_path)
 
     # Quick sanity check
     jit_model = torch.jit.load(str(torchscript_path), map_location="cpu")
     with torch.no_grad():
         y_jit = jit_model(example_input)
-    print("TorchScript forward check shape:", tuple(y_jit.shape))
+    _closure_logger.info("TorchScript forward check shape: %s", tuple(y_jit.shape))
 
     return bundle_path, torchscript_path
 
@@ -579,8 +586,8 @@ def save_manifest(config_path, train_csv, val_csv, test_csv, best_ckpt, bundle_p
     manifest_path = artifact_dir / "run_manifest.json"
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)
-    print("\nSaved manifest:", manifest_path)
-    print(json.dumps(manifest, indent=2))
+    _closure_logger.info("Saved manifest: %s", manifest_path)
+    _closure_logger.info("\n%s", json.dumps(manifest, indent=2))
 
 
 # ---------------------------------------------------------------------------
@@ -598,10 +605,10 @@ def main():
     config_path = write_experiment_config(config_dir, args)
 
     # 3) Data splits (pre-made CSVs shipped with fixtures)
-    print("\n--- Using fixture splits ---")
+    _closure_logger.info("--- Using fixture splits ---")
     for name in ["train.csv", "val.csv", "test.csv"]:
         df = pd.read_csv(split_dir / name)
-        print(f"  {name}: {len(df)} rows")
+        _closure_logger.info("  %s: %d rows", name, len(df))
 
     # 4) Build components — paths resolved by _resolve_path() inside DataModule
     cfg, datamodule, network, module, trainer, ckpt_callback = build_components(
@@ -638,8 +645,8 @@ def main():
         best_ckpt, bundle_path, torchscript_path, work_dir,
     )
 
-    print("\n=== Tutorial complete ===")
-    print("All outputs saved under:", work_dir)
+    _closure_logger.info("=== Tutorial complete ===")
+    _closure_logger.info("All outputs saved under: %s", work_dir)
 
 
 if __name__ == "__main__":

@@ -1,2 +1,11 @@
+# Local path configuration for closure.
+#
+# Copy this file to paths.yaml and adjust the values for your machine.
+# Relative paths are resolved against the directory containing this file.
+#
+# work_dir — training outputs, checkpoints, and normalization statistics.
+# data_dir — root of simulation data (HDF5 / pickle files).
+#
+# See README.md § "Production Setup" for the full path resolution rules.
 work_dir: ./models
 data_dir: ./data
