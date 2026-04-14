@@ -193,7 +193,7 @@ def write_experiment_config(config_dir: Path, args: argparse.Namespace) -> Path:
         },
         "optimizer": {
             "criterion": "MSELoss",
-            "metrics": ["R2Score"],
+            "metrics": [{"name": "R2Score", "num_outputs": 6}],
             "optimizer": "Adam",
             "lr": 5e-4,
             "weight_decay": 0.0,
