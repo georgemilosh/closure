@@ -28,6 +28,7 @@ Prerequisites
 from __future__ import annotations
 
 import argparse
+import logging
 import shutil
 import subprocess
 import sys
@@ -35,6 +36,23 @@ from pathlib import Path
 
 import optuna
 import pandas as pd
+
+# Enable closure's logger.info messages (data loading, normalization, shapes)
+_closure_logger = logging.getLogger("closure")
+_closure_logger.setLevel(logging.INFO)
+_stream_fmt = logging.Formatter("%(levelname)s [%(name)s] %(message)s")
+_stream_handler = logging.StreamHandler()
+_stream_handler.setFormatter(_stream_fmt)
+_closure_logger.addHandler(_stream_handler)
+
+
+def _attach_file_logger(log_dir: Path) -> None:
+    """Add a timestamped FileHandler so every closure.* message is persisted."""
+    log_dir.mkdir(parents=True, exist_ok=True)
+    file_fmt = logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+    fh = logging.FileHandler(log_dir / "closure.log")
+    fh.setFormatter(file_fmt)
+    _closure_logger.addHandler(fh)
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +272,7 @@ def main():
 
     output_root = Path(args.output_root) if args.output_root else PROJECT_ROOT / "dev" / "optuna_tutorial"
     output_root.mkdir(parents=True, exist_ok=True)
+    _attach_file_logger(output_root)
 
     study_name = f"harris_{args.variant}_{args.task}_tutorial_viz"
     db_path = output_root / f"{study_name}.db"

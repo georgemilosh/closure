@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
-Tutorial: End-to-End Haydn Training
-====================================
+Tutorial: End-to-End Closure Training
+======================================
 
 Self-contained tutorial that uses the small fixture dataset shipped with
 the repo (``tests/fixtures/ecsim_tiny``).  No ``paths.yaml`` or external
@@ -32,11 +32,29 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import matplotlib
+
+# Enable closure's logger.info messages (data loading, normalization, shapes)
+_closure_logger = logging.getLogger("closure")
+_closure_logger.setLevel(logging.INFO)
+_stream_fmt = logging.Formatter("%(levelname)s [%(name)s] %(message)s")
+_stream_handler = logging.StreamHandler()
+_stream_handler.setFormatter(_stream_fmt)
+_closure_logger.addHandler(_stream_handler)
+
+
+def _attach_file_logger(log_dir: Path) -> None:
+    """Add a timestamped FileHandler so every closure.* message is persisted."""
+    log_dir.mkdir(parents=True, exist_ok=True)
+    file_fmt = logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+    fh = logging.FileHandler(log_dir / "closure.log")
+    fh.setFormatter(file_fmt)
+    _closure_logger.addHandler(fh)
 
 matplotlib.use("Agg")  # non-interactive backend; safe on headless machines
 import matplotlib.pyplot as plt
@@ -57,7 +75,7 @@ from closure.visualization import plot_pred_targets
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="End-to-end Haydn MLP training tutorial (uses bundled fixture data)",
+        description="End-to-end Closure MLP training tutorial (uses bundled fixture data)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument(
@@ -125,7 +143,7 @@ def write_experiment_config(config_dir: Path, args: argparse.Namespace) -> Path:
     norm_folder_cfg = "tuto"
 
     run_config = {
-        "name": "haydn_mlp_baseline",
+        "name": "mlp_baseline",
         "data": {
             "data_folder": data_folder_cfg,
             "norm_folder": norm_folder_cfg,
@@ -185,7 +203,7 @@ def write_experiment_config(config_dir: Path, args: argparse.Namespace) -> Path:
         },
     }
 
-    config_path = config_dir / "haydn_mlp.yaml"
+    config_path = config_dir / "mlp.yaml"
     with open(config_path, "w") as f:
         yaml.safe_dump(run_config, f, sort_keys=False)
 
@@ -499,7 +517,7 @@ def export_artifacts(module_eval, cfg, datamodule, work_dir: Path):
     ds = datamodule.test_dataset
 
     # Inference bundle
-    bundle_path = artifact_dir / "haydn_mlp_inference_bundle.pt"
+    bundle_path = artifact_dir / "mlp_inference_bundle.pt"
     artifact_bundle = {
         "state_dict": module_eval.network.state_dict(),
         "model_kwargs": {
@@ -522,7 +540,7 @@ def export_artifacts(module_eval, cfg, datamodule, work_dir: Path):
     print("Saved inference bundle:", bundle_path)
 
     # TorchScript model
-    torchscript_path = artifact_dir / "haydn_mlp_torchscript.pt"
+    torchscript_path = artifact_dir / "mlp_torchscript.pt"
     module_eval.network.eval()
     example_input = torch.randn(32, model_cfg["feature_dims"][0])
     try:
@@ -574,6 +592,7 @@ def main():
 
     # 1) Paths
     project_root, data_root, work_dir, split_dir, config_dir, artifact_dir = setup_paths()
+    _attach_file_logger(work_dir)
 
     # 2) Config
     config_path = write_experiment_config(config_dir, args)
