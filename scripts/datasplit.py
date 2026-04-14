@@ -81,6 +81,10 @@ def create_files_csv(folders, csv_filename, pattern="T2D-Fields_*", root_folder=
         max_number: Maximum number allowed between _ and . in filenames (None for no filtering)
         min_number: Minimum number required between _ and . in filenames (None for no filtering)
     """
+    output_dir = os.path.dirname(os.path.abspath(csv_filename))
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
     
     # Open CSV in write mode (overwrite if exists)
     with open(csv_filename, 'w', newline='') as csvfile:
