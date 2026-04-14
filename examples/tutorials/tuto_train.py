@@ -129,7 +129,7 @@ def setup_paths():
     print("config_dir  :", config_dir)
     print("artifact_dir:", artifact_dir)
 
-    return project_root, data_root, work_dir, split_dir, config_dir, artifact_dir
+    return project_root, work_dir, split_dir, config_dir, artifact_dir
 
 
 # ---------------------------------------------------------------------------
@@ -137,9 +137,9 @@ def setup_paths():
 # ---------------------------------------------------------------------------
 
 def write_experiment_config(config_dir: Path, args: argparse.Namespace) -> Path:
-    # Config stores relative identifiers; resolved at runtime via paths.yaml
-    # data_folder is relative to data_root, norm_folder is relative to work_dir
-    data_folder_cfg = "ecsim_tiny"
+    # Paths prefixed with ./ are resolved against CWD by _resolve_path().
+    # norm_folder is a bare identifier resolved against work_dir from paths.yaml.
+    data_folder_cfg = "./tests/fixtures/ecsim_tiny"
     norm_folder_cfg = "tuto"
 
     run_config = {
@@ -175,6 +175,9 @@ def write_experiment_config(config_dir: Path, args: argparse.Namespace) -> Path:
                 "choose_y": [0, 128],
                 "verbose": False,
             },
+        "train_samples_file": "./tests/fixtures/ecsim_tiny/train.csv",
+        "val_samples_file": "./tests/fixtures/ecsim_tiny/val.csv",
+        "test_samples_file": "./tests/fixtures/ecsim_tiny/test.csv",
         },
         "model": {
             "feature_dims": [10, 60, 80, 50, 40, 6],
@@ -216,8 +219,7 @@ def write_experiment_config(config_dir: Path, args: argparse.Namespace) -> Path:
 # 3) Build DataModule, Model, Trainer
 # ---------------------------------------------------------------------------
 
-def build_components(config_path: Path, train_csv: Path, val_csv: Path, test_csv: Path,
-                     data_root: Path, work_dir: Path):
+def build_components(config_path: Path, work_dir: Path):
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
 
@@ -226,16 +228,14 @@ def build_components(config_path: Path, train_csv: Path, val_csv: Path, test_csv
     opt_cfg = cfg["optimizer"]
     trainer_cfg = cfg["trainer"]
 
-    # Resolve relative paths from config against base directories
-    data_folder = str(data_root / data_cfg["data_folder"])
-    norm_folder = str(work_dir)
-
+    # Paths in the config use ./ prefix (CWD-relative) or bare identifiers
+    # (resolved against paths.yaml); _resolve_path() handles both in setup().
     datamodule = ClosureDataModule(
-        data_folder=data_folder,
-        norm_folder=norm_folder,
-        train_samples_file=str(train_csv),
-        val_samples_file=str(val_csv),
-        test_samples_file=str(test_csv),
+        data_folder=data_cfg["data_folder"],
+        norm_folder=data_cfg["norm_folder"],
+        train_samples_file=data_cfg["train_samples_file"],
+        val_samples_file=data_cfg["val_samples_file"],
+        test_samples_file=data_cfg["test_samples_file"],
         batch_size=trainer_cfg["batch_size"],
         num_workers=trainer_cfg["num_workers"],
         flatten=data_cfg["flatten"],
@@ -432,9 +432,9 @@ def save_training_curves(work_dir: Path):
     print("Saved:", out)
 
 
-def save_prediction_plots(cfg, datamodule, prediction, ground_truth, data_root: Path, work_dir: Path):
+def save_prediction_plots(cfg, datamodule, prediction, ground_truth, work_dir: Path):
     data_cfg = cfg["data"]
-    resolved_data_folder = str(data_root / data_cfg["data_folder"])
+    resolved_data_folder = str(ClosureDataModule._resolve_path(data_cfg["data_folder"], "data_dir"))
 
     n_timesteps = datamodule.test_dataset.targets_shape[0]
     plot_indices = [i for i in [0, 1, 2] if i < n_timesteps]
@@ -591,24 +591,21 @@ def main():
     args = parse_args()
 
     # 1) Paths
-    project_root, data_root, work_dir, split_dir, config_dir, artifact_dir = setup_paths()
+    project_root, work_dir, split_dir, config_dir, artifact_dir = setup_paths()
     _attach_file_logger(work_dir)
 
     # 2) Config
     config_path = write_experiment_config(config_dir, args)
 
     # 3) Data splits (pre-made CSVs shipped with fixtures)
-    train_csv = split_dir / "train.csv"
-    val_csv = split_dir / "val.csv"
-    test_csv = split_dir / "test.csv"
     print("\n--- Using fixture splits ---")
-    for csv_path in [train_csv, val_csv, test_csv]:
-        df = pd.read_csv(csv_path)
-        print(f"  {csv_path.name}: {len(df)} rows")
+    for name in ["train.csv", "val.csv", "test.csv"]:
+        df = pd.read_csv(split_dir / name)
+        print(f"  {name}: {len(df)} rows")
 
-    # 3) Build components
+    # 4) Build components — paths resolved by _resolve_path() inside DataModule
     cfg, datamodule, network, module, trainer, ckpt_callback = build_components(
-        config_path, train_csv, val_csv, test_csv, data_root, work_dir,
+        config_path, work_dir,
     )
 
     # 4) Train
@@ -624,7 +621,7 @@ def main():
     if not args.no_plots:
         save_metric_plots(metrics_df, work_dir)
         save_training_curves(work_dir)
-        save_prediction_plots(cfg, datamodule, prediction, ground_truth, data_root, work_dir)
+        save_prediction_plots(cfg, datamodule, prediction, ground_truth, work_dir)
 
     # 7) Compare runs
     compare_logged_runs(work_dir)
@@ -634,7 +631,12 @@ def main():
 
     # 9) Manifest
     best_ckpt = ckpt_callback.best_model_path if ckpt_callback.best_model_path else None
-    save_manifest(config_path, train_csv, val_csv, test_csv, best_ckpt, bundle_path, torchscript_path, work_dir)
+    data_cfg = cfg["data"]
+    save_manifest(
+        config_path,
+        data_cfg["train_samples_file"], data_cfg["val_samples_file"], data_cfg["test_samples_file"],
+        best_ckpt, bundle_path, torchscript_path, work_dir,
+    )
 
     print("\n=== Tutorial complete ===")
     print("All outputs saved under:", work_dir)
