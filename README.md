@@ -1,5 +1,9 @@
 # closure
 
+<p align="center">
+  <img src="PoP2026.jpeg" alt="closure architecture banner" width="50%" />
+</p>
+
 closure is a machine learning framework for fluid closure modeling on ECsim and iPiC3D data.
 
 The training stack is now based on PyTorch Lightning.
