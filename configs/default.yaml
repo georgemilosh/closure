@@ -34,6 +34,9 @@ data:
   flatten: false
   scaler_features: true
   scaler_targets: true
+  patch_dim: [32, 32]
+  subsample_rate: 160
+  subsample_seed: 42
   features_dtype: float32
   targets_dtype: float32
   read_features_targets_kwargs:

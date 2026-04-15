@@ -62,9 +62,14 @@ class ClosureDataModule(L.LightningDataModule):
     target_channel_names : list[str] or None
         Subset of target channels to use (by name).
     subsample_rate : float
-        Fraction of training samples to use (1.0 = all).
+        Controls the effective number of training samples per epoch.
+        Values below 1.0 select a random subset (undersampling).
+        Values above 1.0 repeat samples so each image is visited
+        multiple times per epoch (oversampling); useful with
+        ``patch_dim`` to extract many random crops per image.
+        Default is 1.0 (use all samples exactly once).
     subsample_seed : int or None
-        Seed for reproducible subsampling.
+        Seed for reproducible subsampling / oversampling.
     patch_dim : list[int] or None
         ``[width, height]`` for random crop patch extraction.
     read_features_targets_kwargs : dict or None
@@ -248,16 +253,29 @@ class ClosureDataModule(L.LightningDataModule):
         )
 
     def _maybe_subsample(self, dataset):
-        """Return a ``Subset`` if subsample_rate < 1.0."""
+        """Return a ``Subset`` with under- or over-sampling applied.
+
+        When ``subsample_rate < 1.0``, a random subset of the dataset is
+        selected (undersampling).  When ``subsample_rate > 1.0``, indices
+        are repeated so each sample appears multiple times per epoch
+        (oversampling).  This is useful with ``patch_dim`` random cropping
+        where each access yields a different random patch.
+        """
         hp = self.hparams
-        if hp.subsample_rate >= 1.0:
+        if hp.subsample_rate == 1.0:
             return dataset
 
         n = len(dataset)
         k = max(1, int(n * hp.subsample_rate))
-
         rng = np.random.RandomState(hp.subsample_seed)
-        indices = rng.choice(n, size=k, replace=False).tolist()
+
+        if hp.subsample_rate < 1.0:
+            indices = rng.choice(n, size=k, replace=False).tolist()
+        else:
+            # Oversampling: cycle indices so each image is visited
+            # subsample_rate times per epoch (matching legacy behaviour).
+            indices = (rng.permutation(k) % n).tolist()
+
         return Subset(dataset, indices)
 
     def _resolve_channel_indices(self, dataset: DataFrameDataset):

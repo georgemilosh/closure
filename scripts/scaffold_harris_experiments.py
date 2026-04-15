@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Generate Harris Le2GEM15ppc Lightning experiment folders.
+"""Scaffold Harris Le2GEM15ppc FCNN experiment folders.
 
-This script scaffolds a directory tree similar to the archived legacy layout:
+This script scaffolds a directory tree for patch-based FCNN training:
 
     default/P
     default/divP
@@ -19,6 +19,13 @@ Each experiment folder receives:
 
 The generated configs target the current Lightning-based training stack via
 ``closure-train fit --config <file>.yaml``.
+
+FCNN workflow
+~~~~~~~~~~~~~
+The configs use ``flatten: false`` so that data is kept in NCHW image format,
+``patch_dim`` for random-crop patch extraction during training, and
+``subsample_rate`` for oversampling (each image is visited many times per
+epoch so that many distinct random patches are extracted).
 
 Example:
 
@@ -56,6 +63,8 @@ SHARED_SPEC = {
     "choose_x": [0, 512],
     "choose_y": [175, 325],
     "patch_dim": [32, 32],
+    "subsample_rate": 160,
+    "subsample_seed": 42,
     "optimizer": "AdamW",
 }
 
@@ -181,6 +190,8 @@ def build_config(
             "scaler_features": True,
             "scaler_targets": True,
             "patch_dim": spec["patch_dim"],
+            "subsample_rate": spec["subsample_rate"],
+            "subsample_seed": spec["subsample_seed"],
             "read_features_targets_kwargs": {
                 "fields_to_read": fields,
                 "request_features": spec["features"],
@@ -331,7 +342,27 @@ def main() -> None:
         default=4,
         help="Number of devices written into the YAML configs.",
     )
+    parser.add_argument(
+        "--subsample-rate",
+        type=float,
+        default=160,
+        help="Oversampling rate: number of random patches per image per epoch (default: 160).",
+    )
+    parser.add_argument(
+        "--subsample-seed",
+        type=int,
+        default=42,
+        help="Seed for reproducible oversampling (default: 42).",
+    )
     args = parser.parse_args()
+
+    # Allow CLI overrides of the shared oversampling parameters.
+    # VARIANTS was built from SHARED_SPEC at import time, so propagate
+    # the override into every spec dict.
+    for _target_map in VARIANTS.values():
+        for _spec in _target_map.values():
+            _spec["subsample_rate"] = args.subsample_rate
+            _spec["subsample_seed"] = args.subsample_seed
 
     # Resolve work_dir from paths.yaml so we can compute relative norm_folder
     from closure.config import load_paths
