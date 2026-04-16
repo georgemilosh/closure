@@ -9,8 +9,16 @@ from __future__ import annotations
 
 __all__ = ["ClosureLitModule"]
 
+import logging
+import os
+import time
+
 import torch
 import lightning as L
+from lightning.pytorch.utilities.model_summary import summarize
+
+
+_logger = logging.getLogger("closure.module")
 
 
 class ClosureLitModule(L.LightningModule):
@@ -104,6 +112,43 @@ class ClosureLitModule(L.LightningModule):
     def predict_step(self, batch, batch_idx):
         features = batch[0] if isinstance(batch, (list, tuple)) else batch
         return self(features)
+
+    def on_fit_start(self):
+        """Emit run context and model summary to python logs."""
+        self._fit_start_time = time.perf_counter()
+        local_rank = getattr(self.trainer, "local_rank", -1)
+        global_rank = getattr(self.trainer, "global_rank", -1)
+        visible = os.getenv("CUDA_VISIBLE_DEVICES", "")
+        _logger.info(
+            "LOCAL_RANK: %s - GLOBAL_RANK: %s - CUDA_VISIBLE_DEVICES: [%s]",
+            local_rank,
+            global_rank,
+            visible,
+        )
+        try:
+            _logger.info("\n%s", summarize(self, max_depth=2))
+        except Exception as exc:  # pragma: no cover
+            _logger.warning("Failed to build model summary: %s", exc)
+
+    def on_fit_end(self):
+        """Emit explicit fit-end marker for log-based monitoring."""
+        elapsed_s = None
+        if hasattr(self, "_fit_start_time"):
+            elapsed_s = time.perf_counter() - self._fit_start_time
+
+        if elapsed_s is None:
+            elapsed_msg = "unknown"
+        else:
+            mins, secs = divmod(elapsed_s, 60.0)
+            hrs, mins = divmod(mins, 60.0)
+            elapsed_msg = f"{int(hrs):02d}:{int(mins):02d}:{secs:05.2f} ({elapsed_s:.2f}s)"
+
+        _logger.info(
+            "Trainer.fit finished at epoch=%s (max_epochs=%s). Elapsed: %s",
+            self.trainer.current_epoch,
+            self.trainer.max_epochs,
+            elapsed_msg,
+        )
 
     # ------------------------------------------------------------------
     # Optimiser & scheduler
