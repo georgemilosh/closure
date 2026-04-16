@@ -1,0 +1,4 @@
+#!/bin/bash
+# Shim entry-point for closure-train.
+# Works without `pip install` – relies on PYTHONPATH set by activate_hpc.sh.
+exec python -c "from closure.cli import main; main()" "$@"

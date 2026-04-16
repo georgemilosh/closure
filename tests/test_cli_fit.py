@@ -1,0 +1,196 @@
+"""End-to-end test for ``closure-train fit`` using the ecsim_tiny fixture."""
+
+from __future__ import annotations
+
+import pathlib
+import sys
+
+import pytest
+import yaml
+
+from closure.cli import _resolve_log_file_path
+
+
+FIXTURES_DIR = pathlib.Path(__file__).parent / "fixtures" / "ecsim_tiny"
+
+
+def _write_fit_config(tmp_path: pathlib.Path) -> pathlib.Path:
+    """Write a minimal YAML config that points at the ecsim_tiny fixture."""
+    norm_dir = tmp_path / "norm"
+    norm_dir.mkdir()
+    output_dir = tmp_path / "outputs"
+    output_dir.mkdir()
+
+    cfg = {
+        "seed_everything": 42,
+        "model": {
+            "network": {
+                "class_path": "closure.models.FCNN",
+                "init_args": {
+                    "channels": [4, 8, 3],
+                    "kernels": [3, 3],
+                    "activations": ["ReLU", None],
+                },
+            },
+            "criterion": "MSELoss",
+            "optimizer": "Adam",
+            "lr": 0.001,
+            "weight_decay": 0.0,
+            "scheduler": None,
+        },
+        "data": {
+            "data_folder": str(FIXTURES_DIR),
+            "norm_folder": str(norm_dir),
+            "train_samples_file": str(FIXTURES_DIR / "train.csv"),
+            "val_samples_file": str(FIXTURES_DIR / "val.csv"),
+            "test_samples_file": str(FIXTURES_DIR / "test.csv"),
+            "batch_size": 2,
+            "num_workers": 0,
+            "flatten": False,
+            "scaler_features": True,
+            "scaler_targets": True,
+            "features_dtype": "float32",
+            "targets_dtype": "float32",
+            "read_features_targets_kwargs": {
+                "fields_to_read": {
+                    "B": True,
+                    "B_ext": False,
+                    "E": False,
+                    "E_ext": False,
+                    "divB": False,
+                    "rho": True,
+                    "J": True,
+                    "P": True,
+                    "PI": False,
+                    "Heat_flux": False,
+                },
+                "request_features": ["rho_e", "Bx", "By", "Bz"],
+                "request_targets": ["Pxx_e", "Pyy_e", "Pzz_e"],
+                "choose_species": ["e", None],
+                "choose_x": [0, 16],
+                "choose_y": [0, 16],
+                "verbose": False,
+            },
+        },
+        "trainer": {
+            "fast_dev_run": True,
+            "accelerator": "cpu",
+            "devices": 1,
+            "default_root_dir": str(output_dir),
+            "enable_progress_bar": False,
+            "logger": False,
+            "enable_checkpointing": False,
+        },
+    }
+
+    config_path = tmp_path / "test_fit.yaml"
+    config_path.write_text(yaml.dump(cfg, default_flow_style=False))
+    return config_path
+
+
+class TestCLIFit:
+    """Run ``closure-train fit`` end-to-end on tiny fixture data."""
+
+    def test_fit_completes(self, tmp_path, monkeypatch):
+        """A fast_dev_run fit should complete without errors."""
+        config_path = _write_fit_config(tmp_path)
+        monkeypatch.setattr(
+            sys, "argv", ["closure-train", "fit", f"--config={config_path}"]
+        )
+
+        from closure.cli import main
+
+        # LightningCLI calls sys.exit(0) on success in some versions;
+        # catch SystemExit so the test doesn't abort.
+        try:
+            main()
+        except SystemExit as exc:
+            assert exc.code in (None, 0), f"CLI exited with code {exc.code}"
+
+    def test_fit_produces_norm_files(self, tmp_path, monkeypatch):
+        """Normalization stats (X.pkl, y.pkl) should be created in norm_folder."""
+        config_path = _write_fit_config(tmp_path)
+        monkeypatch.setattr(
+            sys, "argv", ["closure-train", "fit", f"--config={config_path}"]
+        )
+
+        from closure.cli import main
+
+        try:
+            main()
+        except SystemExit:
+            pass
+
+        norm_dir = tmp_path / "norm"
+        assert (norm_dir / "X.pkl").exists(), "Feature norm file not created"
+        assert (norm_dir / "y.pkl").exists(), "Target norm file not created"
+
+
+def test_log_file_goes_to_logger_version_dir(tmp_path):
+    """closure.log should be placed under save_dir/name/version when configured."""
+    config_path = tmp_path / "cfg.yaml"
+    config_path.write_text(
+        yaml.dump(
+            {
+                "trainer": {
+                    "default_root_dir": str(tmp_path / "fallback_root"),
+                    "logger": {
+                        "class_path": "lightning.pytorch.loggers.CSVLogger",
+                        "init_args": {
+                            "save_dir": str(tmp_path / "logs"),
+                            "name": "CNN",
+                            "version": "run_2",
+                        },
+                    },
+                }
+            }
+        )
+    )
+
+    path = _resolve_log_file_path(["fit", f"--config={config_path}"])
+    expected = tmp_path / "logs" / "CNN" / "run_2" / "closure.log"
+    assert path == expected.resolve()
+
+
+def test_log_file_falls_back_to_default_root_dir(tmp_path):
+    """When logger save_dir is absent, default_root_dir remains the destination."""
+    config_path = tmp_path / "cfg.yaml"
+    config_path.write_text(
+        yaml.dump(
+            {
+                "trainer": {
+                    "default_root_dir": str(tmp_path / "models"),
+                    "logger": False,
+                }
+            }
+        )
+    )
+
+    path = _resolve_log_file_path(["fit", f"--config={config_path}"])
+    expected = tmp_path / "models" / "closure.log"
+    assert path == expected.resolve()
+
+
+def test_log_file_falls_back_when_logger_version_is_implicit(tmp_path):
+    """Without explicit logger version, keep using default_root_dir."""
+    config_path = tmp_path / "cfg.yaml"
+    config_path.write_text(
+        yaml.dump(
+            {
+                "trainer": {
+                    "default_root_dir": str(tmp_path / "models"),
+                    "logger": {
+                        "class_path": "lightning.pytorch.loggers.CSVLogger",
+                        "init_args": {
+                            "save_dir": str(tmp_path / "logs"),
+                            "name": "CNN",
+                        },
+                    },
+                }
+            }
+        )
+    )
+
+    path = _resolve_log_file_path(["fit", f"--config={config_path}"])
+    expected = tmp_path / "models" / "closure.log"
+    assert path == expected.resolve()

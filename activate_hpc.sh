@@ -21,6 +21,9 @@ module load PyTorch-Lightning/2.2.1-foss-2023a-CUDA-12.1.1
 #   pip install --user jsonargparse[signatures] pandas joblib psutil
 # (scipy, numpy, pyyaml, torchmetrics come from the modules above)
 
+# --- PATH: shim scripts (closure-train, etc.) ---
+export PATH="${_CLOSURE_ROOT}/_shims:${PATH}"
+
 # --- PYTHONPATH: shim + project root ---
 export PYTHONPATH="${_CLOSURE_ROOT}/_shims:${_CLOSURE_ROOT}:${PYTHONPATH}"
 
