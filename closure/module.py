@@ -12,7 +12,9 @@ __all__ = ["ClosureLitModule"]
 import logging
 import os
 import time
+from pathlib import Path
 
+import yaml
 import torch
 import lightning as L
 from lightning.pytorch.utilities.model_summary import summarize
@@ -91,6 +93,7 @@ class ClosureLitModule(L.LightningModule):
         loss = self.criterion(prediction, targets)
         self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
         self._log_metrics(prediction, targets, prefix="train")
+        self._train_batches_this_epoch = batch_idx + 1
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -130,8 +133,20 @@ class ClosureLitModule(L.LightningModule):
         except Exception as exc:  # pragma: no cover
             _logger.warning("Failed to build model summary: %s", exc)
 
+    def on_train_epoch_end(self):
+        """Log epoch-level metrics summary to Python logs."""
+        metrics = self.trainer.callback_metrics
+        epoch = self.trainer.current_epoch
+        batches = getattr(self, "_train_batches_this_epoch", "?")
+        parts = [f"Epoch {epoch}"]
+        parts.append(f"batches={batches}")
+        for key in ("train_loss", "val_loss", "lr-Adam"):
+            if key in metrics:
+                parts.append(f"{key}={metrics[key]:.6g}")
+        _logger.info(" | ".join(parts))
+
     def on_fit_end(self):
-        """Emit explicit fit-end marker for log-based monitoring."""
+        """Emit explicit fit-end marker and write timings.yaml."""
         elapsed_s = None
         if hasattr(self, "_fit_start_time"):
             elapsed_s = time.perf_counter() - self._fit_start_time
@@ -149,6 +164,39 @@ class ClosureLitModule(L.LightningModule):
             self.trainer.max_epochs,
             elapsed_msg,
         )
+
+        # Write timings.yaml to the logger version directory (rank 0 only).
+        if getattr(self.trainer, "global_rank", 0) == 0:
+            self._write_timings(elapsed_s)
+
+    def _write_timings(self, fit_elapsed_s: float | None) -> None:
+        """Persist timing information to ``timings.yaml`` next to metrics."""
+        log_dir = None
+        logger = self.trainer.logger
+        if logger is not None and hasattr(logger, "log_dir"):
+            log_dir = logger.log_dir
+        if log_dir is None:
+            return
+
+        timings: dict = {}
+
+        # Data loading time from the datamodule.
+        dm = getattr(self.trainer, "datamodule", None)
+        if dm is not None and hasattr(dm, "_data_load_time_s"):
+            timings["data_loading_s"] = round(dm._data_load_time_s, 3)
+
+        if fit_elapsed_s is not None:
+            timings["training_s"] = round(fit_elapsed_s, 3)
+
+        timings["epochs"] = self.trainer.current_epoch
+        timings["devices"] = self.trainer.num_devices
+        timings["num_nodes"] = self.trainer.num_nodes
+
+        out = Path(log_dir) / "timings.yaml"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with open(out, "w") as f:
+            yaml.safe_dump(timings, f, default_flow_style=False)
+        _logger.info("Timings written to %s", out)
 
     # ------------------------------------------------------------------
     # Optimiser & scheduler

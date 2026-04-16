@@ -38,7 +38,6 @@ class CNet(torch.nn.Module):
         x = self.pool(F.relu(self.conv2(x))) 
         x = self.pool(F.relu(self.conv3(x))) 
         x = self.pool(F.relu(self.conv4(x))) 
-        #print(x.shape)
         x = torch.flatten(x, 1) # flatten all dimensions except batch
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
@@ -112,8 +111,6 @@ class ResNet(torch.nn.Module):
                 self.dropouts.append(nn.Dropout2d(dropouts[i]))
             else:
                 self.dropouts.append(None)
-
-        #super().define_optimizer_sheduler() # To define optimizer we have to have the layers already defined
 
     def forward(self, x):
         """
@@ -279,7 +276,6 @@ class MLP(torch.nn.Module):
                 if dropouts[i] is not None:
                     dropout_layer = torch.nn.Dropout(dropouts[i])
                     seq_list.append(dropout_layer)
-        #print(seq_list)
         self.linear_relu_stack = torch.nn.Sequential(*seq_list)
 
     def forward(self, x):

@@ -35,9 +35,9 @@ model:
 data:
   data_folder: ecsim/Harris/Le/
   norm_folder: Lightning/Harris/Le
-  train_samples_file: ecsim/sampling/ecsim/Harris/Le/Le2GEM15ppc/train.csv
-  val_samples_file: ecsim/sampling/ecsim/Harris/Le/Le2GEM15ppc/val.csv
-  test_samples_file: ecsim/sampling/ecsim/Harris/Le/Le2GEM15ppc/test.csv
+  train_samples_file: ./splits/Le/Le2GEM15ppc/train.csv
+  val_samples_file: ./splits/Le/Le2GEM15ppc/val.csv
+  test_samples_file: ./splits/Le/Le2GEM15ppc/test.csv
   batch_size: 32
   num_workers: 12
   flatten: false

@@ -10,7 +10,9 @@ from __future__ import annotations
 
 __all__ = ["ClosureDataModule"]
 
+import logging
 import os
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -19,6 +21,8 @@ import torch
 from torch.utils.data import DataLoader, Subset
 
 import lightning as L
+
+_logger = logging.getLogger("closure.datamodule")
 
 from closure.config import load_paths
 from closure.datasets import DataFrameDataset
@@ -182,6 +186,7 @@ class ClosureDataModule(L.LightningDataModule):
             }
 
         if stage in ("fit", None):
+            t0 = time.perf_counter()
             self.train_dataset = DataFrameDataset(
                 samples_file=train_samples_file,
                 datalabel="train",
@@ -192,6 +197,11 @@ class ClosureDataModule(L.LightningDataModule):
                 samples_file=val_samples_file,
                 datalabel="val",
                 **common,
+            )
+            self._data_load_time_s = time.perf_counter() - t0
+            _logger.info(
+                "Data loading (train+val) took %.2fs",
+                self._data_load_time_s,
             )
             # Resolve channel name → index mappings
             self._resolve_channel_indices(self.train_dataset)
