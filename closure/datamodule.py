@@ -26,6 +26,7 @@ _logger = logging.getLogger("closure.datamodule")
 
 from closure.config import load_paths
 from closure.datasets import DataFrameDataset
+from closure.resources import aggregate_gpu_stats, gpu_stats, process_tree_ram_gb
 
 
 class ClosureDataModule(L.LightningDataModule):
@@ -150,6 +151,10 @@ class ClosureDataModule(L.LightningDataModule):
     def setup(self, stage: str | None = None):
         hp = self.hparams
 
+        self._loading_ram_snapshots_gb: list[float] = []
+        self._loading_gpu_util_snapshots_pct: list[float] = []
+        self._loading_gpu_mem_snapshots_mb: list[float] = []
+
         # Resolve relative paths against paths.yaml roots
         data_folder = self._resolve_path(hp.data_folder, "data_dir")
         norm_folder = self._resolve_path(hp.norm_folder, "work_dir")
@@ -187,17 +192,20 @@ class ClosureDataModule(L.LightningDataModule):
 
         if stage in ("fit", None):
             t0 = time.perf_counter()
+            self._log_resource_snapshot("before fit data load")
             self.train_dataset = DataFrameDataset(
                 samples_file=train_samples_file,
                 datalabel="train",
                 transform=transform,
                 **common,
             )
+            self._log_resource_snapshot("after train data load")
             self.val_dataset = DataFrameDataset(
                 samples_file=val_samples_file,
                 datalabel="val",
                 **common,
             )
+            self._log_resource_snapshot("after val data load")
             self._data_load_time_s = time.perf_counter() - t0
             _logger.info(
                 "Data loading (train+val) took %.2fs",
@@ -299,6 +307,26 @@ class ClosureDataModule(L.LightningDataModule):
             self.target_channels = [
                 dataset.request_targets.index(ch) for ch in hp.target_channel_names
             ]
+
+    def _log_resource_snapshot(self, label: str) -> None:
+        """Log RAM/GPU usage snapshot during loading stages."""
+        ram_gb = process_tree_ram_gb()
+        self._loading_ram_snapshots_gb.append(ram_gb)
+
+        gstats = aggregate_gpu_stats(gpu_stats())
+        avg_gpu_util = gstats["avg_gpu_utilization_pct"]
+        avg_gpu_mem = gstats["avg_gpu_memory_used_mb"]
+        if avg_gpu_util is not None:
+            self._loading_gpu_util_snapshots_pct.append(float(avg_gpu_util))
+        if avg_gpu_mem is not None:
+            self._loading_gpu_mem_snapshots_mb.append(float(avg_gpu_mem))
+
+        parts = [f"Loading resource snapshot ({label})", f"ram_gb={ram_gb:.3f}"]
+        if avg_gpu_util is not None:
+            parts.append(f"avg_gpu_util={avg_gpu_util:.1f}%")
+        if avg_gpu_mem is not None:
+            parts.append(f"avg_gpu_mem_mb={avg_gpu_mem:.1f}")
+        _logger.info(" | ".join(parts))
 
 
 class _ChannelSubsetDataset(torch.utils.data.Dataset):

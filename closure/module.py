@@ -19,6 +19,8 @@ import torch
 import lightning as L
 from lightning.pytorch.utilities.model_summary import summarize
 
+from closure.resources import aggregate_gpu_stats, gpu_stats, process_tree_ram_gb
+
 
 _logger = logging.getLogger("closure.module")
 
@@ -119,6 +121,9 @@ class ClosureLitModule(L.LightningModule):
     def on_fit_start(self):
         """Emit run context and model summary to python logs."""
         self._fit_start_time = time.perf_counter()
+        self._epoch_ram_gb: list[float] = []
+        self._epoch_gpu_util_pct: list[float] = []
+        self._epoch_gpu_mem_mb: list[float] = []
         local_rank = getattr(self.trainer, "local_rank", -1)
         global_rank = getattr(self.trainer, "global_rank", -1)
         visible = os.getenv("CUDA_VISIBLE_DEVICES", "")
@@ -135,6 +140,17 @@ class ClosureLitModule(L.LightningModule):
 
     def on_train_epoch_end(self):
         """Log epoch-level metrics summary to Python logs."""
+        ram_gb = process_tree_ram_gb()
+        gstats = aggregate_gpu_stats(gpu_stats())
+        avg_gpu_util = gstats["avg_gpu_utilization_pct"]
+        avg_gpu_mem = gstats["avg_gpu_memory_used_mb"]
+
+        self._epoch_ram_gb.append(ram_gb)
+        if avg_gpu_util is not None:
+            self._epoch_gpu_util_pct.append(float(avg_gpu_util))
+        if avg_gpu_mem is not None:
+            self._epoch_gpu_mem_mb.append(float(avg_gpu_mem))
+
         metrics = self.trainer.callback_metrics
         epoch = self.trainer.current_epoch
         batches = getattr(self, "_train_batches_this_epoch", "?")
@@ -143,6 +159,11 @@ class ClosureLitModule(L.LightningModule):
         for key in ("train_loss", "val_loss", "lr-Adam"):
             if key in metrics:
                 parts.append(f"{key}={metrics[key]:.6g}")
+        parts.append(f"ram_gb={ram_gb:.3f}")
+        if avg_gpu_util is not None:
+            parts.append(f"avg_gpu_util={avg_gpu_util:.1f}%")
+        if avg_gpu_mem is not None:
+            parts.append(f"avg_gpu_mem_mb={avg_gpu_mem:.1f}")
         _logger.info(" | ".join(parts))
 
     def on_fit_end(self):
@@ -191,6 +212,37 @@ class ClosureLitModule(L.LightningModule):
         timings["epochs"] = self.trainer.current_epoch
         timings["devices"] = self.trainer.num_devices
         timings["num_nodes"] = self.trainer.num_nodes
+
+        # Per-epoch averages collected from closure.log snapshots.
+        if self._epoch_ram_gb:
+            timings["avg_ram_gb_per_epoch"] = round(sum(self._epoch_ram_gb) / len(self._epoch_ram_gb), 3)
+        if self._epoch_gpu_util_pct:
+            timings["avg_gpu_utilization_pct_per_epoch"] = round(
+                sum(self._epoch_gpu_util_pct) / len(self._epoch_gpu_util_pct), 3
+            )
+        if self._epoch_gpu_mem_mb:
+            timings["avg_gpu_memory_used_mb_per_epoch"] = round(
+                sum(self._epoch_gpu_mem_mb) / len(self._epoch_gpu_mem_mb), 3
+            )
+
+        # Data-loading phase averages collected in the datamodule.
+        dm = getattr(self.trainer, "datamodule", None)
+        if dm is not None:
+            loading_ram = getattr(dm, "_loading_ram_snapshots_gb", None)
+            loading_gpu_util = getattr(dm, "_loading_gpu_util_snapshots_pct", None)
+            loading_gpu_mem = getattr(dm, "_loading_gpu_mem_snapshots_mb", None)
+            if loading_ram:
+                timings["avg_ram_gb_during_loading"] = round(sum(loading_ram) / len(loading_ram), 3)
+            if loading_gpu_util:
+                timings["avg_gpu_utilization_pct_during_loading"] = round(
+                    sum(loading_gpu_util) / len(loading_gpu_util),
+                    3,
+                )
+            if loading_gpu_mem:
+                timings["avg_gpu_memory_used_mb_during_loading"] = round(
+                    sum(loading_gpu_mem) / len(loading_gpu_mem),
+                    3,
+                )
 
         out = Path(log_dir) / "timings.yaml"
         out.parent.mkdir(parents=True, exist_ok=True)
