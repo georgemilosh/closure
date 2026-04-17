@@ -1091,6 +1091,11 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
     
     """
     files_path = _resolve_files_path(files_path)
+    if filenames is None or (isinstance(filenames, (list, tuple, np.ndarray)) and len(filenames) == 0):
+        raise ValueError(
+            f"read_data received empty filenames for files_path={files_path!r}. "
+            "Provide at least one selected field file."
+        )
     #logger.info(f"{files_path = }")
     #logger.info(f"{filenames = }")
     try:
@@ -1379,6 +1384,9 @@ def _select_filenames_by_time(filenames, choose_times):
     """Select filenames according to choose_times semantics used in get_exp_times."""
     if choose_times is None:
         return filenames
+    if isinstance(choose_times, (list, tuple, np.ndarray)) and len(choose_times) == 0:
+        logger.warning("choose_times is empty; defaulting to all available filenames")
+        return filenames
     if isinstance(choose_times, int):
         return filenames[choose_times:]
     try:
@@ -1467,6 +1475,14 @@ def get_exp_times(experiments, files_path, fields_to_read, choose_species=None, 
         # sorted(os.listdir()) creates a sorted list containing the .h5 filenames, os.listdir() alone would put them in random order.
         filenames = _collect_experiment_filenames(os.path.join(files_path, experiment))
         selected_filenames = _select_filenames_by_time(filenames, choose_times)
+        if len(selected_filenames) == 0:
+            msg = (
+                "No field files selected for experiment "
+                f"{experiment!r}. files_path={files_path!r}, choose_times={choose_times!r}. "
+                "Check filename patterns and time selection."
+            )
+            logger.error(msg)
+            raise FileNotFoundError(msg)
         try:
             logger.info(f"selected_filenames = {selected_filenames}")
             times = _extract_times_from_filenames(selected_filenames, dt)
