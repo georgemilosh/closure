@@ -192,6 +192,83 @@ def _resolve_log_file_path(argv: list[str]) -> Path:
     return root / f"closure_rank{global_rank}.log"
 
 
+def _infer_csvlogger_save_dir_default(argv: list[str]) -> str | None:
+    """Infer fallback ``save_dir`` for CSVLogger from ``default_root_dir``.
+
+    Returns a path only when:
+    - logger class is explicitly ``lightning.pytorch.loggers.CSVLogger``
+    - ``trainer.logger.init_args.save_dir`` is not provided via CLI/config
+    - ``trainer.default_root_dir`` is available via CLI/config
+    """
+    explicit_save_dir = _parse_key_from_cli(argv, "trainer.logger.init_args.save_dir")
+    if explicit_save_dir:
+        return None
+
+    cfg_path = _parse_config_path_from_cli(argv)
+    cfg = _load_config(cfg_path)
+
+    trainer_cfg = cfg.get("trainer", {}) if isinstance(cfg, dict) else {}
+    if not isinstance(trainer_cfg, dict):
+        return None
+
+    logger_cfg = trainer_cfg.get("logger", {})
+    if not isinstance(logger_cfg, dict):
+        return None
+
+    class_path = logger_cfg.get("class_path")
+    if class_path != "lightning.pytorch.loggers.CSVLogger":
+        return None
+
+    init_args = logger_cfg.get("init_args", {})
+    if not isinstance(init_args, dict):
+        init_args = {}
+
+    cfg_save_dir = init_args.get("save_dir")
+    if cfg_save_dir:
+        return None
+
+    root_dir = _parse_default_root_dir_from_cli(argv)
+    if root_dir is None:
+        root_dir_value = trainer_cfg.get("default_root_dir")
+        root_dir = str(root_dir_value) if root_dir_value else None
+
+    return root_dir
+
+
+def _infer_norm_folder_default(argv: list[str]) -> str | None:
+    """Infer fallback ``data.norm_folder`` from ``trainer.default_root_dir``.
+
+    Returns a path only when:
+    - ``data.norm_folder`` is not provided via CLI/config
+    - ``trainer.default_root_dir`` is available via CLI/config
+    """
+    explicit_norm_folder = _parse_key_from_cli(argv, "data.norm_folder")
+    if explicit_norm_folder:
+        return None
+
+    cfg_path = _parse_config_path_from_cli(argv)
+    cfg = _load_config(cfg_path)
+
+    data_cfg = cfg.get("data", {}) if isinstance(cfg, dict) else {}
+    if not isinstance(data_cfg, dict):
+        data_cfg = {}
+
+    cfg_norm_folder = data_cfg.get("norm_folder")
+    if cfg_norm_folder:
+        return None
+
+    trainer_cfg = cfg.get("trainer", {}) if isinstance(cfg, dict) else {}
+    if not isinstance(trainer_cfg, dict):
+        return None
+
+    root_dir = _parse_default_root_dir_from_cli(argv)
+    if root_dir is None:
+        root_dir_value = trainer_cfg.get("default_root_dir")
+        root_dir = str(root_dir_value) if root_dir_value else None
+
+    return root_dir
+
+
 def _configure_python_logging(argv: list[str]) -> None:
     """Configure timestamped console/file logging with rank metadata."""
     root_logger = logging.getLogger()
@@ -221,10 +298,21 @@ def _configure_python_logging(argv: list[str]) -> None:
 
 def main():
     """Launch Lightning CLI."""
-    _configure_python_logging(sys.argv[1:])
+    argv = sys.argv[1:]
+
+    inferred_norm_folder = _infer_norm_folder_default(argv)
+    if inferred_norm_folder:
+        argv = [*argv, f"--data.norm_folder={inferred_norm_folder}"]
+
+    inferred_save_dir = _infer_csvlogger_save_dir_default(argv)
+    if inferred_save_dir:
+        argv = [*argv, f"--trainer.logger.init_args.save_dir={inferred_save_dir}"]
+
+    _configure_python_logging(argv)
     LightningCLI(
         ClosureLitModule,
         ClosureDataModule,
+        args=argv,
         save_config_kwargs={"overwrite": True},
     )
 

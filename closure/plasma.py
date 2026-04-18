@@ -29,6 +29,7 @@ __all__ = [
     "vector_spectrum_2D",
 ]
 
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -37,6 +38,82 @@ import scipy.ndimage as nd
 
 ArrayLike = np.ndarray
 DataDict = dict[str, Any]
+
+
+def _parse_first_float(value: str) -> float:
+    """Parse the first float token from a string value."""
+    for token in value.replace(",", " ").split():
+        try:
+            return float(token)
+        except ValueError:
+            continue
+    raise ValueError(f"No float value found in: {value!r}")
+
+
+def _parse_float_list(value: str) -> list[float]:
+    """Parse all float tokens from a string value."""
+    out: list[float] = []
+    for token in value.replace(",", " ").split():
+        try:
+            out.append(float(token))
+        except ValueError:
+            continue
+    if not out:
+        raise ValueError(f"No float values found in: {value!r}")
+    return out
+
+
+def _find_experiment_inp_file(experiment: str) -> Path:
+    """Locate an experiment ``.inp`` file from an absolute experiment path."""
+    exp_path = Path(experiment).expanduser()
+
+    if not exp_path.is_absolute():
+        raise ValueError(
+            "experiment must be an absolute path to an experiment directory or .inp file"
+        )
+
+    # Accept explicit .inp file path.
+    if exp_path.is_file() and exp_path.suffix == ".inp":
+        return exp_path.resolve()
+
+    # Accept explicit directory path containing an .inp file.
+    if exp_path.is_dir():
+        inp_files = sorted(exp_path.glob("*.inp"))
+        if inp_files:
+            return inp_files[0].resolve()
+        raise FileNotFoundError(f"No .inp file found in experiment directory {exp_path}")
+
+    raise FileNotFoundError(
+        f"Could not locate experiment path {exp_path}. "
+        "Provide experiment as an absolute path to a run folder or .inp file."
+    )
+
+
+def _read_b0x_nb_from_inp(inp_path: Path) -> tuple[float, float]:
+    """Read ``B0x`` and third entry of ``rhoINIT`` from an iPiC input file."""
+    b0x_value: float | None = None
+    nb_value: float | None = None
+
+    for raw_line in inp_path.read_text().splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if not line or "=" not in line:
+            continue
+        key, value = [part.strip() for part in line.split("=", 1)]
+        if key == "B0x":
+            b0x_value = _parse_first_float(value)
+        elif key == "rhoINIT":
+            rho_values = _parse_float_list(value)
+            if len(rho_values) < 3:
+                raise ValueError(
+                    f"rhoINIT in {inp_path} must contain at least 3 values to infer nb"
+                )
+            nb_value = rho_values[2]
+
+    if b0x_value is None:
+        raise ValueError(f"B0x not found in {inp_path}")
+    if nb_value is None:
+        raise ValueError(f"rhoINIT (3rd value for nb) not found in {inp_path}")
+    return b0x_value, nb_value
 
 
 def scalar_spectrum_2D(field: ArrayLike, x: ArrayLike, y: ArrayLike) -> tuple[ArrayLike, ArrayLike]:
@@ -137,10 +214,32 @@ def code2alfven(
     x: ArrayLike,
     y: ArrayLike,
     times: list[float],
-    b0x: float,
-    nb: float,
+    b0x: float | None = None,
+    nb: float | None = None,
+    experiment: str | None = None,
 ) -> tuple[ArrayLike, ArrayLike, list[float]]:
-    """Rescale code units to Alfven units."""
+    """Rescale code units to Alfven units.
+
+    When ``b0x`` or ``nb`` are missing and ``experiment`` is provided,
+    values are inferred from ``*.inp``:
+    - ``B0x`` line for ``b0x``
+    - third entry of ``rhoINIT`` for ``nb``
+
+    ``experiment`` must be an absolute path to either the run directory
+    containing an ``.inp`` file or the ``.inp`` file itself.
+    """
+    if (b0x is None or nb is None) and experiment is not None:
+        inferred_b0x, inferred_nb = _read_b0x_nb_from_inp(_find_experiment_inp_file(experiment))
+        if b0x is None:
+            b0x = inferred_b0x
+        if nb is None:
+            nb = inferred_nb
+
+    if b0x is None or nb is None:
+        raise ValueError(
+            "code2alfven requires b0x and nb. Provide them directly or set experiment to infer from *.inp"
+        )
+
     va = b0x / np.sqrt(nb)
     j0 = nb * va
     p0 = nb * va**2
@@ -223,6 +322,131 @@ def code2alfven(
 
     return x * np.sqrt(nb), y * np.sqrt(nb), [t * b0x for t in times]
 
+def find_xo_points(A, x=None, y=None, grad_tol=1e-8, merge_tol=1e-3):
+    """
+    Find O-points and X-points in a 2D scalar field A sampled on a regular grid.
+
+    Parameters
+    ----------
+    A : 2D ndarray, shape (nx, ny)
+        Scalar field values.
+    x, y : 1D ndarrays
+        Grid coordinates. If None, use integer indices.
+    grad_tol : float
+        Tolerance on |grad psi| for accepting a critical point.
+    merge_tol : float
+        Distance tolerance for merging duplicate roots.
+
+    Returns
+    -------
+    o_points : list of dict
+    x_points : list of dict
+    """
+    from scipy.interpolate import RectBivariateSpline
+    from scipy.optimize import root
+
+    nx, ny = A.shape
+    if x is None:
+        x = np.arange(nx, dtype=float)
+    else:
+        x = np.asarray(x, dtype=float)
+
+    if y is None:
+        y = np.arange(ny, dtype=float)
+    else:
+        y = np.asarray(y, dtype=float)
+
+    spline = RectBivariateSpline(x, y, A)
+
+    def grad(z):
+        xx, yy = z
+        gx = spline.ev(xx, yy, dx=1, dy=0)
+        gy = spline.ev(xx, yy, dx=0, dy=1)
+        return np.array([gx, gy])
+
+    def hessian(z):
+        xx, yy = z
+        gxx = spline.ev(xx, yy, dx=2, dy=0)
+        gyy = spline.ev(xx, yy, dx=0, dy=2)
+        gxy = spline.ev(xx, yy, dx=1, dy=1)
+        return np.array([[gxx, gxy],
+                         [gxy, gyy]])
+
+    def value(z):
+        return float(spline.ev(z[0], z[1]))
+
+    def nearest_indices(z):
+        ix = int(np.argmin(np.abs(x - z[0])))
+        iy = int(np.argmin(np.abs(y - z[1])))
+        return ix, iy
+
+    # candidate seeds: points where gradient magnitude is locally small
+    dAx = np.gradient(A, x, axis=0)
+    dAy = np.gradient(A, y, axis=1)
+    gmag = np.sqrt(dAx**2 + dAy**2)
+
+    candidates = []
+    for i in range(1, nx - 1):
+        for j in range(1, ny - 1):
+            patch = gmag[i-1:i+2, j-1:j+2]
+            if gmag[i, j] == np.min(patch):
+                candidates.append((x[i], y[j]))
+
+    roots = []
+    for seed in candidates:
+        sol = root(grad, seed)
+        if not sol.success:
+            continue
+
+        z = sol.x
+        xx, yy = z
+
+        # inside domain
+        if not (x[0] <= xx <= x[-1] and y[0] <= yy <= y[-1]):
+            continue
+
+        # accept only if gradient is really small
+        if np.linalg.norm(grad(z)) > grad_tol:
+            continue
+
+        roots.append(z)
+
+    # merge duplicates
+    unique = []
+    for z in roots:
+        if not any(np.linalg.norm(z - q) < merge_tol for q in unique):
+            unique.append(z)
+
+    o_points = []
+    x_points = []
+
+    for z in unique:
+        H = hessian(z)
+        eig = np.linalg.eigvalsh(H)
+        detH = np.linalg.det(H)
+        ix, iy = nearest_indices(z)
+
+        entry = {
+            "x": float(z[0]),
+            "y": float(z[1]),
+            "ix": ix,
+            "iy": iy,
+            "value": value(z),
+            "eigvals": eig,
+            "detH": float(detH),
+        }
+
+        if eig[0] > 0:
+            entry["type"] = "O-min"
+            o_points.append(entry)
+        elif eig[1] < 0:
+            entry["type"] = "O-max"
+            o_points.append(entry)
+        elif eig[0] < 0 < eig[1]:
+            entry["type"] = "X"
+            x_points.append(entry)
+
+    return o_points, x_points
 
 def do_dot(fx: ArrayLike, fy: ArrayLike, fz: ArrayLike, gx: ArrayLike, gy: ArrayLike, gz: ArrayLike) -> ArrayLike:
     """Return the dot product of two vector fields."""

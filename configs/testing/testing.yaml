@@ -5,7 +5,7 @@
 #   models/Harris/Le/Le2GEM15ppc/default/P/4lrs_es500/config.json
 #
 # Usage:
-#   closure-train fit --config configs/legacy_harris_4lrs_es500.yaml
+#   closure-train fit --config configs/testing/testing.yaml
 #
 # Paths are relative and resolved via paths.yaml:
 #   data_dir  → /volume1/scratch/share_dir
@@ -34,10 +34,10 @@ model:
 
 data:
   data_folder: ecsim/Harris/Le/
-  norm_folder: ./models/Lightning/Harris/Le
-  train_samples_file: ./splits/Le/Le2GEM15ppc/train.csv
-  val_samples_file: ./splits/Le/Le2GEM15ppc/val.csv
-  test_samples_file: ./splits/Le/Le2GEM15ppc/test.csv
+  norm_folder: ./models/Lightning/testing
+  train_samples_file: ./splits/iPiC3D-nathan5-12/train.csv
+  val_samples_file: ./splits/iPiC3D-nathan5-12/val.csv
+  test_samples_file: ../splits/iPiC3D-nathan5-12/test.csv
   batch_size: 32
   num_workers: 12
   flatten: false
@@ -46,8 +46,8 @@ data:
   prescaler_targets: [log, log, log, arcsinh, arcsinh, arcsinh]
   features_dtype: float32
   targets_dtype: float32
-  patch_dim: [32, 32]
-  subsample_rate: 160
+  patch_dim: [64, 64]
+  subsample_rate: 800
   subsample_seed: 42
   read_features_targets_kwargs:
     fields_to_read:
@@ -82,21 +82,19 @@ data:
       - Pxz_e
       - Pyz_e
     choose_species: ['e', null, 'e', null]
-    choose_x: [0, 512]
-    choose_y: [175, 325]
     verbose: false
 
 trainer:
-  max_epochs: 500
+  max_epochs: 50
   accelerator: auto
   devices: auto
   strategy: auto
-  default_root_dir: ./models/Lightning/Harris/Le
+  default_root_dir: ./models/Lightning/testing
   callbacks:
     - class_path: lightning.pytorch.callbacks.EarlyStopping
       init_args:
         monitor: val_loss
-        patience: 500
+        patience: 50
         mode: min
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
@@ -109,5 +107,3 @@ trainer:
         logging_interval: epoch
   logger:
     class_path: lightning.pytorch.loggers.CSVLogger
-    init_args:
-      save_dir: ./models/Lightning/Harris/Le

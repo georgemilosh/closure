@@ -8,7 +8,11 @@ import sys
 import pytest
 import yaml
 
-from closure.cli import _resolve_log_file_path
+from closure.cli import (
+    _infer_csvlogger_save_dir_default,
+    _infer_norm_folder_default,
+    _resolve_log_file_path,
+)
 
 
 FIXTURES_DIR = pathlib.Path(__file__).parent / "fixtures" / "ecsim_tiny"
@@ -194,3 +198,91 @@ def test_log_file_falls_back_when_logger_version_is_implicit(tmp_path):
     path = _resolve_log_file_path(["fit", f"--config={config_path}"])
     expected = tmp_path / "models" / "closure.log"
     assert path == expected.resolve()
+
+
+def test_csvlogger_save_dir_defaults_to_default_root_dir(tmp_path):
+    """Inject save_dir from default_root_dir when CSVLogger save_dir is omitted."""
+    config_path = tmp_path / "cfg.yaml"
+    config_path.write_text(
+        yaml.dump(
+            {
+                "trainer": {
+                    "default_root_dir": str(tmp_path / "models"),
+                    "logger": {
+                        "class_path": "lightning.pytorch.loggers.CSVLogger",
+                        "init_args": {
+                            "name": "CNN",
+                        },
+                    },
+                }
+            }
+        )
+    )
+
+    inferred = _infer_csvlogger_save_dir_default(["fit", f"--config={config_path}"])
+    assert inferred == str(tmp_path / "models")
+
+
+def test_csvlogger_save_dir_not_overridden_when_explicit(tmp_path):
+    """Do not inject fallback when save_dir is already set in config."""
+    config_path = tmp_path / "cfg.yaml"
+    config_path.write_text(
+        yaml.dump(
+            {
+                "trainer": {
+                    "default_root_dir": str(tmp_path / "models"),
+                    "logger": {
+                        "class_path": "lightning.pytorch.loggers.CSVLogger",
+                        "init_args": {
+                            "save_dir": str(tmp_path / "logs"),
+                            "name": "CNN",
+                        },
+                    },
+                }
+            }
+        )
+    )
+
+    inferred = _infer_csvlogger_save_dir_default(["fit", f"--config={config_path}"])
+    assert inferred is None
+
+
+def test_norm_folder_defaults_to_default_root_dir(tmp_path):
+    """Inject norm_folder from default_root_dir when norm_folder is omitted."""
+    config_path = tmp_path / "cfg.yaml"
+    config_path.write_text(
+        yaml.dump(
+            {
+                "trainer": {
+                    "default_root_dir": str(tmp_path / "models"),
+                },
+                "data": {
+                    "data_folder": "ecsim/Harris/Le/",
+                },
+            }
+        )
+    )
+
+    inferred = _infer_norm_folder_default(["fit", f"--config={config_path}"])
+    assert inferred == str(tmp_path / "models")
+
+
+def test_norm_folder_not_overridden_when_explicit(tmp_path):
+    """Do not inject fallback when norm_folder is already set in config."""
+    config_path = tmp_path / "cfg.yaml"
+    config_path.write_text(
+        yaml.dump(
+            {
+                "trainer": {
+                    "default_root_dir": str(tmp_path / "models"),
+                },
+                "data": {
+                    "data_folder": "ecsim/Harris/Le/",
+                    "norm_folder": str(tmp_path / "norm"),
+                },
+            }
+        )
+    )
+
+    inferred = _infer_norm_folder_default(["fit", f"--config={config_path}"])
+    assert inferred is None

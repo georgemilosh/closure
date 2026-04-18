@@ -97,3 +97,80 @@ class TestSpectra:
         k_reduced, slopes = plasma.get_spectral_index(k, spec, 4)
         assert k_reduced.size == slopes.size
         assert np.all(np.isfinite(slopes))
+
+
+class TestCode2AlfvenFallback:
+    def test_code2alfven_reads_b0x_and_nb_from_experiment_inp(self, tmp_path):
+        run_dir = tmp_path / "iPiC3D-nathan" / "Le2DHGEM_RunID_1"
+        run_dir.mkdir(parents=True)
+        (run_dir / "RunID_1.inp").write_text(
+            "\n".join(
+                [
+                    "B0x = 0.0249",
+                    "rhoINIT = 0.969 0.969 0.23 0.23",
+                ]
+            )
+        )
+
+        arr = np.ones((2, 2, 1), dtype=float)
+        data = {
+            "Bx": arr.copy(),
+            "By": arr.copy(),
+            "Bz": arr.copy(),
+            "Bmagn": arr.copy(),
+            "Emagn": arr.copy(),
+            "rho": {"e": arr.copy()},
+        }
+        x = np.array([0.0, 1.0])
+        y = np.array([0.0, 2.0])
+        times = [0.0, 1.0]
+
+        x_out, y_out, t_out = plasma.code2alfven(
+            data,
+            x,
+            y,
+            times,
+            experiment=str(run_dir.resolve()),
+        )
+
+        np.testing.assert_allclose(x_out, x * np.sqrt(0.23))
+        np.testing.assert_allclose(y_out, y * np.sqrt(0.23))
+        np.testing.assert_allclose(t_out, [0.0, 0.0249])
+
+    def test_code2alfven_uses_explicit_b0x_and_infers_only_nb(self, tmp_path):
+        run_dir = tmp_path / "Le2DHGEM_RunID_1"
+        run_dir.mkdir(parents=True)
+        (run_dir / "RunID_1.inp").write_text(
+            "\n".join(
+                [
+                    "B0x = 0.0249",
+                    "rhoINIT = 0.969 0.969 0.23 0.23",
+                ]
+            )
+        )
+
+        arr = np.ones((2, 2, 1), dtype=float)
+        data = {
+            "Bx": arr.copy(),
+            "By": arr.copy(),
+            "Bz": arr.copy(),
+            "Bmagn": arr.copy(),
+            "Emagn": arr.copy(),
+            "rho": {"e": arr.copy()},
+        }
+
+        _, _, t_out = plasma.code2alfven(
+            data,
+            np.array([0.0, 1.0]),
+            np.array([0.0, 1.0]),
+            [1.0],
+            b0x=0.05,
+            nb=None,
+            experiment=str(run_dir),
+        )
+
+        np.testing.assert_allclose(t_out, [0.05])
+
+    def test_find_experiment_inp_file_rejects_relative_path(self):
+        with np.testing.assert_raises(ValueError):
+            plasma._find_experiment_inp_file("Le2DHGEM_RunID_1")
