@@ -83,7 +83,8 @@ SUBMIT=false
 [[ "${1:-}" == "--submit" ]] && SUBMIT=true
 
 OUT_DIR="${REPO_DIR}/models/Lightning/Harris/Le/${LOGGER_NAME}/scaling_jobs"
-mkdir -p "$OUT_DIR"
+LOG_DIR="${REPO_DIR}/models/Lightning/Harris/Le/${LOGGER_NAME}/logs"
+mkdir -p "$OUT_DIR" "$LOG_DIR"
 
 GEN_COUNT=0
 
@@ -130,15 +131,16 @@ for cfg in "${CONFIGS[@]}"; do
 #SBATCH --mem=${MEM}
 #SBATCH --time=${WALL_TIME}
 #SBATCH --chdir=${REPO_DIR}
-#SBATCH --output=${REPO_DIR}/logs/%x_%j.out
-#SBATCH --error=${REPO_DIR}/logs/%x_%j.err
+#SBATCH --output=${LOG_DIR}/%x_%j.out
+#SBATCH --error=${LOG_DIR}/%x_%j.err
 #SBATCH --partition=${PARTITION}
 
 set -euo pipefail
 
 REPO_DIR="${REPO_DIR}"
+LOG_DIR="${LOG_DIR}"
 cd "\$REPO_DIR"
-mkdir -p logs
+mkdir -p "\$LOG_DIR"
 
 echo "SLURM_SUBMIT_DIR=\${SLURM_SUBMIT_DIR:-<unset>}"
 echo "SLURM_WORKING_DIR=\$(pwd)"
@@ -308,6 +310,7 @@ else
   echo "Base subsample: ${BASE_SUBSAMPLE} (scaled per total GPUs)"
 fi
 echo "Scripts in: ${OUT_DIR}/"
+echo "Logs in:    ${LOG_DIR}/"
 if ! $SUBMIT; then
   echo ""
   echo "To submit all:  $0 --submit"
