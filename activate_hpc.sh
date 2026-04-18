@@ -10,11 +10,37 @@
 _CLOSURE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # --- HPC modules (same as production run.sh + Lightning) ---
-module load PyTorch/2.1.2-foss-2023a-CUDA-12.1.1
+# Simple detection from currently loaded module stack.
+_loaded_modules="$(module -t list 2>&1 | tr '\n' ':')"
+
+if [[ "$_loaded_modules" == *"gpu_rome_a100_rhel9"* ]]; then
+	_hpc_stack="gpu"
+elif [[ "$_loaded_modules" == *"debug_milan_rhel9"* ]]; then
+	_hpc_stack="debug"
+else
+	echo "Could not detect Dodrio stack from module list."
+	echo "Expected one of: gpu_rome_a100_rhel9 or debug_milan_rhel9"
+	echo "Run on the target node/partition and source this file again."
+	return 1
+fi
+
+case "$_hpc_stack" in
+	gpu)
+		# env/software/dodrio/gpu_rome_a100_rhel9
+		module load PyTorch/2.1.2-foss-2023a-CUDA-12.1.1
+		module load PyTorch-Lightning/2.2.1-foss-2023a-CUDA-12.1.1
+		module load torchvision/0.16.0-foss-2023a-CUDA-12.1.1
+		;;
+	debug)
+		# env/software/dodrio/debug_milan_rhel9
+		module load PyTorch-bundle/2.1.2-foss-2023a
+		module load PyTorch-Lightning/2.2.1-foss-2023a
+		;;
+esac
+
 module load h5py/3.9.0-foss-2023a
-module load torchvision/0.16.0-foss-2023a-CUDA-12.1.1
 module load matplotlib/3.7.2-gfbf-2023a
-module load PyTorch-Lightning/2.2.1-foss-2023a-CUDA-12.1.1
+
 
 # --- pip packages not covered by modules ---
 # Only needed once:
@@ -33,4 +59,4 @@ unset SLURM_NTASKS
 unset SLURM_JOB_NAME
 export SLURM_NTASKS=1
 
-echo "closure HPC env ready  (modules + shims + project root on PYTHONPATH)"
+echo "closure HPC env ready [stack=$_hpc_stack]  (modules + shims + project root on PYTHONPATH)"
