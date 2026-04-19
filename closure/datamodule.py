@@ -90,6 +90,13 @@ class ClosureDataModule(L.LightningDataModule):
         If True, rescale each sample from code units to Alfvén units
         using the ``.inp`` file auto-detected from its experiment
         subdirectory.  Default ``False``.
+    use_readonly : bool
+        If True, access ``data_folder`` through the Lustre
+        ``/readonly`` mount point.  This avoids aggressive page-cache
+        purging on VSC Tier-1 Hortense and can significantly speed up
+        repeated HDF5 reads — with zero copy overhead.  The mount is
+        read-only, which is fine since data loading never writes.
+        Default ``False``.
     """
 
     def __init__(
@@ -118,6 +125,7 @@ class ClosureDataModule(L.LightningDataModule):
         filter_targets: Optional[dict] = None,
         norm_version_dir: Optional[str] = None,
         alfven_units: bool = False,
+        use_readonly: bool = False,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -174,6 +182,31 @@ class ClosureDataModule(L.LightningDataModule):
         return base_norm_folder
 
     # ------------------------------------------------------------------
+    # /readonly Lustre mount
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _apply_readonly_prefix(data_folder: str) -> str:
+        """Prepend ``/readonly`` to *data_folder* for Lustre cache retention.
+
+        Paths that already start with ``/readonly`` are returned unchanged.
+        A warning is emitted if the resulting path does not exist (e.g.
+        running on a non-Hortense system).
+        """
+        if data_folder.startswith("/readonly"):
+            return data_folder
+        readonly_path = "/readonly" + data_folder
+        if not Path(readonly_path).exists():
+            _logger.warning(
+                "/readonly mount not available (path %s does not exist). "
+                "Falling back to original path %s",
+                readonly_path,
+                data_folder,
+            )
+            return data_folder
+        _logger.info("Using /readonly mount: %s", readonly_path)
+        return readonly_path
+
+    # ------------------------------------------------------------------
     # setup
     # ------------------------------------------------------------------
     def setup(self, stage: str | None = None):
@@ -185,6 +218,11 @@ class ClosureDataModule(L.LightningDataModule):
 
         # Resolve relative paths against paths.yaml roots
         data_folder = self._resolve_path(hp.data_folder, "data_dir")
+
+        # /readonly mount: avoids Lustre page-cache purging (zero-cost)
+        if hp.use_readonly:
+            data_folder = self._apply_readonly_prefix(data_folder)
+
         norm_folder = self._resolve_path(hp.norm_folder, "work_dir")
         norm_folder = self._resolve_norm_folder(norm_folder)
         train_samples_file = self._resolve_path(hp.train_samples_file, "data_dir")

@@ -953,7 +953,7 @@ def build_XY(files_path, choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y,
 
 def read_features_targets(files_path, filenames, fields_to_read=None, request_features = None, request_targets = None, 
                choose_species=None,choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, choose_z=DEFAULT_CHOOSE_Z, features_dtype = np.float32, targets_dtype = np.float32,  verbose=DEFAULT_VERBOSE,
-               alfven_units: bool = False):
+               alfven_units: bool = False, num_workers: int = 1):
     """
     Reads and extracts features and targets from simulation data files.
         # Read qom, Lx, Ly, Lz, nxc, nyc, nzc and dt from the SimulationData.txt file.
@@ -974,6 +974,9 @@ def read_features_targets(files_path, filenames, fields_to_read=None, request_fe
         alfven_units (bool, optional): If True, rescale each sample from code
             units to Alfven units using the ``.inp`` file auto-detected from
             its experiment subdirectory. Defaults to False.
+        num_workers (int, optional): Number of parallel threads used to read
+            individual sample files.  Set to 1 to disable parallelism.
+            Defaults to 12.
 
     Returns:
         features (ndarray): An array containing the extracted features.
@@ -1005,14 +1008,14 @@ def read_features_targets(files_path, filenames, fields_to_read=None, request_fe
             features.append(read_files(files_path, filenames, fields_to_read, qom, features_dtype, 
                           extract_fields=species_to_list(request_features), choose_species=choose_species, 
                           choose_x=choose_x[i], choose_y=choose_y[i], choose_z=choose_z[i], verbose=verbose,
-                          alfven_units=alfven_units))
+                          alfven_units=alfven_units, desc=f"features[{i}]", num_workers=num_workers))
             if verbose:
                 logger.info(f"{features[-1].shape =}")
             
             targets.append(read_files(files_path, filenames, fields_to_read, qom, targets_dtype,
                             extract_fields=species_to_list(request_targets), choose_species=choose_species, 
                             choose_x=choose_x[i], choose_y=choose_y[i], choose_z=choose_z[i], verbose=verbose,
-                            alfven_units=alfven_units)) 
+                            alfven_units=alfven_units, desc=f"targets[{i}]", num_workers=num_workers)) 
             if verbose:
                 logger.info(f"{targets[-1].shape =}")
         features = np.concatenate(features,axis=2)
@@ -1021,32 +1024,38 @@ def read_features_targets(files_path, filenames, fields_to_read=None, request_fe
         features = read_files(files_path, filenames, fields_to_read, qom, features_dtype, 
                             extract_fields=species_to_list(request_features), choose_species=choose_species, 
                             choose_x=choose_x, choose_y=choose_y, choose_z=choose_z, verbose=verbose,
-                            alfven_units=alfven_units)
+                            alfven_units=alfven_units, desc="features", num_workers=num_workers)
         targets = read_files(files_path, filenames, fields_to_read, qom, targets_dtype, 
                             extract_fields=species_to_list(request_targets), choose_species=choose_species, 
                             choose_x=choose_x, choose_y=choose_y, choose_z=choose_z, verbose=verbose,
-                            alfven_units=alfven_units)
+                            alfven_units=alfven_units, desc="targets", num_workers=num_workers)
 
     return features, targets
 
 def read_files(files_path, filenames, fields_to_read, qom, dtype, extract_fields=None, choose_species=None, choose_x=DEFAULT_CHOOSE_X, 
                choose_y=DEFAULT_CHOOSE_Y, choose_z=DEFAULT_CHOOSE_Z, verbose=DEFAULT_VERBOSE,
-               alfven_units: bool = False):
-    # Cache (b0x, nb) per experiment directory to avoid re-reading .inp
+               alfven_units: bool = False, desc: str = "loading", num_workers: int = 1):
+    # Pre-populate Alfvén cache serially (cheap .inp text reads; avoids race
+    # conditions in threads that would all write to the dict simultaneously).
     _alfven_cache: dict[str, tuple[float, float]] = {}
-    out2 = []
-    for filename in filenames:
-        out = []
-        data = read_data(files_path,filename,fields_to_read,qom,
-                                    choose_species=choose_species,choose_x=choose_x,choose_y=choose_y,choose_z=choose_z, verbose=verbose)
-        if alfven_units:
-            exp_dir = _resolve_experiment_dir(files_path, filename)
+    if alfven_units:
+        for fn in filenames:
+            exp_dir = _resolve_experiment_dir(files_path, fn)
             if exp_dir not in _alfven_cache:
                 inp_path = _find_experiment_inp_file(exp_dir)
                 _alfven_cache[exp_dir] = _read_b0x_nb_from_inp(inp_path)
+
+    def _load_one(filename):
+        """Load and extract one sample file; called from serial loop or thread pool."""
+        data = read_data(files_path, filename, fields_to_read, qom,
+                         choose_species=choose_species, choose_x=choose_x,
+                         choose_y=choose_y, choose_z=choose_z, verbose=verbose)
+        if alfven_units:
+            exp_dir = _resolve_experiment_dir(files_path, filename)
             b0x, nb = _alfven_cache[exp_dir]
             code2alfven(data, b0x=b0x, nb=nb)
         # TODO: Introduce something that check that the input of extract_fields is correct, e.g. `Jx` does not exist
+        out = []
         for extract_field_index in extract_fields:
             if isinstance(extract_field_index, list):
                 try:
@@ -1059,7 +1068,6 @@ def read_files(files_path, filenames, fields_to_read, qom, dtype, extract_fields
                     logger.warning(f"The extracted field is {data[extract_field_index[0]] = }")
                     raise e
             else:
-                #logger.info(data[extract_field_index])
                 try:
                     out.append(data[extract_field_index])
                 except Exception as e:
@@ -1067,12 +1075,48 @@ def read_files(files_path, filenames, fields_to_read, qom, dtype, extract_fields
                     logger.info(f"Available data keys are {data.keys() = }")
                     logger.info(f"Attempting to extract {extract_field_index = } which should be a field name")
                     raise e
-            outshape = out[-1].shape
-        out2.append(np.array(out))
+        return np.array(out)
+
+    try:
+        from tqdm import tqdm as _tqdm
+        _has_tqdm = True
+    except ImportError:
+        _has_tqdm = False
+
+    try:
+        workers_requested = int(num_workers)
+    except (TypeError, ValueError):
+        logger.warning(f"Invalid num_workers={num_workers!r}; falling back to 1")
+        workers_requested = 1
+    if workers_requested < 1:
+        logger.warning(f"num_workers={workers_requested} is < 1; using 1")
+        workers_requested = 1
+
+    actual_workers = min(workers_requested, len(filenames))
+    if actual_workers > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=actual_workers) as executor:
+            if _has_tqdm:
+                out2 = list(_tqdm(
+                    executor.map(_load_one, filenames),
+                    total=len(filenames),
+                    desc=desc,
+                    unit="file",
+                    leave=True,
+                    dynamic_ncols=True,
+                ))
+            else:
+                out2 = list(executor.map(_load_one, filenames))
+    else:
+        if _has_tqdm:
+            out2 = [_load_one(fn) for fn in _tqdm(
+                filenames, desc=desc, unit="file", leave=True, dynamic_ncols=True
+            )]
+        else:
+            out2 = [_load_one(fn) for fn in filenames]
     try:
         out2 = np.array(out2, dtype=dtype)
         if len(out2.shape) > 4:
-            logger.warning(f"read_data: prior to appending {outshape = }")
             logger.warning(f"Output shape {out2.shape} has more than 4 dimensions, we try fixing by removing single-dimensional entries")
             out2 = out2[...,0].squeeze()
             logger.warning(f"Output shape after fixing {out2.shape}")
@@ -1088,7 +1132,7 @@ def read_files(files_path, filenames, fields_to_read, qom, dtype, extract_fields
             
     except Exception as e:
         logger.error(f"Failed to process array. Current shape: {np.array(out2).shape if isinstance(out2, list) else out2.shape}")
-        logger.error(f"dtype: {dtype}, outshape from last file: {outshape}")
+        logger.error(f"dtype: {dtype}")
         raise e
         
     return out2  # we want to have the time as the first index, then x, then y, then the field
