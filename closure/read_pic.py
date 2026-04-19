@@ -12,7 +12,13 @@ import numpy as np
 import scipy.ndimage as nd
 
 from .config import load_paths
-from .plasma import do_cross, highdiff
+from .plasma import (
+    _find_experiment_inp_file,
+    _read_b0x_nb_from_inp,
+    code2alfven,
+    do_cross,
+    highdiff,
+)
 from .utilities import species_to_list
 
 import logging
@@ -49,6 +55,21 @@ def _resolve_files_path(files_path: str | os.PathLike[str] | None) -> str:
     if files_path is None:
         files_path = load_paths().get("data_dir", "./data")
     return str(Path(files_path).expanduser())
+
+
+def _resolve_experiment_dir(files_path: str, filename: str) -> str:
+    """Return the absolute experiment directory for a sample filename.
+
+    Given ``files_path`` (the resolved data root, e.g.
+    ``/data/ecsim/Harris/Le``) and a sample *filename* such as
+    ``Le2GEM15ppc/DoubleGEM-Fields_006500.h5``, return the directory
+    containing that file – i.e. ``/data/ecsim/Harris/Le/Le2GEM15ppc``.
+    """
+    if "/" in filename:
+        subdir = filename.rsplit("/", 1)[0]
+        return os.path.join(files_path, subdir)
+    return files_path
+
 
 def get_saved_iterations(files_path, experiment, choose_times=None):
     """Return sorted saved field iterations and corresponding simulation times.
@@ -931,7 +952,8 @@ def build_XY(files_path, choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y,
 
 
 def read_features_targets(files_path, filenames, fields_to_read=None, request_features = None, request_targets = None, 
-               choose_species=None,choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, choose_z=DEFAULT_CHOOSE_Z, features_dtype = np.float32, targets_dtype = np.float32,  verbose=DEFAULT_VERBOSE):
+               choose_species=None,choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, choose_z=DEFAULT_CHOOSE_Z, features_dtype = np.float32, targets_dtype = np.float32,  verbose=DEFAULT_VERBOSE,
+               alfven_units: bool = False):
     """
     Reads and extracts features and targets from simulation data files.
         # Read qom, Lx, Ly, Lz, nxc, nyc, nzc and dt from the SimulationData.txt file.
@@ -949,6 +971,9 @@ def read_features_targets(files_path, filenames, fields_to_read=None, request_fe
         features_dtype (dtype, optional): The data type to use for the extracted features.
         targets_dtype (dtype, optional): The data type to use for the extracted targets.
         verbose (bool, optional): Whether to print verbose output during the extraction process.
+        alfven_units (bool, optional): If True, rescale each sample from code
+            units to Alfven units using the ``.inp`` file auto-detected from
+            its experiment subdirectory. Defaults to False.
 
     Returns:
         features (ndarray): An array containing the extracted features.
@@ -979,13 +1004,15 @@ def read_features_targets(files_path, filenames, fields_to_read=None, request_fe
             
             features.append(read_files(files_path, filenames, fields_to_read, qom, features_dtype, 
                           extract_fields=species_to_list(request_features), choose_species=choose_species, 
-                          choose_x=choose_x[i], choose_y=choose_y[i], choose_z=choose_z[i], verbose=verbose))
+                          choose_x=choose_x[i], choose_y=choose_y[i], choose_z=choose_z[i], verbose=verbose,
+                          alfven_units=alfven_units))
             if verbose:
                 logger.info(f"{features[-1].shape =}")
             
             targets.append(read_files(files_path, filenames, fields_to_read, qom, targets_dtype,
                             extract_fields=species_to_list(request_targets), choose_species=choose_species, 
-                            choose_x=choose_x[i], choose_y=choose_y[i], choose_z=choose_z[i], verbose=verbose)) 
+                            choose_x=choose_x[i], choose_y=choose_y[i], choose_z=choose_z[i], verbose=verbose,
+                            alfven_units=alfven_units)) 
             if verbose:
                 logger.info(f"{targets[-1].shape =}")
         features = np.concatenate(features,axis=2)
@@ -993,20 +1020,32 @@ def read_features_targets(files_path, filenames, fields_to_read=None, request_fe
     else:
         features = read_files(files_path, filenames, fields_to_read, qom, features_dtype, 
                             extract_fields=species_to_list(request_features), choose_species=choose_species, 
-                            choose_x=choose_x, choose_y=choose_y, choose_z=choose_z, verbose=verbose)
+                            choose_x=choose_x, choose_y=choose_y, choose_z=choose_z, verbose=verbose,
+                            alfven_units=alfven_units)
         targets = read_files(files_path, filenames, fields_to_read, qom, targets_dtype, 
                             extract_fields=species_to_list(request_targets), choose_species=choose_species, 
-                            choose_x=choose_x, choose_y=choose_y, choose_z=choose_z, verbose=verbose)
+                            choose_x=choose_x, choose_y=choose_y, choose_z=choose_z, verbose=verbose,
+                            alfven_units=alfven_units)
 
     return features, targets
 
 def read_files(files_path, filenames, fields_to_read, qom, dtype, extract_fields=None, choose_species=None, choose_x=DEFAULT_CHOOSE_X, 
-               choose_y=DEFAULT_CHOOSE_Y, choose_z=DEFAULT_CHOOSE_Z, verbose=DEFAULT_VERBOSE):
+               choose_y=DEFAULT_CHOOSE_Y, choose_z=DEFAULT_CHOOSE_Z, verbose=DEFAULT_VERBOSE,
+               alfven_units: bool = False):
+    # Cache (b0x, nb) per experiment directory to avoid re-reading .inp
+    _alfven_cache: dict[str, tuple[float, float]] = {}
     out2 = []
     for filename in filenames:
         out = []
         data = read_data(files_path,filename,fields_to_read,qom,
                                     choose_species=choose_species,choose_x=choose_x,choose_y=choose_y,choose_z=choose_z, verbose=verbose)
+        if alfven_units:
+            exp_dir = _resolve_experiment_dir(files_path, filename)
+            if exp_dir not in _alfven_cache:
+                inp_path = _find_experiment_inp_file(exp_dir)
+                _alfven_cache[exp_dir] = _read_b0x_nb_from_inp(inp_path)
+            b0x, nb = _alfven_cache[exp_dir]
+            code2alfven(data, b0x=b0x, nb=nb)
         # TODO: Introduce something that check that the input of extract_fields is correct, e.g. `Jx` does not exist
         for extract_field_index in extract_fields:
             if isinstance(extract_field_index, list):

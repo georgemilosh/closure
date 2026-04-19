@@ -174,3 +174,44 @@ class TestCode2AlfvenFallback:
     def test_find_experiment_inp_file_rejects_relative_path(self):
         with np.testing.assert_raises(ValueError):
             plasma._find_experiment_inp_file("Le2DHGEM_RunID_1")
+
+
+class TestCode2AlfvenDataOnly:
+    """Test code2alfven when x, y, times are omitted (data-only mode)."""
+
+    def test_code2alfven_without_coordinates(self):
+        """Data dict is scaled; returns (None, None, None)."""
+        b0x, nb = 0.0249, 0.23
+        va = b0x / np.sqrt(nb)
+        p0 = nb * va ** 2
+
+        arr = np.full((2, 2, 1), 3.0)
+        data = {
+            "Bx": arr.copy(),
+            "By": arr.copy(),
+            "Bz": arr.copy(),
+            "Bmagn": arr.copy(),
+            "Emagn": arr.copy(),
+            "rho": {"e": arr.copy()},
+            "Pxx": {"e": arr.copy()},
+        }
+
+        x_out, y_out, t_out = plasma.code2alfven(data, b0x=b0x, nb=nb)
+
+        assert x_out is None
+        assert y_out is None
+        assert t_out is None
+        np.testing.assert_allclose(data["Bx"], 3.0 / b0x)
+        np.testing.assert_allclose(data["rho"]["e"], 3.0 / nb)
+        np.testing.assert_allclose(data["Pxx"]["e"], 3.0 / p0)
+
+
+class TestAlfvenScales:
+    def test_alfven_scales_values(self):
+        scales = plasma.alfven_scales(0.0249, 0.23)
+        assert scales["b0x"] == 0.0249
+        assert scales["nb"] == 0.23
+        np.testing.assert_allclose(scales["va"], 0.0249 / np.sqrt(0.23))
+        np.testing.assert_allclose(scales["p0"], 0.23 * scales["va"] ** 2)
+        np.testing.assert_allclose(scales["e0"], scales["va"] * 0.0249)
+        np.testing.assert_allclose(scales["j0"], 0.23 * scales["va"])

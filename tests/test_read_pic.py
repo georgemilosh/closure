@@ -50,3 +50,13 @@ class TestIpic3dIO:
         assert y.shape == (4, 3)
         assert qom == [-1.0, 1.0]
         np.testing.assert_allclose(times, [0.0, 0.5])
+
+
+class TestResolveExperimentDir:
+    def test_with_subdirectory(self):
+        result = rp._resolve_experiment_dir("/data/ecsim/Harris/Le", "Le2GEM15ppc/Fields_001.h5")
+        assert result == "/data/ecsim/Harris/Le/Le2GEM15ppc"
+
+    def test_without_subdirectory(self):
+        result = rp._resolve_experiment_dir("/data/ecsim/Harris/Le", "Fields_001.h5")
+        assert result == "/data/ecsim/Harris/Le"

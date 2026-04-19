@@ -8,6 +8,7 @@ from closure.datamodule import ClosureDataModule
 from closure.models import CNet, FCNN, ResNet, MLP
 from closure.datasets import DataFrameDataset
 from closure.run_loader import RunLoader
+from closure.evaluation import transform_features
 from closure.plasma import get_Ohm, get_PS_2D_field, get_Az, get_J_perp
 from closure.read_pic import get_exp_times, read_data_ipic3d, build_XY
 
@@ -23,6 +24,7 @@ __all__ = [
     "MLP",
     "DataFrameDataset",
     "RunLoader",
+    "transform_features",
     "get_Ohm",
     "get_PS_2D_field",
     "get_Az",

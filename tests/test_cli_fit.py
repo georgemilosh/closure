@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import pathlib
 import sys
+from types import SimpleNamespace
 
 import pytest
 import yaml
 
 from closure.cli import (
+    _get_git_revision_info,
     _infer_csvlogger_save_dir_default,
     _infer_norm_folder_default,
+    _run_git_command,
     _resolve_log_file_path,
 )
 
@@ -286,3 +289,47 @@ def test_norm_folder_not_overridden_when_explicit(tmp_path):
 
     inferred = _infer_norm_folder_default(["fit", f"--config={config_path}"])
     assert inferred is None
+
+
+def test_run_git_command_returns_stdout(monkeypatch, tmp_path):
+    """Git command wrapper should return stripped stdout when successful."""
+
+    def _fake_run(*_args, **_kwargs):
+        return SimpleNamespace(returncode=0, stdout="main\n")
+
+    monkeypatch.setattr("closure.cli.subprocess.run", _fake_run)
+    value = _run_git_command(tmp_path, "rev-parse", "--abbrev-ref", "HEAD")
+    assert value == "main"
+
+
+def test_run_git_command_returns_none_on_error(monkeypatch, tmp_path):
+    """Git command wrapper should return None on non-zero exit status."""
+
+    def _fake_run(*_args, **_kwargs):
+        return SimpleNamespace(returncode=1, stdout="")
+
+    monkeypatch.setattr("closure.cli.subprocess.run", _fake_run)
+    value = _run_git_command(tmp_path, "rev-parse", "HEAD")
+    assert value is None
+
+
+def test_get_git_revision_info_uses_git_commands(monkeypatch):
+    """Branch and commit should come from helper git commands."""
+
+    calls = []
+
+    def _fake_run_git_command(_repo_dir, *args):
+        calls.append(args)
+        if args == ("rev-parse", "--abbrev-ref", "HEAD"):
+            return "feature/test"
+        if args == ("rev-parse", "HEAD"):
+            return "0123456789abcdef"
+        return None
+
+    monkeypatch.setattr("closure.cli._run_git_command", _fake_run_git_command)
+    branch, commit = _get_git_revision_info()
+
+    assert branch == "feature/test"
+    assert commit == "0123456789abcdef"
+    assert ("rev-parse", "--abbrev-ref", "HEAD") in calls
+    assert ("rev-parse", "HEAD") in calls

@@ -78,6 +78,15 @@ def graph_pred_targets(
         choose_y=read_features_targets_kwargs.get("choose_y"),
     )
 
+    # Scale spatial grids to Alfvén units when training used alfven_units
+    if getattr(dataset, "alfven_units", False) and dataset.alfven_params:
+        exp_dir = rp._resolve_experiment_dir(
+            data_folder, dataset.filenames[0]
+        )
+        nb = dataset.alfven_params.get(exp_dir, next(iter(dataset.alfven_params.values())))["nb"]
+        X = X * np.sqrt(nb)
+        Y = Y * np.sqrt(nb)
+
     img_dir = f"{output_dir}/img/{run_name}"
     if not os.path.exists(img_dir):
         os.makedirs(img_dir)
@@ -218,6 +227,15 @@ def plot_pred_targets(
         choose_x=read_features_targets_kwargs.get("choose_x"),
         choose_y=read_features_targets_kwargs.get("choose_y"),
     )
+
+    # Scale spatial grids to Alfvén units when training used alfven_units
+    if getattr(dataset, "alfven_units", False) and dataset.alfven_params:
+        exp_dir = rp._resolve_experiment_dir(
+            data_folder, dataset.filenames[0]
+        )
+        nb = dataset.alfven_params.get(exp_dir, next(iter(dataset.alfven_params.values())))["nb"]
+        X = X * np.sqrt(nb)
+        Y = Y * np.sqrt(nb)
 
     prediction_reshaped = invfunc(
         (

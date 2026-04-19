@@ -145,7 +145,9 @@ class RunLoader:
             cfg = yaml.safe_load(f)
 
         # --- Rebuild DataModule ---
-        data_cfg = cfg.get("data", {})
+        data_cfg = dict(cfg.get("data", {}))
+        if version_dir is not None:
+            data_cfg["norm_version_dir"] = str(Path(version_dir))
         datamodule = ClosureDataModule(**data_cfg)
         datamodule.setup(stage)
 

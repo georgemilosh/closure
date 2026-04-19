@@ -8,6 +8,7 @@ previously mixed into ``closure.utilities``.
 from __future__ import annotations
 
 __all__ = [
+    "alfven_scales",
     "apply_filter",
     "code2alfven",
     "do_cross",
@@ -209,16 +210,40 @@ def get_spectral_index(k: ArrayLike, spec: ArrayLike, n_points: int) -> tuple[Ar
     return np.array(k_reduced), np.array(slopes)
 
 
+def alfven_scales(
+    b0x: float,
+    nb: float,
+) -> dict[str, float]:
+    """Return the Alfvén reference scales for a given ``b0x`` and ``nb``.
+
+    Returns
+    -------
+    dict
+        Keys: ``b0x``, ``nb``, ``va``, ``j0``, ``p0``, ``e0``.
+    """
+    va = b0x / np.sqrt(nb)
+    return {
+        "b0x": b0x,
+        "nb": nb,
+        "va": va,
+        "j0": nb * va,
+        "p0": nb * va ** 2,
+        "e0": va * b0x,
+    }
+
+
 def code2alfven(
     data: DataDict,
-    x: ArrayLike,
-    y: ArrayLike,
-    times: list[float],
+    x: ArrayLike | None = None,
+    y: ArrayLike | None = None,
+    times: list[float] | None = None,
     b0x: float | None = None,
     nb: float | None = None,
     experiment: str | None = None,
-) -> tuple[ArrayLike, ArrayLike, list[float]]:
+) -> tuple[ArrayLike | None, ArrayLike | None, list[float] | None]:
     """Rescale code units to Alfven units.
+
+    The *data* dictionary is modified **in-place**.
 
     When ``b0x`` or ``nb`` are missing and ``experiment`` is provided,
     values are inferred from ``*.inp``:
@@ -227,6 +252,10 @@ def code2alfven(
 
     ``experiment`` must be an absolute path to either the run directory
     containing an ``.inp`` file or the ``.inp`` file itself.
+
+    ``x``, ``y`` and ``times`` are optional.  When ``None`` the
+    corresponding coordinate transform is skipped and ``None`` is
+    returned in that position.
     """
     if (b0x is None or nb is None) and experiment is not None:
         inferred_b0x, inferred_nb = _read_b0x_nb_from_inp(_find_experiment_inp_file(experiment))
@@ -240,17 +269,19 @@ def code2alfven(
             "code2alfven requires b0x and nb. Provide them directly or set experiment to infer from *.inp"
         )
 
-    va = b0x / np.sqrt(nb)
-    j0 = nb * va
-    p0 = nb * va**2
-    e0 = va * b0x
+    sc = alfven_scales(b0x, nb)
+    va = sc["va"]
+    j0 = sc["j0"]
+    p0 = sc["p0"]
+    e0 = sc["e0"]
 
     for field_name in ["Bx", "By", "Bz"]:
         try:
             data[field_name] = data[field_name] / b0x
         except Exception:
             pass
-    data["Bmagn"] = data["Bmagn"] / b0x
+    if "Bmagn" in data:
+        data["Bmagn"] = data["Bmagn"] / b0x
 
     for field_name in [
         "Ex",
@@ -270,7 +301,8 @@ def code2alfven(
             data[field_name] = data[field_name] / e0
         except Exception:
             pass
-    data["Emagn"] = data["Emagn"] / e0
+    if "Emagn" in data:
+        data["Emagn"] = data["Emagn"] / e0
 
     for field_name in ["Jx", "Jy", "Jz", "Jmagn"]:
         try:
@@ -320,7 +352,10 @@ def code2alfven(
         except Exception:
             pass
 
-    return x * np.sqrt(nb), y * np.sqrt(nb), [t * b0x for t in times]
+    x_out = x * np.sqrt(nb) if x is not None else None
+    y_out = y * np.sqrt(nb) if y is not None else None
+    t_out = [t * b0x for t in times] if times is not None else None
+    return x_out, y_out, t_out
 
 def find_xo_points(A, x=None, y=None, grad_tol=1e-8, merge_tol=1e-3):
     """

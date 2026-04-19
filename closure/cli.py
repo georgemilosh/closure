@@ -19,6 +19,7 @@ __all__ = ["main"]
 
 import logging
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,37 @@ from lightning.pytorch.cli import LightningCLI
 
 from closure.module import ClosureLitModule
 from closure.datamodule import ClosureDataModule
+
+
+def _run_git_command(repo_dir: Path, *args: str) -> str | None:
+    """Run ``git`` command in *repo_dir* and return stripped stdout.
+
+    Returns ``None`` when git is unavailable, the directory is not a repo,
+    or the command fails for any reason.
+    """
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(repo_dir), *args],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return None
+
+    if completed.returncode != 0:
+        return None
+
+    value = completed.stdout.strip()
+    return value or None
+
+
+def _get_git_revision_info() -> tuple[str | None, str | None]:
+    """Return ``(branch, commit)`` for the current repository when available."""
+    repo_dir = Path(__file__).resolve().parents[1]
+    branch = _run_git_command(repo_dir, "rev-parse", "--abbrev-ref", "HEAD")
+    commit = _run_git_command(repo_dir, "rev-parse", "HEAD")
+    return branch, commit
 
 
 def _get_rank_from_env(name: str) -> int:
@@ -293,7 +325,14 @@ def _configure_python_logging(argv: list[str]) -> None:
         force=True,
     )
     root_logger._closure_configured = True
-    logging.getLogger(__name__).info("Logging initialized -> %s", log_file)
+    logger = logging.getLogger(__name__)
+    logger.info("Logging initialized -> %s", log_file)
+
+    branch, commit = _get_git_revision_info()
+    if branch and commit:
+        logger.info("Git revision -> branch=%s commit=%s", branch, commit)
+    else:
+        logger.info("Git revision -> unavailable")
 
 
 def main():

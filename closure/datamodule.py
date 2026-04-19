@@ -83,6 +83,13 @@ class ClosureDataModule(L.LightningDataModule):
         Spatial filter configuration for features.
     filter_targets : dict or None
         Spatial filter configuration for targets.
+    norm_version_dir : str or None
+        Optional explicit Lightning ``version_*`` directory to scope
+        normalization files for offline evaluation / inference.
+    alfven_units : bool
+        If True, rescale each sample from code units to Alfvén units
+        using the ``.inp`` file auto-detected from its experiment
+        subdirectory.  Default ``False``.
     """
 
     def __init__(
@@ -109,6 +116,8 @@ class ClosureDataModule(L.LightningDataModule):
         read_features_targets_kwargs: Optional[dict] = None,
         filter_features: Optional[dict] = None,
         filter_targets: Optional[dict] = None,
+        norm_version_dir: Optional[str] = None,
+        alfven_units: bool = False,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -145,6 +154,25 @@ class ClosureDataModule(L.LightningDataModule):
         root = Path(load_paths().get(paths_yaml_key, "."))
         return str(root / p)
 
+    def _resolve_norm_folder(self, base_norm_folder: str) -> str:
+        """Return normalization directory scoped to a run version when available.
+
+        Precedence:
+        1) explicit ``hparams.norm_version_dir`` (used by RunLoader)
+        2) active trainer ``log_dir`` (used during normal training)
+        3) configured ``base_norm_folder`` fallback
+        """
+        explicit_version_dir = self.hparams.get("norm_version_dir")
+        if explicit_version_dir:
+            return str(Path(explicit_version_dir).expanduser().resolve())
+
+        trainer = getattr(self, "trainer", None)
+        trainer_log_dir = getattr(trainer, "log_dir", None) if trainer is not None else None
+        if trainer_log_dir:
+            return str(Path(trainer_log_dir).expanduser().resolve())
+
+        return base_norm_folder
+
     # ------------------------------------------------------------------
     # setup
     # ------------------------------------------------------------------
@@ -158,6 +186,7 @@ class ClosureDataModule(L.LightningDataModule):
         # Resolve relative paths against paths.yaml roots
         data_folder = self._resolve_path(hp.data_folder, "data_dir")
         norm_folder = self._resolve_path(hp.norm_folder, "work_dir")
+        norm_folder = self._resolve_norm_folder(norm_folder)
         train_samples_file = self._resolve_path(hp.train_samples_file, "data_dir")
         val_samples_file = self._resolve_path(hp.val_samples_file, "data_dir")
         test_samples_file = (
@@ -180,6 +209,7 @@ class ClosureDataModule(L.LightningDataModule):
             read_features_targets_kwargs=hp.read_features_targets_kwargs,
             filter_features=hp.filter_features,
             filter_targets=hp.filter_targets,
+            alfven_units=hp.alfven_units,
         )
 
         # Build transform for patch extraction (training only)

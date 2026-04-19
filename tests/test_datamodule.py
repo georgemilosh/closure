@@ -53,3 +53,23 @@ class TestChannelResolution:
         mock_ds.request_targets = ["t0", "t1"]
         dm._resolve_channel_indices(mock_ds)
         assert dm.feature_channels == [0, 2]
+
+
+class TestNormFolderResolution:
+    def test_explicit_norm_version_dir_takes_precedence(self, tmp_path):
+        explicit_dir = tmp_path / "lightning_logs" / "version_9"
+        dm = ClosureDataModule(**_COMMON, norm_version_dir=str(explicit_dir))
+        resolved = dm._resolve_norm_folder("/base/norm")
+        assert resolved == str(explicit_dir.resolve())
+
+    def test_trainer_log_dir_used_when_available(self, tmp_path):
+        dm = ClosureDataModule(**_COMMON)
+        trainer_log_dir = tmp_path / "lightning_logs" / "version_3"
+        dm.trainer = MagicMock(log_dir=str(trainer_log_dir))
+        resolved = dm._resolve_norm_folder("/base/norm")
+        assert resolved == str(trainer_log_dir.resolve())
+
+    def test_base_norm_folder_fallback_without_version_info(self):
+        dm = ClosureDataModule(**_COMMON)
+        resolved = dm._resolve_norm_folder("/base/norm")
+        assert resolved == "/base/norm"

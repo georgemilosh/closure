@@ -202,7 +202,8 @@ class DataFrameDataset(torch.utils.data.Dataset):
                      image_file_name_column: str = 'filenames',
                      read_features_targets_kwargs: dict = None,
                      filter_features: dict = None, filter_targets: dict = None,
-                     transform: dict = None):
+                     transform: dict = None,
+                     alfven_units: bool = False):
             """
             Args:
                 data_folder (str): The folder where the images are stored.
@@ -233,6 +234,9 @@ class DataFrameDataset(torch.utils.data.Dataset):
                 filter_features (str, optional): The filter to apply to the features. Defaults to None.
                 filter_targets (str, optional): The filter to apply to the targets. Defaults to None.
                 transform: Data augmentation transforms (applied only to specified splits)
+                alfven_units (bool, optional): If True, rescale each sample from code
+                    units to Alfvén units using the ``.inp`` file auto-detected from
+                    its experiment subdirectory. Defaults to False.
             """
             # Accept both features_dtype and feature_dtype, with feature_dtype taking precedence if provided
             if feature_dtype is not None:
@@ -251,6 +255,8 @@ class DataFrameDataset(torch.utils.data.Dataset):
             self.datalabel = datalabel
             self.flatten = flatten
             self.image_file_name_column = image_file_name_column
+            self.alfven_units = alfven_units
+            self.alfven_params: dict[str, dict[str, float]] = {}
             self.logger = logger
             # Extract feature and target channel names
             self.read_features_targets_kwargs = read_features_targets_kwargs or {}
@@ -307,8 +313,22 @@ class DataFrameDataset(torch.utils.data.Dataset):
             self.data_folder, self.filenames,
             features_dtype=self.features_dtype_numpy,
             targets_dtype=self.targets_dtype_numpy,
+            alfven_units=self.alfven_units,
             **filtered_kwargs
         )
+
+        # Build Alfvén parameter cache for downstream use (visualization, inference)
+        if self.alfven_units:
+            from .plasma import (
+                _find_experiment_inp_file,
+                _read_b0x_nb_from_inp,
+                alfven_scales,
+            )
+            for fn in self.filenames:
+                exp_dir = rp._resolve_experiment_dir(self.data_folder, fn)
+                if exp_dir not in self.alfven_params:
+                    b0x, nb = _read_b0x_nb_from_inp(_find_experiment_inp_file(exp_dir))
+                    self.alfven_params[exp_dir] = alfven_scales(b0x, nb)
         
         # Apply filtering if configured
         if self.filter_features is not None:

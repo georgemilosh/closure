@@ -390,21 +390,47 @@ def transform_targets(
     return ground_truth_scaled, prediction_scaled
 
 
-def normalize_input(data: dict, dataset):
+def normalize_input(data: dict, dataset, alfven_experiment: str | None = None):
     """Normalize simulation data dict for model inference.
+
+    When the *dataset* was trained with ``alfven_units=True``, the raw
+    *data* dict (in code units) is first rescaled to Alfvén units before
+    feature extraction.  You may pass *alfven_experiment* explicitly
+    (an absolute path to the experiment directory or ``.inp`` file) or,
+    if omitted, the first entry in ``dataset.alfven_params`` is used.
 
     Parameters
     ----------
     data : dict
         Dictionary containing simulation data arrays.
+        **Modified in-place** when Alfvén rescaling is applied.
     dataset : DataFrameDataset
         Dataset providing normalization settings.
+    alfven_experiment : str or None
+        Absolute path to experiment directory or ``.inp`` file for
+        Alfvén parameter inference.  Only needed when
+        ``dataset.alfven_units`` is True and ``dataset.alfven_params``
+        is empty.
 
     Returns
     -------
     torch.Tensor
         Normalized features ready for inference.
     """
+    if getattr(dataset, "alfven_units", False):
+        from .plasma import code2alfven
+
+        if alfven_experiment is not None:
+            code2alfven(data, experiment=alfven_experiment)
+        elif dataset.alfven_params:
+            scales = next(iter(dataset.alfven_params.values()))
+            code2alfven(data, b0x=scales["b0x"], nb=scales["nb"])
+        else:
+            raise ValueError(
+                "dataset.alfven_units is True but no alfven_params are "
+                "available and alfven_experiment was not provided."
+            )
+
     test_features = []
     for key in dataset.request_features:
         if "_" in key:

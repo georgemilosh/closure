@@ -34,9 +34,9 @@ model:
 
 data:
   data_folder: iPiC3D-nathan
-  train_samples_file: ./splits/iPiC3D-nathan5-12/train.csv
-  val_samples_file: ./splits/iPiC3D-nathan5-12/val.csv
-  test_samples_file: ./splits/iPiC3D-nathan5-12/test.csv
+  train_samples_file: ./splits/iPiC3D-nathan5-12/small/train.csv
+  val_samples_file: ./splits/iPiC3D-nathan5-12/small/val.csv
+  test_samples_file: ./splits/iPiC3D-nathan5-12/small/test.csv
   batch_size: 32
   num_workers: 12
   flatten: false
@@ -89,7 +89,7 @@ trainer:
   accelerator: auto
   devices: auto
   strategy: auto
-  default_root_dir: ./models/Lightning/testing
+  default_root_dir: ./models/Lightning/testing_small
   callbacks:
     - class_path: lightning.pytorch.callbacks.EarlyStopping
       init_args:
