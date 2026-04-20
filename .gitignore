@@ -3,6 +3,8 @@
 *.out
 *.pyc
 *.err
+logs/
+scripts/logs/
 paths.yaml
 **/data/** 
 **/models/** 

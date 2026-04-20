@@ -1,12 +1,12 @@
 
 
 """
-This script processes HDF5 files by applying specified filters and saves the processed data as pickle files.
+This script processes HDF5 files by applying specified filters and saves the processed data as pkl or npz files.
 
 Arguments:
     --path (str): The base directory path for reading and writing files.
     --read_folder (str): The folder name where input HDF5 files are located.
-    --write_folder (str): The folder name where output pickle files will be saved.
+    --write_folder (str): The folder name where output files will be saved.
 
 Variables:
     filters (list): A list of dictionaries specifying the filters to apply.
@@ -16,8 +16,8 @@ Processing:
     2. Load the HDF5 file.
     3. Extract data for each field in the file.
     4. Apply specified filters to the data.
-    5. Save the processed data as a pickle file in the write_folder.
-    6. Copy the SimulationData.txt file from the read_folder to the write_folder.
+    5. Save the processed data as a pkl or npz file in the write_folder.
+    6. Copy auxiliary metadata files (SimulationData.txt, optional *.inp, optional ConservedQuantities.txt) from the read_folder to the write_folder.
     7. Modify the 'Number of cells (x)' and 'Number of cells (y)' lines in the SimulationData.txt file.
 
 Note:
@@ -36,6 +36,7 @@ import glob
 import os
 import shutil
 import argparse
+import re
 
 parser = argparse.ArgumentParser(description='Process HDF5 files and apply filters.')
 parser.add_argument('--path', type=str, default='/volume1/scratch/share_dir/peppe/', help='The base directory path for reading and writing files.')
@@ -45,6 +46,8 @@ parser.add_argument('--zoom', default='0.25', type=str, required=False, help='th
 parser.add_argument('--roll_x', default='0', type=str, required=False, help='How much we would like to shift the x axis.')
 parser.add_argument('--roll_y', default='0', type=str, required=False, help='How much we would like to shift the y axis.')
 parser.add_argument('--timeshot', default='None', type=str, required=False, help='The time shot we would like to process, if None all timeshots will be processed.')
+parser.add_argument('--output_format', default='pkl', choices=['pkl', 'npz'], required=False, help='Output format for downscaled field files.')
+parser.add_argument('--no_filters', action='store_true', help='Disable filtering/zoom processing (format conversion mode).')
 args = parser.parse_args()
 
 path = args.path
@@ -54,10 +57,18 @@ zoom = float(args.zoom)
 roll_x = int(args.roll_x)
 roll_y = int(args.roll_y)
 timeshot = args.timeshot
+output_format = args.output_format
+no_filters = args.no_filters
 
 
-filters=[{'name': 'uniform_filter', 'size': int(1/zoom), 'axes': (1,2), 'mode' : 'wrap'},
-                {'name': 'zoom', 'zoom': (1, zoom, zoom), 'mode' : 'grid-wrap'}]
+filters = None
+if not no_filters:
+    filters = [
+        {'name': 'uniform_filter', 'size': int(1/zoom), 'axes': (1, 2), 'mode': 'wrap'},
+        {'name': 'zoom', 'zoom': (1, zoom, zoom), 'mode': 'grid-wrap'},
+    ]
+else:
+    print('Running with --no_filters: skipping filter/zoom processing.', flush=True)
 if not os.path.exists(f'{path}{read_folder}'): # Check if read_folder exists
     raise FileNotFoundError(f"The folder {path}{read_folder} does not exist.")
 
@@ -68,22 +79,33 @@ else:
         raise FileExistsError(f"The folder {path}{write_folder} is not empty.")
 
 # Get all filenames in the read_folder
-all_filenames = glob.glob(f'{path}{read_folder}/*.h5')
+all_filenames = sorted(glob.glob(f'{path}{read_folder}/*.h5'))
 filenames_list = [os.path.basename(f) for f in all_filenames]
+print(f"Found {len(filenames_list)} input .h5 files in {path}{read_folder}", flush=True)
+if len(filenames_list) == 0:
+    raise FileNotFoundError(
+        f"No .h5 files found in {path}{read_folder}. "
+        "This script expects ECSIM-style *-Fields_*.h5 inputs; "
+        "iPiC3D proc*.hdf inputs require a different conversion step first."
+    )
 
 for filename in filenames_list:
     if timeshot != 'None':
         if timeshot not in filename:
             continue
     read_filename = f'{path}{read_folder}/{filename}'
-    write_filename = f'{path}{write_folder}/{filename}.pkl'
-    print(f"Processing {read_filename}")
-    print(f"Writing to {write_filename}")
+    if output_format == 'npz':
+        write_basename = f"{os.path.splitext(filename)[0]}.npz"
+    else:
+        write_basename = f"{filename}.pkl"
+    write_filename = f'{path}{write_folder}/{write_basename}'
+    print(f"Processing {read_filename}", flush=True)
+    print(f"Writing to {write_filename}", flush=True)
     # Load the file
     verbose=False
     data = {}
     with h5py.File(read_filename, 'r') as n:
-        print(f"Working on {filename}")
+        print(f"Working on {filename}", flush=True)
         if "/Step#0/Block/" in n:
             # Iterate over each time step
             for fieldname in n[f"/Step#0/Block/"].keys():
@@ -106,14 +128,28 @@ for filename in filenames_list:
                             print(f"Resulting shape {data[fieldname].shape}")
                 if verbose:
                     print(data[fieldname].shape)
-                data[fieldname] = np.pad(data[fieldname], pad_width=((0,0), (0, 1), (0, 1)), mode='wrap')[0:1,...]
-                data[fieldname] = np.roll(data[fieldname], (roll_x, roll_y), axis=(0,1))
-            with open(write_filename, 'wb') as out_file:
-                pickle.dump(data, out_file)
+                if not no_filters:
+                    data[fieldname] = np.pad(data[fieldname], pad_width=((0,0), (0, 1), (0, 1)), mode='wrap')[0:1,...]
+                    data[fieldname] = np.roll(data[fieldname], (roll_x, roll_y), axis=(0,1))
+            if output_format == 'npz':
+                np.savez(write_filename, **data)
+            else:
+                with open(write_filename, 'wb') as out_file:
+                    pickle.dump(data, out_file)
         else:
-            print(f"Block object not found in {read_filename}")
+            print(f"Block object not found in {read_filename}", flush=True)
 simulation_data_path = f'{path}{write_folder}/SimulationData.txt'
 shutil.copy(f'{path}{read_folder}/SimulationData.txt', simulation_data_path)
+
+# Copy optional .inp files if present in the source folder.
+inp_files = glob.glob(f'{path}{read_folder}/*.inp')
+for inp_file in inp_files:
+    shutil.copy(inp_file, f'{path}{write_folder}/{os.path.basename(inp_file)}')
+
+# Copy optional ConservedQuantities.txt if present in the source folder.
+conserved_quantities_path = f'{path}{read_folder}/ConservedQuantities.txt'
+if os.path.exists(conserved_quantities_path):
+    shutil.copy(conserved_quantities_path, f'{path}{write_folder}/ConservedQuantities.txt')
 
 
 # Read the file
@@ -131,8 +167,22 @@ for i, line in enumerate(lines):
         except ValueError as e:
             raise ValueError(f"Could not parse number of cells from line: {line.strip()}") from e
 
-        new_cells = int(round(original_cells * zoom))
+        scale_factor = 1.0 if no_filters else zoom
+        new_cells = int(round(original_cells * scale_factor))
         lines[i] = f"{left}= {new_cells}\n"
+    elif 'Grid resolution' in line:
+        left, sep, right = line.partition('=')
+        if not sep:
+            raise ValueError(f"Malformed line in SimulationData.txt: {line.strip()}")
+
+        values = [int(v) for v in re.findall(r'\d+', right)]
+        if len(values) < 2:
+            raise ValueError(f"Could not parse grid resolution from line: {line.strip()}")
+
+        scale_factor = 1.0 if no_filters else zoom
+        values[0] = int(round(values[0] * scale_factor))
+        values[1] = int(round(values[1] * scale_factor))
+        lines[i] = f"{left}= {' x '.join(str(v) for v in values)}\n"
 
 # Write the modified lines back to the file
 with open(simulation_data_path, 'w') as file:
