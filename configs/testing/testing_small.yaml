@@ -1,0 +1,109 @@
+# ---------------------------------------------------------------
+# Legacy-equivalent config: Harris/Le/Le2GEM15ppc/default/P/4lrs_es500
+# ---------------------------------------------------------------
+# Reproduces the training run originally defined in
+#   models/Harris/Le/Le2GEM15ppc/default/P/4lrs_es500/config.json
+#
+# Usage:
+#   closure-train fit --config configs/testing/testing.yaml
+#
+# Paths are relative and resolved via paths.yaml:
+#   data_dir  → /volume1/scratch/share_dir
+#   work_dir  → ./models
+
+seed_everything: 42
+
+model:
+  network:
+    class_path: closure.models.FCNN
+    init_args:
+      channels: [10, 128, 64, 32, 6]
+      kernels: [3, 5, 5, 3]
+      activations: [ReLU, ReLU, ReLU, null]
+      batch_norms: [true, true, true, false]
+  criterion: MSELoss
+  optimizer: Adam
+  lr: 0.001
+  weight_decay: 1.0e-05
+  scheduler: ReduceLROnPlateau
+  scheduler_kwargs:
+    mode: min
+    factor: 0.2
+    patience: 25
+    min_lr: 1.0e-05
+
+data:
+  data_folder: iPiC3D-nathan
+  train_samples_file: ./splits/iPiC3D-nathan5-12/small/train.csv
+  val_samples_file: ./splits/iPiC3D-nathan5-12/small/val.csv
+  test_samples_file: ./splits/iPiC3D-nathan5-12/small/test.csv
+  batch_size: 32
+  num_workers: 12
+  flatten: false
+  scaler_features: true
+  scaler_targets: true
+  prescaler_targets: [log, log, log, arcsinh, arcsinh, arcsinh]
+  features_dtype: float32
+  targets_dtype: float32
+  patch_dim: [64, 64]
+  subsample_rate: 800
+  subsample_seed: 42
+  alfven_units: true
+  read_features_targets_kwargs:
+    fields_to_read:
+      B: true
+      B_ext: false
+      divB: false
+      E: true
+      E_ext: false
+      rho: true
+      J: true
+      P: true
+      PI: true
+      Heat_flux: false
+      N: false
+      Qrem: false
+    request_features:
+      - rho_e
+      - Bx
+      - By
+      - Bz
+      - Vx_e
+      - Vy_e
+      - Vz_e
+      - Ex
+      - Ey
+      - Ez
+    request_targets:
+      - Pxx_e
+      - Pyy_e
+      - Pzz_e
+      - Pxy_e
+      - Pxz_e
+      - Pyz_e
+    choose_species: ['e', null, 'e', null]
+    verbose: false
+
+trainer:
+  max_epochs: 50
+  accelerator: auto
+  devices: auto
+  strategy: auto
+  default_root_dir: ./models/Lightning/testing_small
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: val_loss
+        patience: 50
+        mode: min
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        monitor: val_loss
+        save_top_k: 1
+        mode: min
+        filename: best-{epoch}-{val_loss:.4f}
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+      init_args:
+        logging_interval: epoch
+  logger:
+    class_path: lightning.pytorch.loggers.CSVLogger

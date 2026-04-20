@@ -1,0 +1,64 @@
+# ---------------------------------------------------------------
+# ResNet training config for closure
+# ---------------------------------------------------------------
+# Usage:
+#   closure-train fit --config configs/resnet.yaml
+
+seed_everything: 42
+
+model:
+  network:
+    class_path: closure.models.ResNet
+    init_args:
+      channels: [10, 32, 64, 32, 6]
+      kernels: [3, 3, 3, 3]
+      activations: [ReLU, ReLU, ReLU, null]
+      batch_norms: [true, true, true, false]
+      skip_connect:
+        "3": 1  # skip from layer 1 to layer 3
+  criterion: MSELoss
+  optimizer: Adam
+  lr: 0.001
+  weight_decay: 1.0e-5
+  scheduler: ReduceLROnPlateau
+  scheduler_kwargs:
+    patience: 10
+    factor: 0.5
+
+data:
+  data_folder: ./data
+  norm_folder: ./data/norm
+  train_samples_file: ./data/train.csv
+  val_samples_file: ./data/val.csv
+  test_samples_file: ./data/test.csv
+  batch_size: 16
+  num_workers: 4
+  flatten: false
+  scaler_features: true
+  scaler_targets: true
+
+trainer:
+  max_epochs: 200
+  accelerator: auto
+  devices: auto
+  strategy: auto
+  default_root_dir: ./outputs
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: val_loss
+        patience: 20
+        mode: min
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        monitor: val_loss
+        save_top_k: 1
+        mode: min
+        filename: best-{epoch}-{val_loss:.4f}
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+      init_args:
+        logging_interval: epoch
+  logger:
+    class_path: lightning.pytorch.loggers.CSVLogger
+    init_args:
+      save_dir: ./outputs

@@ -1,0 +1,421 @@
+"""
+datamodule.py — ClosureDataModule: PyTorch Lightning data module for closure.
+
+Wraps :class:`~closure.datasets.DataFrameDataset` in Lightning's
+``LightningDataModule`` protocol, absorbing channel selection and
+subsampling that previously lived in ``ChannelDataLoader``.
+"""
+
+from __future__ import annotations
+
+__all__ = ["ClosureDataModule"]
+
+import logging
+import os
+import time
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
+import torch
+from torch.utils.data import DataLoader, Subset
+
+import lightning as L
+
+_logger = logging.getLogger("closure.datamodule")
+
+from closure.config import load_paths
+from closure.datasets import DataFrameDataset
+from closure.resources import aggregate_gpu_stats, gpu_stats, process_tree_ram_gb
+
+
+class ClosureDataModule(L.LightningDataModule):
+    """Lightning data module for closure training workflows.
+
+    Parameters
+    ----------
+    data_folder : str
+        Root folder containing the simulation data files.
+    norm_folder : str
+        Folder to save / load normalisation statistics.
+    train_samples_file : str
+        CSV file listing training sample filenames.
+    val_samples_file : str
+        CSV file listing validation sample filenames.
+    test_samples_file : str or None
+        CSV file listing test sample filenames.
+    batch_size : int
+        Mini-batch size for all dataloaders.
+    num_workers : int
+        Number of data-loading workers.
+    flatten : bool
+        If True, flatten spatial dimensions (pixel-wise MLP mode).
+    scaler_features : bool or None
+        Enable mean/std normalisation for features.
+    scaler_targets : bool or None
+        Enable mean/std normalisation for targets.
+    prescaler_features : list[str | None] or None
+        Per-channel prescaler function names (e.g. ``"log"``).
+    prescaler_targets : list[str | None] or None
+        Per-channel prescaler function names for targets.
+    features_dtype : str
+        PyTorch dtype name for features (e.g. ``"float32"``).
+    targets_dtype : str
+        PyTorch dtype name for targets.
+    feature_channel_names : list[str] or None
+        Subset of feature channels to use (by name).
+    target_channel_names : list[str] or None
+        Subset of target channels to use (by name).
+    subsample_rate : float
+        Controls the effective number of training samples per epoch.
+        Values below 1.0 select a random subset (undersampling).
+        Values above 1.0 repeat samples so each image is visited
+        multiple times per epoch (oversampling); useful with
+        ``patch_dim`` to extract many random crops per image.
+        Default is 1.0 (use all samples exactly once).
+    subsample_seed : int or None
+        Seed for reproducible subsampling / oversampling.
+    patch_dim : list[int] or None
+        ``[width, height]`` for random crop patch extraction.
+    read_features_targets_kwargs : dict or None
+        Extra keyword arguments forwarded to ``read_pic.read_features_targets``.
+    filter_features : dict or None
+        Spatial filter configuration for features.
+    filter_targets : dict or None
+        Spatial filter configuration for targets.
+    norm_version_dir : str or None
+        Optional explicit Lightning ``version_*`` directory to scope
+        normalization files for offline evaluation / inference.
+    alfven_units : bool
+        If True, rescale each sample from code units to Alfvén units
+        using the ``.inp`` file auto-detected from its experiment
+        subdirectory.  Default ``False``.
+    use_readonly : bool
+        If True, access ``data_folder`` through the Lustre
+        ``/readonly`` mount point.  This avoids aggressive page-cache
+        purging on VSC Tier-1 Hortense and can significantly speed up
+        repeated HDF5 reads — with zero copy overhead.  The mount is
+        read-only, which is fine since data loading never writes.
+        Default ``False``.
+    """
+
+    def __init__(
+        self,
+        data_folder: str,
+        norm_folder: str,
+        train_samples_file: str,
+        val_samples_file: str,
+        test_samples_file: Optional[str] = None,
+        batch_size: int = 32,
+        num_workers: int = 4,
+        flatten: bool = True,
+        scaler_features: Optional[bool] = None,
+        scaler_targets: Optional[bool] = None,
+        prescaler_features: Optional[list[str | None]] = None,
+        prescaler_targets: Optional[list[str | None]] = None,
+        features_dtype: str = "float32",
+        targets_dtype: str = "float32",
+        features_dtype_numpy: str = "float64",
+        targets_dtype_numpy: str = "float64",
+        feature_channel_names: Optional[list[str]] = None,
+        target_channel_names: Optional[list[str]] = None,
+        subsample_rate: float = 1.0,
+        subsample_seed: Optional[int] = None,
+        patch_dim: Optional[list[int]] = None,
+        read_features_targets_kwargs: Optional[dict] = None,
+        filter_features: Optional[dict] = None,
+        filter_targets: Optional[dict] = None,
+        norm_version_dir: Optional[str] = None,
+        alfven_units: bool = False,
+        use_readonly: bool = False,
+    ):
+        super().__init__()
+        self.save_hyperparameters()
+
+        # Will be populated in setup()
+        self.train_dataset: DataFrameDataset | None = None
+        self.val_dataset: DataFrameDataset | None = None
+        self.test_dataset: DataFrameDataset | None = None
+
+        # Channel index caches (populated in setup)
+        self.feature_channels: list[int] | None = None
+        self.target_channels: list[int] | None = None
+
+    # ------------------------------------------------------------------
+    # path resolution
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _resolve_path(value: str, paths_yaml_key: str) -> str:
+        """Resolve a relative path against the corresponding ``paths.yaml`` root.
+
+        * Absolute paths are returned unchanged.
+        * Paths starting with ``./`` or ``../`` are treated as explicitly
+          relative to the current working directory (resolved to absolute).
+        * All other relative paths (bare identifiers such as
+          ``ecsim/Harris/Le``) are joined with the directory indicated by
+          *paths_yaml_key* (``"data_dir"`` or ``"work_dir"``) from
+          ``paths.yaml``.
+        """
+        p = Path(value)
+        if p.is_absolute():
+            return str(p)
+        if value.startswith(("./", "../")):
+            return str(p.resolve())
+        root = Path(load_paths().get(paths_yaml_key, "."))
+        return str(root / p)
+
+    def _resolve_norm_folder(self, base_norm_folder: str) -> str:
+        """Return normalization directory scoped to a run version when available.
+
+        Precedence:
+        1) explicit ``hparams.norm_version_dir`` (used by RunLoader)
+        2) active trainer ``log_dir`` (used during normal training)
+        3) configured ``base_norm_folder`` fallback
+        """
+        explicit_version_dir = self.hparams.get("norm_version_dir")
+        if explicit_version_dir:
+            return str(Path(explicit_version_dir).expanduser().resolve())
+
+        trainer = getattr(self, "trainer", None)
+        trainer_log_dir = getattr(trainer, "log_dir", None) if trainer is not None else None
+        if trainer_log_dir:
+            return str(Path(trainer_log_dir).expanduser().resolve())
+
+        return base_norm_folder
+
+    # ------------------------------------------------------------------
+    # /readonly Lustre mount
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _apply_readonly_prefix(data_folder: str) -> str:
+        """Prepend ``/readonly`` to *data_folder* for Lustre cache retention.
+
+        Paths that already start with ``/readonly`` are returned unchanged.
+        A warning is emitted if the resulting path does not exist (e.g.
+        running on a non-Hortense system).
+        """
+        if data_folder.startswith("/readonly"):
+            return data_folder
+        readonly_path = "/readonly" + data_folder
+        if not Path(readonly_path).exists():
+            _logger.warning(
+                "/readonly mount not available (path %s does not exist). "
+                "Falling back to original path %s",
+                readonly_path,
+                data_folder,
+            )
+            return data_folder
+        _logger.info("Using /readonly mount: %s", readonly_path)
+        return readonly_path
+
+    # ------------------------------------------------------------------
+    # setup
+    # ------------------------------------------------------------------
+    def setup(self, stage: str | None = None):
+        hp = self.hparams
+
+        self._loading_ram_snapshots_gb: list[float] = []
+        self._loading_gpu_util_snapshots_pct: list[float] = []
+        self._loading_gpu_mem_snapshots_mb: list[float] = []
+
+        # Resolve relative paths against paths.yaml roots
+        data_folder = self._resolve_path(hp.data_folder, "data_dir")
+
+        # /readonly mount: avoids Lustre page-cache purging (zero-cost)
+        if hp.use_readonly:
+            data_folder = self._apply_readonly_prefix(data_folder)
+
+        norm_folder = self._resolve_path(hp.norm_folder, "work_dir")
+        norm_folder = self._resolve_norm_folder(norm_folder)
+        train_samples_file = self._resolve_path(hp.train_samples_file, "data_dir")
+        val_samples_file = self._resolve_path(hp.val_samples_file, "data_dir")
+        test_samples_file = (
+            self._resolve_path(hp.test_samples_file, "data_dir")
+            if hp.test_samples_file is not None
+            else None
+        )
+
+        # Build common dataset kwargs
+        common = dict(
+            data_folder=data_folder,
+            norm_folder=norm_folder,
+            flatten=hp.flatten,
+            features_dtype=hp.features_dtype,
+            targets_dtype=hp.targets_dtype,
+            features_dtype_numpy=hp.features_dtype_numpy,
+            targets_dtype_numpy=hp.targets_dtype_numpy,
+            scaler_features=hp.scaler_features,
+            scaler_targets=hp.scaler_targets,
+            prescaler_features=hp.prescaler_features,
+            prescaler_targets=hp.prescaler_targets,
+            read_features_targets_kwargs=hp.read_features_targets_kwargs,
+            filter_features=hp.filter_features,
+            filter_targets=hp.filter_targets,
+            alfven_units=hp.alfven_units,
+        )
+
+        # Build transform for patch extraction (training only)
+        transform = None
+        if hp.patch_dim is not None:
+            transform = {
+                "RandomCrop": {"size": hp.patch_dim},
+                "apply": ["train"],
+            }
+
+        if stage in ("fit", None):
+            t0 = time.perf_counter()
+            self._log_resource_snapshot("before fit data load")
+            self.train_dataset = DataFrameDataset(
+                samples_file=train_samples_file,
+                datalabel="train",
+                transform=transform,
+                **common,
+            )
+            self._log_resource_snapshot("after train data load")
+            self.val_dataset = DataFrameDataset(
+                samples_file=val_samples_file,
+                datalabel="val",
+                **common,
+            )
+            self._log_resource_snapshot("after val data load")
+            self._data_load_time_s = time.perf_counter() - t0
+            _logger.info(
+                "Data loading (train+val) took %.2fs",
+                self._data_load_time_s,
+            )
+            # Resolve channel name → index mappings
+            self._resolve_channel_indices(self.train_dataset)
+
+        if stage in ("test", None):
+            if test_samples_file is not None:
+                self.test_dataset = DataFrameDataset(
+                    samples_file=test_samples_file,
+                    datalabel="test",
+                    **common,
+                )
+                self._resolve_channel_indices(self.test_dataset)
+
+        if stage == "predict":
+            if test_samples_file is not None:
+                self.test_dataset = DataFrameDataset(
+                    samples_file=test_samples_file,
+                    datalabel="test",
+                    **common,
+                )
+                self._resolve_channel_indices(self.test_dataset)
+
+    # ------------------------------------------------------------------
+    # dataloaders
+    # ------------------------------------------------------------------
+    def train_dataloader(self):
+        dataset = self._maybe_subsample(self.train_dataset)
+        return self._make_loader(dataset, shuffle=True)
+
+    def val_dataloader(self):
+        return self._make_loader(self.val_dataset, shuffle=False)
+
+    def test_dataloader(self):
+        if self.test_dataset is None:
+            raise RuntimeError("No test_samples_file configured.")
+        return self._make_loader(self.test_dataset, shuffle=False)
+
+    def predict_dataloader(self):
+        return self.test_dataloader()
+
+    # ------------------------------------------------------------------
+    # helpers
+    # ------------------------------------------------------------------
+    def _make_loader(self, dataset, shuffle: bool) -> DataLoader:
+        hp = self.hparams
+
+        # Wrap dataset with channel-selection collate if needed
+        if self.feature_channels is not None or self.target_channels is not None:
+            dataset = _ChannelSubsetDataset(
+                dataset, self.feature_channels, self.target_channels
+            )
+
+        return DataLoader(
+            dataset,
+            batch_size=hp.batch_size,
+            shuffle=shuffle,
+            num_workers=hp.num_workers,
+            pin_memory=True,
+        )
+
+    def _maybe_subsample(self, dataset):
+        """Return a ``Subset`` with under- or over-sampling applied.
+
+        When ``subsample_rate < 1.0``, a random subset of the dataset is
+        selected (undersampling).  When ``subsample_rate > 1.0``, indices
+        are repeated so each sample appears multiple times per epoch
+        (oversampling).  This is useful with ``patch_dim`` random cropping
+        where each access yields a different random patch.
+        """
+        hp = self.hparams
+        if hp.subsample_rate == 1.0:
+            return dataset
+
+        n = len(dataset)
+        k = max(1, int(n * hp.subsample_rate))
+        rng = np.random.RandomState(hp.subsample_seed)
+
+        if hp.subsample_rate < 1.0:
+            indices = rng.choice(n, size=k, replace=False).tolist()
+        else:
+            # Oversampling: cycle indices so each image is visited
+            # subsample_rate times per epoch (matching legacy behaviour).
+            indices = (rng.permutation(k) % n).tolist()
+
+        return Subset(dataset, indices)
+
+    def _resolve_channel_indices(self, dataset: DataFrameDataset):
+        """Convert channel name lists to integer index lists."""
+        hp = self.hparams
+        if hp.feature_channel_names is not None and self.feature_channels is None:
+            self.feature_channels = [
+                dataset.request_features.index(ch) for ch in hp.feature_channel_names
+            ]
+        if hp.target_channel_names is not None and self.target_channels is None:
+            self.target_channels = [
+                dataset.request_targets.index(ch) for ch in hp.target_channel_names
+            ]
+
+    def _log_resource_snapshot(self, label: str) -> None:
+        """Log RAM/GPU usage snapshot during loading stages."""
+        ram_gb = process_tree_ram_gb()
+        self._loading_ram_snapshots_gb.append(ram_gb)
+
+        gstats = aggregate_gpu_stats(gpu_stats())
+        avg_gpu_util = gstats["avg_gpu_utilization_pct"]
+        avg_gpu_mem = gstats["avg_gpu_memory_used_mb"]
+        if avg_gpu_util is not None:
+            self._loading_gpu_util_snapshots_pct.append(float(avg_gpu_util))
+        if avg_gpu_mem is not None:
+            self._loading_gpu_mem_snapshots_mb.append(float(avg_gpu_mem))
+
+        parts = [f"Loading resource snapshot ({label})", f"ram_gb={ram_gb:.3f}"]
+        if avg_gpu_util is not None:
+            parts.append(f"avg_gpu_util={avg_gpu_util:.1f}%")
+        if avg_gpu_mem is not None:
+            parts.append(f"avg_gpu_mem_mb={avg_gpu_mem:.1f}")
+        _logger.info(" | ".join(parts))
+
+
+class _ChannelSubsetDataset(torch.utils.data.Dataset):
+    """Thin wrapper that selects specific feature/target channels."""
+
+    def __init__(self, dataset, feature_channels, target_channels):
+        self.dataset = dataset
+        self.feature_channels = feature_channels
+        self.target_channels = target_channels
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        features, targets = self.dataset[idx]
+        if self.feature_channels is not None:
+            features = features[self.feature_channels]
+        if self.target_channels is not None:
+            targets = targets[self.target_channels]
+        return features, targets

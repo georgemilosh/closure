@@ -1,0 +1,97 @@
+# ---------------------------------------------------------------
+# Default training config for closure (FCNN, 2-D plasma closure)
+# ---------------------------------------------------------------
+# Usage:
+#   closure-train fit --config configs/default.yaml
+#   closure-train fit --config configs/default.yaml --trainer.fast_dev_run=true
+
+seed_everything: 42
+
+model:
+  network:
+    class_path: closure.models.FCNN
+    init_args:
+      channels: [10, 64, 32, 6]
+      kernels: [3, 5, 5]
+      activations: [ReLU, ReLU, null]
+  criterion: MSELoss
+  optimizer: Adam
+  lr: 0.001
+  weight_decay: 0.0
+  scheduler: ReduceLROnPlateau
+  scheduler_kwargs:
+    patience: 10
+    factor: 0.5
+
+data:
+  data_folder: ./data
+  norm_folder: ./data/norm
+  train_samples_file: ./data/train.csv
+  val_samples_file: ./data/val.csv
+  test_samples_file: ./data/test.csv
+  batch_size: 32
+  num_workers: 4
+  flatten: false
+  scaler_features: true
+  scaler_targets: true
+  patch_dim: [32, 32]
+  subsample_rate: 160
+  subsample_seed: 42
+  features_dtype: float32
+  targets_dtype: float32
+  read_features_targets_kwargs:
+    fields_to_read:
+      B: true
+      E: true
+      rho: true
+      J: true
+      P: true
+      PI: true
+    request_features:
+      - rho_e
+      - Bx
+      - By
+      - Bz
+      - Jx_e
+      - Jy_e
+      - Jz_e
+      - Vx_e
+      - Vy_e
+      - Vz_e
+    request_targets:
+      - Pxx_e
+      - Pxy_e
+      - Pxz_e
+      - Pyy_e
+      - Pyz_e
+      - Pzz_e
+    choose_species: ['e', null]
+    choose_x: [0, 256]
+    choose_y: [0, 256]
+    verbose: false
+
+trainer:
+  max_epochs: 100
+  accelerator: auto
+  devices: auto
+  strategy: auto
+  default_root_dir: ./outputs
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: val_loss
+        patience: 15
+        mode: min
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        monitor: val_loss
+        save_top_k: 1
+        mode: min
+        filename: best-{epoch}-{val_loss:.4f}
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+      init_args:
+        logging_interval: epoch
+  logger:
+    class_path: lightning.pytorch.loggers.CSVLogger
+    init_args:
+      save_dir: ./outputs

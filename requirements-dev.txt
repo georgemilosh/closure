@@ -1,0 +1,17 @@
+# Development and testing dependencies
+# Install with: pip install -r requirements-dev.txt
+# This is the "full stack" file — equivalent to the closure-test conda environment.
+
+-r requirements-hp.txt
+
+# Notebook support
+jupyter>=1.0
+ipykernel>=6.0
+notebook>=6.0
+ipywidgets>=8.0
+
+# Development tools
+pytest>=7.0
+pytest-cov>=4.0
+ruff>=0.4
+pre-commit>=3.0
