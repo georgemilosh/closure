@@ -8,9 +8,9 @@
 #SBATCH --mem=30G
 #SBATCH --time=06:00:00
 
-if [ "$#" -lt 4 ] || [ "$#" -gt 6 ]; then
-	echo "Usage: sbatch run_downscale.sh <PATH_TO_DATA> <READ_FOLDER> <WRITE_FOLDER> <ZOOM> [OUTPUT_FORMAT] [NO_FILTERS]"
-	echo "Example: sbatch run_downscale.sh /dodrio/scratch/projects/2025_112/nathan/ Le2DHGEM_RunID_5 Le2DHGEM_RunID_5_ds 0.25 npz 1"
+if [ "$#" -lt 4 ] || [ "$#" -gt 7 ]; then
+	echo "Usage: sbatch run_downscale.sh <PATH_TO_DATA> <READ_FOLDER> <WRITE_FOLDER> <ZOOM> [OUTPUT_FORMAT] [NO_FILTERS] [OUTPUT_DTYPE]"
+	echo "Example: sbatch run_downscale.sh /dodrio/scratch/projects/2025_112/nathan/ Le2DHGEM_RunID_5 Le2DHGEM_RunID_5_ds 0.25 npz 1 float32"
 	exit 1
 fi
 
@@ -39,6 +39,7 @@ WRITE_FOLDER=$3 #"${READ_FOLDER}_filter1"
 ZOOM=$4 
 OUTPUT_FORMAT=${5:-pkl}
 NO_FILTERS=${6:-0}
+OUTPUT_DTYPE=${7:-float64}
 
 EXTRA_ARGS=()
 if [ "$NO_FILTERS" = "1" ] || [ "$NO_FILTERS" = "true" ] || [ "$NO_FILTERS" = "True" ]; then
@@ -46,4 +47,4 @@ if [ "$NO_FILTERS" = "1" ] || [ "$NO_FILTERS" = "true" ] || [ "$NO_FILTERS" = "T
 fi
 
 # Run the downscale.py script with the provided arguments
-python -u downscale.py --path "$PATH_TO_DATA" --read_folder "$READ_FOLDER" --write_folder "$WRITE_FOLDER" --zoom "$ZOOM" --output_format "$OUTPUT_FORMAT" "${EXTRA_ARGS[@]}"
+python -u downscale.py --path "$PATH_TO_DATA" --read_folder "$READ_FOLDER" --write_folder "$WRITE_FOLDER" --zoom "$ZOOM" --output_format "$OUTPUT_FORMAT" --output_dtype "$OUTPUT_DTYPE" "${EXTRA_ARGS[@]}"

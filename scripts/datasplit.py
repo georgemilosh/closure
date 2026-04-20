@@ -15,6 +15,8 @@ Arguments:
                              threshold will be ignored. If not specified, no filtering is applied.
     min_number    (optional): Minimum number required between _ and . in filenames. Files with numbers below this 
                              threshold will be ignored. If not specified, no filtering is applied.
+    step          (optional): Only include files where the number between _ and . is a multiple of this value 
+                             (e.g., step=200 keeps 000000, 000200, 000400, ...). If not specified, no filtering is applied.
 Functionality:
     - Parses command-line arguments in key=value format.
     - Validates the existence of specified folders.
@@ -69,7 +71,7 @@ def extract_number_from_filename(filename):
     
     return None
 
-def create_files_csv(folders, csv_filename, pattern="T2D-Fields_*", root_folder="", max_number=None, min_number=None):
+def create_files_csv(folders, csv_filename, pattern="T2D-Fields_*", root_folder="", max_number=None, min_number=None, step=None):
     """
     Glob files matching pattern from predefined folders and write to CSV (overwrite if exists).
     
@@ -80,6 +82,7 @@ def create_files_csv(folders, csv_filename, pattern="T2D-Fields_*", root_folder=
         root_folder: Root directory to prepend to folder paths
         max_number: Maximum number allowed between _ and . in filenames (None for no filtering)
         min_number: Minimum number required between _ and . in filenames (None for no filtering)
+        step: Only include files where the number is a multiple of this value (None for no filtering)
     """
     output_dir = os.path.dirname(os.path.abspath(csv_filename))
     if output_dir:
@@ -130,6 +133,11 @@ def create_files_csv(folders, csv_filename, pattern="T2D-Fields_*", root_folder=
                     total_files_filtered += 1
                     continue
                 
+                # Apply step filter
+                if step is not None and file_number is not None and file_number % step != 0:
+                    total_files_filtered += 1
+                    continue
+                
                 filtered_files.append(file_path)
             
             total_files_written += len(filtered_files)
@@ -143,12 +151,14 @@ def create_files_csv(folders, csv_filename, pattern="T2D-Fields_*", root_folder=
                 else:
                     writer.writerow([file_path])
     
-    if max_number is not None or min_number is not None:
+    if max_number is not None or min_number is not None or step is not None:
         filter_msg = []
         if min_number is not None:
             filter_msg.append(f"numbers < {min_number}")
         if max_number is not None:
             filter_msg.append(f"numbers > {max_number}")
+        if step is not None:
+            filter_msg.append(f"numbers not divisible by {step}")
         
         print(f"Created {csv_filename} with {total_files_written} files from {len(folders)} folders")
         print(f"Found {total_files_found} total files, filtered out {total_files_filtered} files with {' and '.join(filter_msg)}")
@@ -209,6 +219,7 @@ def main():
     root_folder = args.get('root_folder', '')
     max_number = args.get('max_number', None)
     min_number = args.get('min_number', None)
+    step = args.get('step', None)
     
     # Parse max_number if provided
     if max_number is not None:
@@ -226,6 +237,18 @@ def main():
             print(f"Filtering files with numbers < {min_number}")
         except ValueError:
             print(f"Error: min_number must be an integer, got: {min_number}")
+            sys.exit(1)
+    
+    # Parse step if provided
+    if step is not None:
+        try:
+            step = int(step)
+            if step <= 0:
+                print(f"Error: step must be a positive integer, got: {step}")
+                sys.exit(1)
+            print(f"Filtering files with numbers not divisible by {step}")
+        except ValueError:
+            print(f"Error: step must be an integer, got: {step}")
             sys.exit(1)
     
     # Clean up root_folder path
@@ -257,7 +280,7 @@ def main():
         sys.exit(1)
     
     # Run the function
-    create_files_csv(folders, csv_filename, pattern, root_folder, max_number, min_number)
+    create_files_csv(folders, csv_filename, pattern, root_folder, max_number, min_number, step)
     
     # Print summary
     print(f"\nFiles written to {csv_filename}:")
