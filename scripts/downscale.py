@@ -48,6 +48,7 @@ parser.add_argument('--roll_y', default='0', type=str, required=False, help='How
 parser.add_argument('--timeshot', default='None', type=str, required=False, help='The time shot we would like to process, if None all timeshots will be processed.')
 parser.add_argument('--output_format', default='pkl', choices=['pkl', 'npz'], required=False, help='Output format for downscaled field files.')
 parser.add_argument('--no_filters', action='store_true', help='Disable filtering/zoom processing (format conversion mode).')
+parser.add_argument('--output_dtype', default='float64', choices=['float32', 'float64'], required=False, help='Output array dtype for saved fields.')
 args = parser.parse_args()
 
 path = args.path
@@ -59,6 +60,7 @@ roll_y = int(args.roll_y)
 timeshot = args.timeshot
 output_format = args.output_format
 no_filters = args.no_filters
+output_dtype = np.float32 if args.output_dtype == 'float32' else np.float64
 
 
 filters = None
@@ -131,6 +133,7 @@ for filename in filenames_list:
                 if not no_filters:
                     data[fieldname] = np.pad(data[fieldname], pad_width=((0,0), (0, 1), (0, 1)), mode='wrap')[0:1,...]
                     data[fieldname] = np.roll(data[fieldname], (roll_x, roll_y), axis=(0,1))
+                data[fieldname] = data[fieldname].astype(output_dtype, copy=False)
             if output_format == 'npz':
                 np.savez(write_filename, **data)
             else:

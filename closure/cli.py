@@ -352,6 +352,7 @@ def main():
         ClosureLitModule,
         ClosureDataModule,
         args=argv,
+        trainer_defaults={"precision": "32-true"},
         save_config_kwargs={"overwrite": True},
     )
 
