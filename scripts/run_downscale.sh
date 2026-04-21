@@ -8,9 +8,9 @@
 #SBATCH --mem=30G
 #SBATCH --time=06:00:00
 
-if [ "$#" -lt 4 ] || [ "$#" -gt 7 ]; then
-	echo "Usage: sbatch run_downscale.sh <PATH_TO_DATA> <READ_FOLDER> <WRITE_FOLDER> <ZOOM> [OUTPUT_FORMAT] [NO_FILTERS] [OUTPUT_DTYPE]"
-	echo "Example: sbatch run_downscale.sh /dodrio/scratch/projects/2025_112/nathan/ Le2DHGEM_RunID_5 Le2DHGEM_RunID_5_ds 0.25 npz 1 float32"
+if [ "$#" -lt 4 ] || [ "$#" -gt 9 ]; then
+	echo "Usage: sbatch run_downscale.sh <PATH_TO_DATA> <READ_FOLDER> <WRITE_FOLDER> <ZOOM> [OUTPUT_FORMAT] [NO_FILTERS] [OUTPUT_DTYPE] [RESUME] [SKIP_BAD_FILES]"
+	echo "Example: sbatch run_downscale.sh /dodrio/scratch/projects/2025_112/nathan/ Le2DHGEM_RunID_5 Le2DHGEM_RunID_5_ds 0.25 npz 1 float32 1 1"
 	exit 1
 fi
 
@@ -40,10 +40,18 @@ ZOOM=$4
 OUTPUT_FORMAT=${5:-pkl}
 NO_FILTERS=${6:-0}
 OUTPUT_DTYPE=${7:-float64}
+RESUME=${8:-0}
+SKIP_BAD_FILES=${9:-0}
 
 EXTRA_ARGS=()
 if [ "$NO_FILTERS" = "1" ] || [ "$NO_FILTERS" = "true" ] || [ "$NO_FILTERS" = "True" ]; then
 	EXTRA_ARGS+=(--no_filters)
+fi
+if [ "$RESUME" = "1" ] || [ "$RESUME" = "true" ] || [ "$RESUME" = "True" ]; then
+	EXTRA_ARGS+=(--resume)
+fi
+if [ "$SKIP_BAD_FILES" = "1" ] || [ "$SKIP_BAD_FILES" = "true" ] || [ "$SKIP_BAD_FILES" = "True" ]; then
+	EXTRA_ARGS+=(--skip_bad_files)
 fi
 
 # Run the downscale.py script with the provided arguments

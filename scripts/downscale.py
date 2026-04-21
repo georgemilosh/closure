@@ -49,6 +49,8 @@ parser.add_argument('--timeshot', default='None', type=str, required=False, help
 parser.add_argument('--output_format', default='pkl', choices=['pkl', 'npz'], required=False, help='Output format for downscaled field files.')
 parser.add_argument('--no_filters', action='store_true', help='Disable filtering/zoom processing (format conversion mode).')
 parser.add_argument('--output_dtype', default='float64', choices=['float32', 'float64'], required=False, help='Output array dtype for saved fields.')
+parser.add_argument('--resume', action='store_true', help='Allow writing into a non-empty output folder and skip files already converted.')
+parser.add_argument('--skip_bad_files', action='store_true', help='Skip unreadable/corrupted input files instead of aborting the job.')
 args = parser.parse_args()
 
 path = args.path
@@ -61,6 +63,14 @@ timeshot = args.timeshot
 output_format = args.output_format
 no_filters = args.no_filters
 output_dtype = np.float32 if args.output_dtype == 'float32' else np.float64
+resume = args.resume
+skip_bad_files = args.skip_bad_files
+
+
+def get_output_basename(input_filename: str, fmt: str) -> str:
+    if fmt == 'npz':
+        return f"{os.path.splitext(input_filename)[0]}.npz"
+    return f"{input_filename}.pkl"
 
 
 filters = None
@@ -77,8 +87,10 @@ if not os.path.exists(f'{path}{read_folder}'): # Check if read_folder exists
 if not os.path.exists(f'{path}{write_folder}'): # Check if write_folder exists, if not create it
     os.makedirs(f'{path}{write_folder}')
 else:
-    if os.listdir(f'{path}{write_folder}'): # protect from overwriting existing files
+    if os.listdir(f'{path}{write_folder}') and not resume: # protect from overwriting existing files
         raise FileExistsError(f"The folder {path}{write_folder} is not empty.")
+    if os.listdir(f'{path}{write_folder}') and resume:
+        print(f"Resume mode enabled: existing files in {path}{write_folder} will be kept.", flush=True)
 
 # Get all filenames in the read_folder
 all_filenames = sorted(glob.glob(f'{path}{read_folder}/*.h5'))
@@ -91,56 +103,68 @@ if len(filenames_list) == 0:
         "iPiC3D proc*.hdf inputs require a different conversion step first."
     )
 
+skipped_existing = 0
+skipped_bad = []
+processed = 0
+
 for filename in filenames_list:
     if timeshot != 'None':
         if timeshot not in filename:
             continue
     read_filename = f'{path}{read_folder}/{filename}'
-    if output_format == 'npz':
-        write_basename = f"{os.path.splitext(filename)[0]}.npz"
-    else:
-        write_basename = f"{filename}.pkl"
+    write_basename = get_output_basename(filename, output_format)
     write_filename = f'{path}{write_folder}/{write_basename}'
+    if resume and os.path.exists(write_filename):
+        skipped_existing += 1
+        continue
     print(f"Processing {read_filename}", flush=True)
     print(f"Writing to {write_filename}", flush=True)
     # Load the file
     verbose=False
     data = {}
-    with h5py.File(read_filename, 'r') as n:
-        print(f"Working on {filename}", flush=True)
-        if "/Step#0/Block/" in n:
-            # Iterate over each time step
-            for fieldname in n[f"/Step#0/Block/"].keys():
-                data[fieldname] = n[f"/Step#0/Block/{fieldname}/0"][:,:-1,:-1] # there is extra point in the last dimension
-                if filters is not None:
-                    if not isinstance(filters, list):
-                        filters = [filters]
-                    for filteri in filters: # apply all filters in succession
-                        if verbose:
-                            print(f"Filtering {fieldname} from {filename} with {filteri['name']}")
-                        filters_copy = filteri.copy()
-                        filters_name = filters_copy.pop("name", None)
-                        filters_object = getattr(nd, filters_name)
-                        filter_kwargs = filters_copy
-                        for _, kwarg in filter_kwargs.items():
-                            if  isinstance(kwarg, list):
-                                kwarg = tuple(kwarg)  #  configs usually provide lists, but we need tuples
-                        data[fieldname] = filters_object(data[fieldname], **filter_kwargs)
-                        if verbose:
-                            print(f"Resulting shape {data[fieldname].shape}")
-                if verbose:
-                    print(data[fieldname].shape)
-                if not no_filters:
-                    data[fieldname] = np.pad(data[fieldname], pad_width=((0,0), (0, 1), (0, 1)), mode='wrap')[0:1,...]
-                    data[fieldname] = np.roll(data[fieldname], (roll_x, roll_y), axis=(0,1))
-                data[fieldname] = data[fieldname].astype(output_dtype, copy=False)
-            if output_format == 'npz':
-                np.savez(write_filename, **data)
+    try:
+        with h5py.File(read_filename, 'r') as n:
+            print(f"Working on {filename}", flush=True)
+            if "/Step#0/Block/" in n:
+                # Iterate over each time step
+                for fieldname in n[f"/Step#0/Block/"].keys():
+                    data[fieldname] = n[f"/Step#0/Block/{fieldname}/0"][:,:-1,:-1] # there is extra point in the last dimension
+                    if filters is not None:
+                        if not isinstance(filters, list):
+                            filters = [filters]
+                        for filteri in filters: # apply all filters in succession
+                            if verbose:
+                                print(f"Filtering {fieldname} from {filename} with {filteri['name']}")
+                            filters_copy = filteri.copy()
+                            filters_name = filters_copy.pop("name", None)
+                            filters_object = getattr(nd, filters_name)
+                            filter_kwargs = filters_copy
+                            for _, kwarg in filter_kwargs.items():
+                                if  isinstance(kwarg, list):
+                                    kwarg = tuple(kwarg)  #  configs usually provide lists, but we need tuples
+                            data[fieldname] = filters_object(data[fieldname], **filter_kwargs)
+                            if verbose:
+                                print(f"Resulting shape {data[fieldname].shape}")
+                    if verbose:
+                        print(data[fieldname].shape)
+                    if not no_filters:
+                        data[fieldname] = np.pad(data[fieldname], pad_width=((0,0), (0, 1), (0, 1)), mode='wrap')[0:1,...]
+                        data[fieldname] = np.roll(data[fieldname], (roll_x, roll_y), axis=(0,1))
+                    data[fieldname] = data[fieldname].astype(output_dtype, copy=False)
+                if output_format == 'npz':
+                    np.savez(write_filename, **data)
+                else:
+                    with open(write_filename, 'wb') as out_file:
+                        pickle.dump(data, out_file)
+                processed += 1
             else:
-                with open(write_filename, 'wb') as out_file:
-                    pickle.dump(data, out_file)
-        else:
-            print(f"Block object not found in {read_filename}", flush=True)
+                print(f"Block object not found in {read_filename}", flush=True)
+    except OSError as e:
+        if skip_bad_files:
+            print(f"Skipping unreadable file {read_filename}: {e}", flush=True)
+            skipped_bad.append(read_filename)
+            continue
+        raise
 simulation_data_path = f'{path}{write_folder}/SimulationData.txt'
 shutil.copy(f'{path}{read_folder}/SimulationData.txt', simulation_data_path)
 
@@ -190,3 +214,12 @@ for i, line in enumerate(lines):
 # Write the modified lines back to the file
 with open(simulation_data_path, 'w') as file:
     file.writelines(lines)
+
+print(
+    f"Summary: processed={processed}, skipped_existing={skipped_existing}, skipped_bad={len(skipped_bad)}",
+    flush=True,
+)
+if skipped_bad:
+    print("Skipped files:", flush=True)
+    for skipped_file in skipped_bad:
+        print(skipped_file, flush=True)

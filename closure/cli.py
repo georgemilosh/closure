@@ -21,6 +21,7 @@ import logging
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -335,22 +336,167 @@ def _configure_python_logging(argv: list[str]) -> None:
         logger.info("Git revision -> unavailable")
 
 
+def _extract_cli_overrides(argv: list[str]) -> list[str]:
+    """Return user-provided ``--key value`` / ``--key=value`` overrides.
+
+    Excludes the ``--config`` argument because the manifest stores it separately.
+    """
+    overrides: list[str] = []
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+
+        # Skip --config (both forms).
+        if arg.startswith("--config="):
+            i += 1
+            continue
+        if arg == "--config":
+            i += 2
+            continue
+
+        if arg.startswith("--"):
+            if "=" in arg:
+                overrides.append(arg)
+            else:
+                if i + 1 < len(argv) and not argv[i + 1].startswith("--"):
+                    overrides.append(f"{arg} {argv[i + 1]}")
+                    i += 1
+                else:
+                    overrides.append(arg)
+        i += 1
+
+    return overrides
+
+
+def _to_yaml_safe(value: Any) -> Any:
+    """Recursively convert values to YAML-safe built-in Python types."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+
+    if isinstance(value, Path):
+        return str(value)
+
+    if isinstance(value, dict):
+        return {str(k): _to_yaml_safe(v) for k, v in value.items()}
+
+    if isinstance(value, (list, tuple, set)):
+        return [_to_yaml_safe(v) for v in value]
+
+    # jsonargparse Path-like objects expose an absolute path via __fspath__.
+    fspath = getattr(value, "__fspath__", None)
+    if callable(fspath):
+        try:
+            return str(fspath())
+        except Exception:
+            pass
+
+    # Fallback: preserve information using string representation.
+    return str(value)
+
+
+class ClosureLightningCLI(LightningCLI):
+    """Project LightningCLI with reproducibility manifest support."""
+
+    def __init__(
+        self,
+        *args,
+        user_argv: list[str] | None = None,
+        inferred_overrides: list[str] | None = None,
+        **kwargs,
+    ) -> None:
+        self._user_argv = list(user_argv or [])
+        self._inferred_overrides = list(inferred_overrides or [])
+        self._manifest_written = False
+        super().__init__(*args, **kwargs)
+
+    def _resolved_config_dict(self) -> dict[str, Any]:
+        """Get fully resolved CLI config as a plain dictionary."""
+        cfg = getattr(self, "config", None)
+        if cfg is None:
+            return {}
+        if hasattr(cfg, "as_dict"):
+            try:
+                as_dict = cfg.as_dict()
+                return as_dict if isinstance(as_dict, dict) else {}
+            except Exception:
+                pass
+        try:
+            dumped = self.parser.dump(cfg, skip_none=False, format="yaml")
+            loaded = yaml.safe_load(dumped) or {}
+            return loaded if isinstance(loaded, dict) else {}
+        except Exception:
+            return {}
+
+    def _manifest_dir(self) -> Path:
+        """Return destination directory for run manifests."""
+        log_dir = getattr(self.trainer, "log_dir", None)
+        if log_dir:
+            manifest_dir = Path(log_dir)
+        else:
+            manifest_dir = Path(self.trainer.default_root_dir)
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        return manifest_dir
+
+    def _write_repro_manifest(self, stage: str) -> None:
+        """Persist reproducibility manifest once per run."""
+        if self._manifest_written:
+            return
+
+        config_path = _parse_config_path_from_cli(self._user_argv)
+        branch, commit = _get_git_revision_info()
+        payload: dict[str, Any] = {
+            "created_at_utc": datetime.now(timezone.utc).isoformat(),
+            "stage": stage,
+            "command": " ".join([Path(sys.argv[0]).name, *self._user_argv]),
+            "config_file": str(config_path) if config_path else None,
+            "cli_overrides": _extract_cli_overrides(self._user_argv),
+            "inferred_cli_overrides": self._inferred_overrides,
+            "git": {"branch": branch, "commit": commit},
+            "resolved_config": self._resolved_config_dict(),
+        }
+
+        manifest_path = self._manifest_dir() / "repro_manifest.yaml"
+        manifest_path.write_text(yaml.safe_dump(_to_yaml_safe(payload), sort_keys=False))
+        logging.getLogger(__name__).info("Wrote reproducibility manifest -> %s", manifest_path)
+        self._manifest_written = True
+
+    def before_fit(self) -> None:
+        self._write_repro_manifest(stage="fit")
+
+    def before_validate(self) -> None:
+        self._write_repro_manifest(stage="validate")
+
+    def before_test(self) -> None:
+        self._write_repro_manifest(stage="test")
+
+    def before_predict(self) -> None:
+        self._write_repro_manifest(stage="predict")
+
+
 def main():
     """Launch Lightning CLI."""
-    argv = sys.argv[1:]
+    user_argv = sys.argv[1:]
+    argv = list(user_argv)
+    inferred_overrides: list[str] = []
 
     inferred_norm_folder = _infer_norm_folder_default(argv)
     if inferred_norm_folder:
-        argv = [*argv, f"--data.norm_folder={inferred_norm_folder}"]
+        arg = f"--data.norm_folder={inferred_norm_folder}"
+        argv = [*argv, arg]
+        inferred_overrides.append(arg)
 
     inferred_save_dir = _infer_csvlogger_save_dir_default(argv)
     if inferred_save_dir:
-        argv = [*argv, f"--trainer.logger.init_args.save_dir={inferred_save_dir}"]
+        arg = f"--trainer.logger.init_args.save_dir={inferred_save_dir}"
+        argv = [*argv, arg]
+        inferred_overrides.append(arg)
 
     _configure_python_logging(argv)
-    LightningCLI(
+    ClosureLightningCLI(
         ClosureLitModule,
         ClosureDataModule,
+        user_argv=user_argv,
+        inferred_overrides=inferred_overrides,
         args=argv,
         trainer_defaults={"precision": "32-true"},
         save_config_kwargs={"overwrite": True},

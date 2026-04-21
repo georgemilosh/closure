@@ -10,6 +10,7 @@ import pytest
 import yaml
 
 from closure.cli import (
+    _extract_cli_overrides,
     _get_git_revision_info,
     _infer_csvlogger_save_dir_default,
     _infer_norm_folder_default,
@@ -268,6 +269,27 @@ def test_norm_folder_defaults_to_default_root_dir(tmp_path):
 
     inferred = _infer_norm_folder_default(["fit", f"--config={config_path}"])
     assert inferred == str(tmp_path / "models")
+
+
+def test_extract_cli_overrides_excludes_config_and_keeps_flags():
+    """CLI override extraction should ignore --config and preserve override args."""
+    argv = [
+        "fit",
+        "--config=configs/default.yaml",
+        "--trainer.max_epochs=5",
+        "--data.batch_size",
+        "16",
+        "--model.dropout",
+        "0.1",
+        "--trainer.enable_progress_bar",
+        "false",
+    ]
+    overrides = _extract_cli_overrides(argv)
+    assert "--config=configs/default.yaml" not in overrides
+    assert "--trainer.max_epochs=5" in overrides
+    assert "--data.batch_size 16" in overrides
+    assert "--model.dropout 0.1" in overrides
+    assert "--trainer.enable_progress_bar false" in overrides
 
 
 def test_norm_folder_not_overridden_when_explicit(tmp_path):
