@@ -26,7 +26,7 @@ _logger = logging.getLogger("closure.datamodule")
 
 from closure.config import load_paths
 from closure.datasets import DataFrameDataset
-from closure.resources import aggregate_gpu_stats, gpu_stats, process_tree_ram_gb
+from closure.resources import aggregate_gpu_stats, cgroup_memory_peak_gb, gpu_stats, process_tree_ram_gb
 
 
 class ClosureDataModule(L.LightningDataModule):
@@ -217,6 +217,7 @@ class ClosureDataModule(L.LightningDataModule):
         self._loading_ram_snapshots_gb: list[float] = []
         self._loading_gpu_util_snapshots_pct: list[float] = []
         self._loading_gpu_mem_snapshots_mb: list[float] = []
+        self._loading_ram_peak_gb: float | None = None
 
         # Resolve relative paths against paths.yaml roots
         data_folder = self._resolve_path(hp.data_folder, "data_dir")
@@ -385,6 +386,11 @@ class ClosureDataModule(L.LightningDataModule):
         ram_gb = process_tree_ram_gb()
         self._loading_ram_snapshots_gb.append(ram_gb)
 
+        # Track the cgroup high-water mark (peak since job start).
+        peak_gb = cgroup_memory_peak_gb()
+        if peak_gb is not None:
+            self._loading_ram_peak_gb = peak_gb
+
         gstats = aggregate_gpu_stats(gpu_stats())
         avg_gpu_util = gstats["avg_gpu_utilization_pct"]
         avg_gpu_mem = gstats["avg_gpu_memory_used_mb"]
@@ -394,6 +400,8 @@ class ClosureDataModule(L.LightningDataModule):
             self._loading_gpu_mem_snapshots_mb.append(float(avg_gpu_mem))
 
         parts = [f"Loading resource snapshot ({label})", f"ram_gb={ram_gb:.3f}"]
+        if peak_gb is not None:
+            parts.append(f"ram_peak_gb={peak_gb:.3f}")
         if avg_gpu_util is not None:
             parts.append(f"avg_gpu_util={avg_gpu_util:.1f}%")
         if avg_gpu_mem is not None:

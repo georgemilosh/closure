@@ -1123,9 +1123,15 @@ def read_files(files_path, filenames, fields_to_read, qom, dtype, extract_fields
         # Add logging before transpose
         logger.info(f"About to transpose array with shape {out2.shape}")
         
-        # Only transpose if we have 4 dimensions
+        # Only transpose if we have 4 dimensions.
+        # np.transpose returns a *view* (non-contiguous); np.ascontiguousarray
+        # then produces a contiguous copy in the target layout.  Wrapping the
+        # two steps in a single expression lets Python free the original array
+        # *before* the contiguous copy is allocated, halving peak RAM compared
+        # to the naive ``out2 = out2.transpose(...).copy()`` pattern which keeps
+        # both allocations alive simultaneously.
         if len(out2.shape) == 4:
-            out2 = out2.transpose(0,2,3,1)
+            out2 = np.ascontiguousarray(out2.transpose(0, 2, 3, 1))
         else:
             logger.error(f"Expected 4D array for transpose, got shape {out2.shape}")
             raise ValueError(f"Cannot transpose array with shape {out2.shape} - expected 4 dimensions, got {len(out2.shape)}")

@@ -70,6 +70,56 @@ def cgroup_memory_usage_bytes() -> int | None:
     return None
 
 
+def cgroup_memory_peak_bytes() -> int | None:
+    """Return the high-water-mark memory usage from cgroup accounting.
+
+    Reads ``memory.peak`` (cgroup v2) or ``memory.max_usage_in_bytes``
+    (cgroup v1).  Returns None if the files are unavailable.
+
+    This reflects the *maximum* memory charged to the job step since it
+    started, which is what Slurm enforces for OOM-kill decisions — unlike
+    ``memory.current`` / ``cgroup_memory_usage_bytes()``, which is a
+    point-in-time snapshot that misses transient allocation peaks (e.g.
+    the temporary copy produced by ``np.transpose``).
+    """
+    cg_rel = _self_cgroup_path()
+    if cg_rel:
+        cg_rel = cg_rel.strip()
+        if not cg_rel.startswith("/"):
+            cg_rel = f"/{cg_rel}"
+
+        # cgroup v2
+        v2_path = Path(f"/sys/fs/cgroup{cg_rel}/memory.peak")
+        value = _read_int_file(v2_path)
+        if value is not None:
+            return value
+
+        # cgroup v1
+        v1_path = Path(f"/sys/fs/cgroup/memory{cg_rel}/memory.max_usage_in_bytes")
+        value = _read_int_file(v1_path)
+        if value is not None:
+            return value
+
+    # Fallback probe for uncommon setups.
+    value = _read_int_file(Path("/sys/fs/cgroup/memory.peak"))
+    if value is not None:
+        return value
+
+    value = _read_int_file(Path("/sys/fs/cgroup/memory/memory.max_usage_in_bytes"))
+    if value is not None:
+        return value
+
+    return None
+
+
+def cgroup_memory_peak_gb() -> float | None:
+    """Return peak RAM usage in GiB from cgroup, or None if unavailable."""
+    peak_bytes = cgroup_memory_peak_bytes()
+    if peak_bytes is not None:
+        return peak_bytes / (1024.0 ** 3)
+    return None
+
+
 def process_tree_ram_bytes() -> int:
     """Return RSS bytes for current process plus children."""
     proc = psutil.Process()
