@@ -172,9 +172,31 @@ class ClosureLitModule(L.LightningModule):
         batches = getattr(self, "_train_batches_this_epoch", "?")
         parts = [f"Epoch {epoch}"]
         parts.append(f"batches={batches}")
-        for key in ("train_loss", "val_loss", "lr-Adam"):
+        for key in ("train_loss", "val_loss"):
             if key in metrics:
                 parts.append(f"{key}={metrics[key]:.6g}")
+        # Log learning rate(s): include any lr-* keys logged by
+        # LearningRateMonitor (covers Adam, AdamW, SGD, SWA, ...). Fall back
+        # to reading the optimizer param groups directly when no monitor is
+        # attached (or before it has produced a value for the first epoch).
+        lr_logged = False
+        for key in sorted(metrics.keys()):
+            if str(key).startswith("lr-"):
+                parts.append(f"{key}={metrics[key]:.6g}")
+                lr_logged = True
+        if not lr_logged:
+            try:
+                optimizers = self.trainer.optimizers
+            except Exception:  # pragma: no cover
+                optimizers = []
+            for i, opt in enumerate(optimizers or []):
+                for j, pg in enumerate(opt.param_groups):
+                    name = f"lr-{type(opt).__name__}"
+                    if len(optimizers) > 1:
+                        name += f"[{i}]"
+                    if len(opt.param_groups) > 1:
+                        name += f"/pg{j}"
+                    parts.append(f"{name}={pg['lr']:.6g}")
         parts.append(f"cgroup_ram_gb={cgroup_ram_gb:.3f}")
         parts.append(f"unique_ram_gb={unique_ram_gb:.3f}")
         if peak_gb is not None:
@@ -310,13 +332,37 @@ class ClosureLitModule(L.LightningModule):
             return optimizer
 
         scheduler_kw = dict(self.hparams.scheduler_kwargs or {})
-        interval = scheduler_kw.pop("interval", "epoch")
+        default_interval = "step" if self.hparams.scheduler == "OneCycleLR" else "epoch"
+        interval = scheduler_kw.pop("interval", default_interval)
         frequency = scheduler_kw.pop("frequency", 1)
 
         # Backward compatibility: older configs sometimes pass scheduler name
         # inside scheduler_kwargs; remove it before scheduler init.
         scheduler_kw.pop("scheduler", None)
         scheduler_kw.pop("early_stopping", None)
+
+        # OneCycleLR needs total_steps (or epochs+steps_per_epoch). When not
+        # provided we derive it from the trainer so configs can stay generic.
+        if self.hparams.scheduler == "OneCycleLR":
+            has_total_steps = scheduler_kw.get("total_steps") is not None
+            has_epoch_split = (
+                scheduler_kw.get("epochs") is not None
+                and scheduler_kw.get("steps_per_epoch") is not None
+            )
+            if not has_total_steps and not has_epoch_split:
+                trainer = getattr(self, "trainer", None)
+                estimated = getattr(trainer, "estimated_stepping_batches", None)
+                if estimated is None or estimated <= 0 or estimated == float("inf"):
+                    raise ValueError(
+                        "OneCycleLR requires total_steps. Could not infer it from "
+                        "trainer.estimated_stepping_batches; set scheduler_kwargs.total_steps "
+                        "or scheduler_kwargs.epochs and scheduler_kwargs.steps_per_epoch."
+                    )
+                scheduler_kw["total_steps"] = int(estimated)
+            # Drop explicit None so the scheduler does not receive total_steps=None.
+            if scheduler_kw.get("total_steps", 1) is None:
+                scheduler_kw.pop("total_steps", None)
+
         scheduler = self._build_scheduler(
             optimizer=optimizer,
             scheduler_name=self.hparams.scheduler,

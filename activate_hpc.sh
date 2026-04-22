@@ -13,13 +13,13 @@ _CLOSURE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Simple detection from currently loaded module stack.
 _loaded_modules="$(module -t list 2>&1 | tr '\n' ':')"
 
-if [[ "$_loaded_modules" == *"gpu_rome_a100_rhel9"* ]]; then
+if [[ "$_loaded_modules" == *"gpu_rome_a100"*"rhel9"* ]]; then
 	_hpc_stack="gpu"
 elif [[ "$_loaded_modules" == *"debug_milan_rhel9"* ]]; then
 	_hpc_stack="debug"
 else
 	echo "Could not detect Dodrio stack from module list."
-	echo "Expected one of: gpu_rome_a100_rhel9 or debug_milan_rhel9"
+	echo "Expected one of: gpu_rome_a100*rhel9 or debug_milan_rhel9"
 	echo "Run on the target node/partition and source this file again."
 	return 1
 fi
