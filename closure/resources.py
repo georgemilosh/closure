@@ -120,16 +120,49 @@ def cgroup_memory_peak_gb() -> float | None:
     return None
 
 
-def process_tree_ram_bytes() -> int:
-    """Return RSS bytes for current process plus children."""
+def cgroup_memory_usage_gb() -> float | None:
+    """Return current RAM usage in GiB from cgroup accounting."""
+    current_bytes = cgroup_memory_usage_bytes()
+    if current_bytes is not None:
+        return current_bytes / (1024.0 ** 3)
+    return None
+
+
+def _process_tree_memory_bytes(kind: str) -> int:
+    """Return memory bytes for current process plus children.
+
+    ``kind='rss'`` sums resident pages and therefore over-counts shared pages.
+    ``kind='uss'`` sums unique set size, which better matches private memory.
+    """
     proc = psutil.Process()
-    total = proc.memory_info().rss
-    for child in proc.children(recursive=True):
+    total = 0
+    for current in [proc, *proc.children(recursive=True)]:
         try:
-            total += child.memory_info().rss
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            if kind == "uss":
+                current_total = getattr(current.memory_full_info(), "uss", None)
+                if current_total is None:
+                    current_total = current.memory_info().rss
+            else:
+                current_total = current.memory_info().rss
+            total += current_total
+        except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError):
             continue
     return total
+
+
+def process_tree_rss_bytes() -> int:
+    """Return RSS bytes for current process plus children."""
+    return _process_tree_memory_bytes("rss")
+
+
+def process_tree_unique_ram_bytes() -> int:
+    """Return unique/private RAM bytes for current process plus children."""
+    return _process_tree_memory_bytes("uss")
+
+
+def process_tree_ram_bytes() -> int:
+    """Backward-compatible alias for process-tree RSS bytes."""
+    return process_tree_rss_bytes()
 
 
 def process_tree_ram_gb() -> float:
@@ -139,10 +172,15 @@ def process_tree_ram_gb() -> float:
     step and avoids large over-counting from summing process RSS values.
     Falls back to process-tree RSS when cgroup files are unavailable.
     """
-    cgroup_bytes = cgroup_memory_usage_bytes()
-    if cgroup_bytes is not None:
-        return cgroup_bytes / (1024.0 ** 3)
-    return process_tree_ram_bytes() / (1024.0 ** 3)
+    cgroup_gb = cgroup_memory_usage_gb()
+    if cgroup_gb is not None:
+        return cgroup_gb
+    return process_tree_rss_bytes() / (1024.0 ** 3)
+
+
+def process_tree_unique_ram_gb() -> float:
+    """Return unique/private RAM usage in GiB for current process plus children."""
+    return process_tree_unique_ram_bytes() / (1024.0 ** 3)
 
 
 def gpu_stats() -> list[dict[str, Any]]:

@@ -26,7 +26,13 @@ _logger = logging.getLogger("closure.datamodule")
 
 from closure.config import load_paths
 from closure.datasets import DataFrameDataset
-from closure.resources import aggregate_gpu_stats, cgroup_memory_peak_gb, gpu_stats, process_tree_ram_gb
+from closure.resources import (
+    aggregate_gpu_stats,
+    cgroup_memory_peak_gb,
+    gpu_stats,
+    process_tree_ram_gb,
+    process_tree_unique_ram_gb,
+)
 
 
 class ClosureDataModule(L.LightningDataModule):
@@ -215,6 +221,7 @@ class ClosureDataModule(L.LightningDataModule):
         hp = self.hparams
 
         self._loading_ram_snapshots_gb: list[float] = []
+        self._loading_unique_ram_snapshots_gb: list[float] = []
         self._loading_gpu_util_snapshots_pct: list[float] = []
         self._loading_gpu_mem_snapshots_mb: list[float] = []
         self._loading_ram_peak_gb: float | None = None
@@ -383,8 +390,10 @@ class ClosureDataModule(L.LightningDataModule):
 
     def _log_resource_snapshot(self, label: str) -> None:
         """Log RAM/GPU usage snapshot during loading stages."""
-        ram_gb = process_tree_ram_gb()
-        self._loading_ram_snapshots_gb.append(ram_gb)
+        cgroup_ram_gb = process_tree_ram_gb()
+        unique_ram_gb = process_tree_unique_ram_gb()
+        self._loading_ram_snapshots_gb.append(cgroup_ram_gb)
+        self._loading_unique_ram_snapshots_gb.append(unique_ram_gb)
 
         # Track the cgroup high-water mark (peak since job start).
         peak_gb = cgroup_memory_peak_gb()
@@ -399,9 +408,13 @@ class ClosureDataModule(L.LightningDataModule):
         if avg_gpu_mem is not None:
             self._loading_gpu_mem_snapshots_mb.append(float(avg_gpu_mem))
 
-        parts = [f"Loading resource snapshot ({label})", f"ram_gb={ram_gb:.3f}"]
+        parts = [
+            f"Loading resource snapshot ({label})",
+            f"cgroup_ram_gb={cgroup_ram_gb:.3f}",
+            f"unique_ram_gb={unique_ram_gb:.3f}",
+        ]
         if peak_gb is not None:
-            parts.append(f"ram_peak_gb={peak_gb:.3f}")
+            parts.append(f"cgroup_ram_peak_gb={peak_gb:.3f}")
         if avg_gpu_util is not None:
             parts.append(f"avg_gpu_util={avg_gpu_util:.1f}%")
         if avg_gpu_mem is not None:

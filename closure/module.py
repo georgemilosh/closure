@@ -19,7 +19,13 @@ import torch
 import lightning as L
 from lightning.pytorch.utilities.model_summary import summarize
 
-from closure.resources import aggregate_gpu_stats, cgroup_memory_peak_gb, gpu_stats, process_tree_ram_gb
+from closure.resources import (
+    aggregate_gpu_stats,
+    cgroup_memory_peak_gb,
+    gpu_stats,
+    process_tree_ram_gb,
+    process_tree_unique_ram_gb,
+)
 
 
 _logger = logging.getLogger("closure.module")
@@ -122,6 +128,7 @@ class ClosureLitModule(L.LightningModule):
         """Emit run context and model summary to python logs."""
         self._fit_start_time = time.perf_counter()
         self._epoch_ram_gb: list[float] = []
+        self._epoch_unique_ram_gb: list[float] = []
         self._epoch_gpu_util_pct: list[float] = []
         self._epoch_gpu_mem_mb: list[float] = []
         # Reset the cgroup peak counter baseline for training.
@@ -144,13 +151,15 @@ class ClosureLitModule(L.LightningModule):
 
     def on_train_epoch_end(self):
         """Log epoch-level metrics summary to Python logs."""
-        ram_gb = process_tree_ram_gb()
+        cgroup_ram_gb = process_tree_ram_gb()
+        unique_ram_gb = process_tree_unique_ram_gb()
         peak_gb = cgroup_memory_peak_gb()
         gstats = aggregate_gpu_stats(gpu_stats())
         avg_gpu_util = gstats["avg_gpu_utilization_pct"]
         avg_gpu_mem = gstats["avg_gpu_memory_used_mb"]
 
-        self._epoch_ram_gb.append(ram_gb)
+        self._epoch_ram_gb.append(cgroup_ram_gb)
+        self._epoch_unique_ram_gb.append(unique_ram_gb)
         if peak_gb is not None:
             self._ram_peak_gb_training = peak_gb
         if avg_gpu_util is not None:
@@ -166,9 +175,10 @@ class ClosureLitModule(L.LightningModule):
         for key in ("train_loss", "val_loss", "lr-Adam"):
             if key in metrics:
                 parts.append(f"{key}={metrics[key]:.6g}")
-        parts.append(f"ram_gb={ram_gb:.3f}")
+        parts.append(f"cgroup_ram_gb={cgroup_ram_gb:.3f}")
+        parts.append(f"unique_ram_gb={unique_ram_gb:.3f}")
         if peak_gb is not None:
-            parts.append(f"ram_peak_gb={peak_gb:.3f}")
+            parts.append(f"cgroup_ram_peak_gb={peak_gb:.3f}")
         if avg_gpu_util is not None:
             parts.append(f"avg_gpu_util={avg_gpu_util:.1f}%")
         if avg_gpu_mem is not None:
@@ -225,13 +235,21 @@ class ClosureLitModule(L.LightningModule):
         # Per-epoch averages collected from closure.log snapshots.
         if self._epoch_ram_gb:
             timings["avg_ram_gb_per_epoch"] = round(sum(self._epoch_ram_gb) / len(self._epoch_ram_gb), 3)
+            timings["avg_cgroup_ram_gb_per_epoch"] = timings["avg_ram_gb_per_epoch"]
+        if self._epoch_unique_ram_gb:
+            timings["avg_unique_ram_gb_per_epoch"] = round(
+                sum(self._epoch_unique_ram_gb) / len(self._epoch_unique_ram_gb),
+                3,
+            )
         peak_training = getattr(self, "_ram_peak_gb_training", None)
         baseline = getattr(self, "_ram_peak_gb_at_fit_start", None)
         if peak_training is not None:
             timings["peak_ram_gb_during_training"] = round(peak_training, 3)
+            timings["peak_cgroup_ram_gb_during_training"] = timings["peak_ram_gb_during_training"]
             if baseline is not None:
                 # Net peak attributable to training (excludes loading peak)
                 timings["net_peak_ram_gb_training"] = round(max(0.0, peak_training - baseline), 3)
+                timings["net_peak_cgroup_ram_gb_training"] = timings["net_peak_ram_gb_training"]
         if self._epoch_gpu_util_pct:
             timings["avg_gpu_utilization_pct_per_epoch"] = round(
                 sum(self._epoch_gpu_util_pct) / len(self._epoch_gpu_util_pct), 3
@@ -245,13 +263,21 @@ class ClosureLitModule(L.LightningModule):
         dm = getattr(self.trainer, "datamodule", None)
         if dm is not None:
             loading_ram = getattr(dm, "_loading_ram_snapshots_gb", None)
+            loading_unique_ram = getattr(dm, "_loading_unique_ram_snapshots_gb", None)
             loading_ram_peak = getattr(dm, "_loading_ram_peak_gb", None)
             loading_gpu_util = getattr(dm, "_loading_gpu_util_snapshots_pct", None)
             loading_gpu_mem = getattr(dm, "_loading_gpu_mem_snapshots_mb", None)
             if loading_ram:
                 timings["avg_ram_gb_during_loading"] = round(sum(loading_ram) / len(loading_ram), 3)
+                timings["avg_cgroup_ram_gb_during_loading"] = timings["avg_ram_gb_during_loading"]
+            if loading_unique_ram:
+                timings["avg_unique_ram_gb_during_loading"] = round(
+                    sum(loading_unique_ram) / len(loading_unique_ram),
+                    3,
+                )
             if loading_ram_peak is not None:
                 timings["peak_ram_gb_during_loading"] = round(loading_ram_peak, 3)
+                timings["peak_cgroup_ram_gb_during_loading"] = timings["peak_ram_gb_during_loading"]
             if loading_gpu_util:
                 timings["avg_gpu_utilization_pct_during_loading"] = round(
                     sum(loading_gpu_util) / len(loading_gpu_util),
