@@ -9,6 +9,7 @@ from __future__ import annotations
 __all__ = ["graph_pred_targets", "plot_pred_targets"]
 
 import os
+import re
 from typing import Any, Optional
 
 import matplotlib.pyplot as plt
@@ -20,6 +21,29 @@ except ImportError:  # pragma: no cover
     pass
 
 from closure import read_pic as rp
+
+
+def _sample_cycle_label(sample_filename: str, fallback_index: int) -> str:
+    """Extract cycle identifier from a sample filename for stable plot names."""
+    basename = os.path.basename(sample_filename)
+    stem = basename.rsplit(".", 1)[0]
+    match = re.search(r"(\d+)$", stem)
+    if match:
+        return match.group(1)
+    return str(fallback_index)
+
+
+def _cycle_range_label(dataset, plot_indices) -> str:
+    """Return a compact cycle label for a set of plotted samples."""
+    cycle_labels = [
+        _sample_cycle_label(dataset.dataframe["filenames"].iloc[i], i)
+        for i in plot_indices
+    ]
+    if not cycle_labels:
+        return "none"
+    if len(cycle_labels) == 1 or cycle_labels[0] == cycle_labels[-1]:
+        return cycle_labels[0]
+    return f"{cycle_labels[0]}-{cycle_labels[-1]}"
 
 
 def graph_pred_targets(
@@ -94,6 +118,7 @@ def graph_pred_targets(
     _, axs = plt.subplots(3, 3, figsize=(12, 6))
 
     for i in range(3):
+        cycle_label = _sample_cycle_label(dataset.dataframe["filenames"].iloc[i], i)
         error = (ground_truth_reshaped[i, ..., 0] - prediction_reshaped[i, ..., 0]) / (
             ground_truth_reshaped[i, ..., 0].max()
         )
@@ -129,7 +154,8 @@ def graph_pred_targets(
                 axes.set_ylabel("Y")
                 f.colorbar(im, ax=axes)
                 f.savefig(
-                    f"{img_dir}/{target_name}_time{i}_{label}.png", bbox_inches="tight"
+                    f"{img_dir}/{target_name}_cycle{cycle_label}_{label}.png",
+                    bbox_inches="tight",
                 )
                 plt.close(f)
 
@@ -200,6 +226,15 @@ def plot_pred_targets(
         vmax_local = max(vmax_local, 1e-12)
         return vmin_local, vmax_local
 
+    def _panel_figsize(x_grid, y_grid, base_width=4.5, min_height=3.5, max_height=6.0):
+        x_span = float(np.max(x_grid) - np.min(x_grid))
+        y_span = float(np.max(y_grid) - np.min(y_grid))
+        if x_span <= 0 or y_span <= 0:
+            return (base_width, base_width)
+        height = base_width * (y_span / x_span)
+        height = min(max(height, min_height), max_height)
+        return (base_width, height)
+
     prediction_np = _as_numpy(prediction)
     ground_truth_np = _as_numpy(ground_truth)
 
@@ -265,8 +300,16 @@ def plot_pred_targets(
     cmap_signed = kwargs.pop("cmap_signed", "seismic")
     cmap_error = kwargs.pop("cmap_error", "seismic")
     error_limit = kwargs.pop("error_limit", None)
+    show_figure = bool(kwargs.pop("show_figure", True))
+    panel_figsize = kwargs.pop("panel_figsize", None)
 
-    figsize = kwargs.pop("figsize", (12, 2 * len(plot_indices)))
+    if panel_figsize is None:
+        panel_figsize = _panel_figsize(X, Y)
+
+    figsize = kwargs.pop(
+        "figsize",
+        (3 * panel_figsize[0], len(plot_indices) * panel_figsize[1]),
+    )
     fig, axs = plt.subplots(len(plot_indices), 3, figsize=figsize)
     if len(plot_indices) == 1:
         axs = np.asarray([axs])
@@ -277,8 +320,10 @@ def plot_pred_targets(
 
     target_is_signed = target_name in signed_target_names
     main_cmap = cmap_signed if target_is_signed else cmap_unsigned
+    cycle_range_label = _cycle_range_label(dataset, plot_indices)
 
     for figindex, i in enumerate(plot_indices):
+        cycle_label = _sample_cycle_label(dataset.dataframe["filenames"].iloc[i], i)
         gt_i = ground_truth_reshaped[i, ..., 0]
         pred_i = prediction_reshaped[i, ..., 0]
 
@@ -312,11 +357,12 @@ def plot_pred_targets(
                 ["real", "predict", "error"],
             )
         ):
-            f, ax = plt.subplots(1, 1, figsize=(figsize[0] / 2, figsize[1] / 2))
+            f, ax = plt.subplots(1, 1, figsize=panel_figsize)
             for axes in [ax, axs[figindex, j]]:
                 im = axes.pcolormesh(
                     X, Y, data, vmax=vmax[j], vmin=vmin[j], cmap=cmaps[j], **kwargs
                 )
+                axes.set_aspect("equal")
                 axes.set_title(
                     f"{label} {target_name} @ "
                     f"{dataset.dataframe['filenames'].iloc[i].rsplit('_')[-1].rsplit('.')[0]}"
@@ -325,9 +371,14 @@ def plot_pred_targets(
                 axes.set_ylabel("Y")
                 axes.figure.colorbar(im, ax=axes)
             f.savefig(
-                f"{img_dir}/{target_name}_time{i}_{label}.png", bbox_inches="tight"
+                f"{img_dir}/{target_name}_cycle{cycle_label}_{label}.png",
+                bbox_inches="tight",
             )
             plt.close(f)
 
     plt.tight_layout()
-    plt.show()
+    summary_path = f"{img_dir}/{target_name}_cycles{cycle_range_label}_summary.png"
+    fig.savefig(summary_path, bbox_inches="tight")
+    if show_figure:
+        plt.show()
+    plt.close(fig)

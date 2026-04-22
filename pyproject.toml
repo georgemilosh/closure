@@ -38,6 +38,7 @@ notebook = ["jupyter>=1.0", "ipykernel>=6.0", "notebook>=6.0", "ipywidgets>=8.0"
 
 [project.scripts]
 closure-train = "closure.cli:main"
+closure-eval = "closure.eval_cli:main"
 
 [tool.pytest.ini_options]
 minversion = "7.0"

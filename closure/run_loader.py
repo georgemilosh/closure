@@ -19,6 +19,7 @@ from __future__ import annotations
 __all__ = ["RunLoader"]
 
 import importlib
+import logging
 from pathlib import Path
 from typing import Any, Optional
 
@@ -34,6 +35,9 @@ from closure.datamodule import ClosureDataModule
 from closure.module import ClosureLitModule
 
 
+_logger = logging.getLogger(__name__)
+
+
 def _instantiate_network(network_cfg: dict) -> torch.nn.Module:
     """Instantiate a network from a ``class_path`` / ``init_args`` dict."""
     class_path = network_cfg["class_path"]
@@ -42,6 +46,43 @@ def _instantiate_network(network_cfg: dict) -> torch.nn.Module:
     mod = importlib.import_module(module_path)
     cls = getattr(mod, class_name)
     return cls(**init_args)
+
+
+def _load_module_checkpoint_robust(
+    ckpt_path: str | Path,
+    network: torch.nn.Module,
+    model_cfg: dict,
+    device: str,
+) -> ClosureLitModule:
+    """Load ClosureLitModule checkpoint with Lightning fallback.
+
+    On some HPC module stacks, ``ClosureLitModule.load_from_checkpoint`` can
+    fail inside Lightning's legacy migration patch because expected utility
+    attributes are missing from shimmed namespaces. In that case we load the
+    checkpoint directly via ``torch.load`` and restore the state dict.
+    """
+    try:
+        module = ClosureLitModule.load_from_checkpoint(
+            str(ckpt_path),
+            network=network,
+            map_location=device,
+        )
+        module.eval()
+        return module
+    except AttributeError as exc:
+        _logger.warning(
+            "Lightning load_from_checkpoint failed (%s). Falling back to direct "
+            "torch.load state_dict restoration.",
+            exc,
+        )
+
+    init_kwargs = {k: v for k, v in model_cfg.items() if k != "network"}
+    module = ClosureLitModule(network=network, **init_kwargs)
+    checkpoint = torch.load(str(ckpt_path), map_location=device)
+    state_dict = checkpoint.get("state_dict", checkpoint)
+    module.load_state_dict(state_dict, strict=True)
+    module.eval()
+    return module
 
 
 class RunLoader:
@@ -84,6 +125,7 @@ class RunLoader:
         stage: str = "test",
         ckpt: str | Path | None = None,
         device: str | None = None,
+        data_overrides: dict[str, Any] | None = None,
     ) -> "RunLoader":
         """Load from a Lightning ``version_*`` directory.
 
@@ -100,6 +142,9 @@ class RunLoader:
         device : str or None
             Device to load the model on (e.g. ``"cpu"``, ``"cuda"``).
             Defaults to ``"cpu"``.
+        data_overrides : dict[str, Any] or None
+            Optional overrides merged into ``config['data']`` before
+            creating the datamodule (for example ``test_samples_file``).
         """
         version_dir = Path(version_dir)
         config_path = version_dir / "config.yaml"
@@ -113,6 +158,7 @@ class RunLoader:
         return cls.from_config(
             config_path, ckpt, stage=stage, device=device,
             version_dir=version_dir,
+            data_overrides=data_overrides,
         )
 
     @classmethod
@@ -123,6 +169,7 @@ class RunLoader:
         stage: str = "test",
         device: str | None = None,
         version_dir: str | Path | None = None,
+        data_overrides: dict[str, Any] | None = None,
     ) -> "RunLoader":
         """Load from an explicit config YAML and checkpoint path.
 
@@ -138,6 +185,9 @@ class RunLoader:
             Device to load the model on.
         version_dir : str, Path, or None
             Lightning version directory (for history / artifact access).
+        data_overrides : dict[str, Any] or None
+            Optional overrides merged into ``config['data']`` before
+            creating the datamodule (for example ``test_samples_file``).
         """
         device = device or "cpu"
 
@@ -146,6 +196,8 @@ class RunLoader:
 
         # --- Rebuild DataModule ---
         data_cfg = dict(cfg.get("data", {}))
+        if data_overrides:
+            data_cfg.update(data_overrides)
         if version_dir is not None:
             data_cfg["norm_version_dir"] = str(Path(version_dir))
         datamodule = ClosureDataModule(**data_cfg)
@@ -158,12 +210,12 @@ class RunLoader:
             raise ValueError("Config is missing model.network section.")
         network = _instantiate_network(network_cfg)
 
-        module = ClosureLitModule.load_from_checkpoint(
-            str(ckpt_path),
+        module = _load_module_checkpoint_robust(
+            ckpt_path=ckpt_path,
             network=network,
-            map_location=device,
+            model_cfg=model_cfg,
+            device=device,
         )
-        module.eval()
 
         # Restore network into model_cfg for round-tripping
         model_cfg["network"] = network_cfg

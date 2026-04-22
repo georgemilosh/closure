@@ -12,6 +12,7 @@ Usage:
     python your_script.py
 """
 
+import importlib
 import sys
 
 # --- NumPy 2.x → 1.x pickle compatibility ---
@@ -31,3 +32,20 @@ from pytorch_lightning import *  # noqa: F403
 
 pytorch = pytorch_lightning
 sys.modules[__name__ + ".pytorch"] = pytorch_lightning
+
+# --- Patch: pytorch_lightning 2.2.1 on HPC is missing pl.utilities.argparse
+# which pl_legacy_patch() tries to set during load_from_checkpoint.
+# Stub it out so the attribute assignment succeeds harmlessly.
+import types as _types
+
+_pl_utils = importlib.import_module("pytorch_lightning.utilities")
+_lp_utils = importlib.import_module("lightning.pytorch.utilities")
+_argparse_stub = _types.ModuleType("lightning.pytorch.utilities.argparse")
+
+if not hasattr(_pl_utils, "argparse"):
+    _pl_utils.argparse = _argparse_stub
+if not hasattr(_lp_utils, "argparse"):
+    _lp_utils.argparse = _argparse_stub
+
+sys.modules.setdefault("pytorch_lightning.utilities.argparse", _argparse_stub)
+sys.modules.setdefault("lightning.pytorch.utilities.argparse", _argparse_stub)

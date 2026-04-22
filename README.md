@@ -21,6 +21,7 @@ The training stack is now based on PyTorch Lightning.
 - `closure/datamodule.py`: `ClosureDataModule` (`lightning.LightningDataModule`)
 - `closure/models.py`: network architectures (`MLP`, `FCNN`, `ResNet`, `CNet`)
 - `closure/cli.py`: CLI entry point (`closure-train`)
+- `closure/eval_cli.py`: run evaluation CLI (`closure-eval`)
 - `closure/callbacks.py`: `MemoryMonitorCallback`, `TimingCallback`
 - `closure/evaluation.py`: post-training metrics and prediction transforms
 - `closure/visualization.py`: prediction vs ground-truth plotting
@@ -175,6 +176,7 @@ python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}'); 
 
 # Test CLI
 closure-train --help
+closure-eval --help
 
 # Test Optuna sweep (hyperparameter optimization)
 python examples/optuna/harris_optuna_sweep.py --help
@@ -234,6 +236,83 @@ closure-train fit \
   --model.network.class_path=closure.models.ResNet \
   --model.lr=1e-3 \
   --data.batch_size=256
+```
+
+### Evaluate a trained run from CLI
+
+`closure-eval` reproduces the common notebook evaluation workflow using
+`RunLoader` and writes artifacts directly into the selected run/version folder
+(or a custom output directory):
+
+- prints config summary, history tail, best epoch, and test metrics to terminal
+- writes per-channel test metrics CSV
+- saves history and channel-metrics figures to `img/`
+- optionally renders per-target field plots (real/predict/error)
+
+Quick tutorial:
+
+```bash
+# 1. Activate the project environment.
+# For the HPC module-based workflow:
+source activate_hpc.sh
+
+# 2. Run evaluation on one saved run.
+closure-eval --run-dir models/Lightning/iPiC3D-nathan5-12/test/run_1
+
+# 3. Restrict to a few targets or samples when iterating on plots.
+closure-eval \
+  --run-dir models/Lightning/iPiC3D-nathan5-12/test/run_1 \
+  --targets Pxx_e Pyy_e Pzz_e \
+  --max-plots 3
+
+# 4. Reuse the trained model on a different test split.
+closure-eval \
+  --run-dir models/Lightning/iPiC3D-nathan5-12/test/run_1 \
+  --test-samples-file splits/iPiC3D-nathan5-12/5-10-12/RunID_1.csv
+
+# 5. Export only scalar reports when you do not want images.
+closure-eval \
+  --run-dir models/Lightning/iPiC3D-nathan5-12/test/run_1 \
+  --skip-field-plots
+```
+
+Useful options:
+
+- `--run-dir` or `--version-dir`: evaluate one explicit saved run
+- `--log-root`: automatically pick the latest `run_*` or `version_*` folder
+- `--targets`: restrict field plots to selected target names
+- `--max-plots`: limit how many time slices are rendered
+- `--test-samples-file`: override the test set without editing config files
+- `--output-dir`: write CSV/figures somewhere else
+- `--skip-history-plot`, `--skip-metrics-plot`, `--skip-field-plots`: export only what you need
+
+Examples:
+
+```bash
+# Evaluate one explicit run/version directory
+closure-eval --run-dir models/Lightning/iPiC3D-nathan5-12/test/run_001
+
+# Or pick the latest run_*/version_* under a root directory
+closure-eval --log-root models/Lightning/iPiC3D-nathan5-12/test
+
+# Override the test split without editing config.yaml
+closure-eval \
+  --run-dir models/Lightning/iPiC3D-nathan5-12/test/run_001 \
+  --test-samples-file ecsim/sampling/ecsim/Harris/Le/custom_test.csv
+
+# Only export metrics/history (no field plots)
+closure-eval \
+  --run-dir models/Lightning/iPiC3D-nathan5-12/test/run_001 \
+  --skip-field-plots
+```
+
+Default output layout:
+
+- `<run_or_version_dir>/test_metrics.csv`
+- `<run_or_version_dir>/img/history.png`
+- `<run_or_version_dir>/img/channel_metrics.png`
+- `<run_or_version_dir>/img/<target>_cycle<CYCLE>_{real,predict,error}.png`
+- `<run_or_version_dir>/img/<target>_cycles<FIRST-LAST>_summary.png`
 ```
 
 ## Logging and Artifacts
