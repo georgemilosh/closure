@@ -26,10 +26,10 @@ from closure import read_pic as rp
 def _sample_cycle_label(sample_filename: str, fallback_index: int) -> str:
     """Extract cycle identifier from a sample filename for stable plot names."""
     basename = os.path.basename(sample_filename)
-    stem = basename.rsplit(".", 1)[0]
-    match = re.search(r"(\d+)$", stem)
+    cycle_token = basename.rsplit("_", 1)[-1].split(".", 1)[0]
+    match = re.search(r"(\d+)$", cycle_token)
     if match:
-        return match.group(1)
+        return str(int(match.group(1)))
     return str(fallback_index)
 
 
@@ -147,8 +147,7 @@ def graph_pred_targets(
                 except Exception as e:
                     print(f"Error plotting {label} {target_name}, {data.shape = }: {e}")
                 axes.set_title(
-                    f"{label} {target_name} @ "
-                    f"{dataset.dataframe['filenames'].iloc[i].rsplit('_')[-1].rsplit('.')[0]}"
+                    f"{label} {target_name} @ {cycle_label}"
                 )
                 axes.set_xlabel("X")
                 axes.set_ylabel("Y")
@@ -364,8 +363,7 @@ def plot_pred_targets(
                 )
                 axes.set_aspect("equal")
                 axes.set_title(
-                    f"{label} {target_name} @ "
-                    f"{dataset.dataframe['filenames'].iloc[i].rsplit('_')[-1].rsplit('.')[0]}"
+                    f"{label} {target_name} @ {cycle_label}"
                 )
                 axes.set_xlabel("X")
                 axes.set_ylabel("Y")

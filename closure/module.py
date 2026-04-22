@@ -316,6 +316,7 @@ class ClosureLitModule(L.LightningModule):
         # Backward compatibility: older configs sometimes pass scheduler name
         # inside scheduler_kwargs; remove it before scheduler init.
         scheduler_kw.pop("scheduler", None)
+        scheduler_kw.pop("early_stopping", None)
         scheduler = self._build_scheduler(
             optimizer=optimizer,
             scheduler_name=self.hparams.scheduler,
