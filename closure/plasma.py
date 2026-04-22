@@ -91,7 +91,7 @@ def _find_experiment_inp_file(experiment: str) -> Path:
 
 
 def _read_b0x_nb_from_inp(inp_path: Path) -> tuple[float, float]:
-    """Read ``B0x`` and third entry of ``rhoINIT`` from an iPiC input file."""
+    """Read ``B0x`` and first entry of ``rhoINIT`` from an iPiC input file."""
     b0x_value: float | None = None
     nb_value: float | None = None
 
@@ -104,16 +104,16 @@ def _read_b0x_nb_from_inp(inp_path: Path) -> tuple[float, float]:
             b0x_value = _parse_first_float(value)
         elif key == "rhoINIT":
             rho_values = _parse_float_list(value)
-            if len(rho_values) < 3:
-                raise ValueError(
-                    f"rhoINIT in {inp_path} must contain at least 3 values to infer nb"
-                )
-            nb_value = rho_values[2]
+            #if len(rho_values) < 3:
+            #    raise ValueError(
+            #        f"rhoINIT in {inp_path} must contain at least 3 values to infer nb"
+            #    )
+            nb_value = rho_values[0] #rho_values[2]
 
     if b0x_value is None:
         raise ValueError(f"B0x not found in {inp_path}")
     if nb_value is None:
-        raise ValueError(f"rhoINIT (3rd value for nb) not found in {inp_path}")
+        raise ValueError(f"rhoINIT (1st value for nb) not found in {inp_path}")
     return b0x_value, nb_value
 
 
