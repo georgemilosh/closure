@@ -22,7 +22,7 @@ The training stack is now based on PyTorch Lightning.
 - `closure/models.py`: network architectures (`MLP`, `FCNN`, `ResNet`, `CNet`)
 - `closure/cli.py`: CLI entry point (`closure-train`)
 - `closure/eval_cli.py`: run evaluation CLI (`closure-eval`)
-- `closure/callbacks.py`: `MemoryMonitorCallback`, `TimingCallback`
+- `closure/callbacks.py`: `MemoryMonitorCallback`, `TimingCallback`, `TorchScriptCheckpointExportCallback`
 - `closure/evaluation.py`: post-training metrics and prediction transforms
 - `closure/visualization.py`: prediction vs ground-truth plotting
 
@@ -330,6 +330,7 @@ Typical outputs include:
 - `lightning_logs/` or configured logger directory
 - `metrics.csv`
 - checkpoints from `ModelCheckpoint`
+- matching TorchScript exports beside each checkpoint, e.g. `checkpoints/best-epoch=3-val_loss=0.1234.pt`
 - normalized feature/target statistics in `norm_folder`
 
 Legacy files like `loss_dict.pkl` are no longer used.

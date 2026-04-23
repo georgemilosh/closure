@@ -29,6 +29,7 @@ import yaml
 from lightning.pytorch.cli import LightningCLI
 from lightning.pytorch.loggers import CSVLogger
 
+from closure.callbacks import TorchScriptCheckpointExportCallback
 from closure.module import ClosureLitModule
 from closure.datamodule import ClosureDataModule
 
@@ -452,6 +453,16 @@ def _to_yaml_safe(value: Any) -> Any:
     return str(value)
 
 
+def _ensure_checkpoint_pt_export_callback(trainer: Any) -> None:
+    """Attach TorchScript checkpoint export once for fit runs."""
+    callbacks = getattr(trainer, "callbacks", None)
+    if callbacks is None:
+        return
+    if any(isinstance(cb, TorchScriptCheckpointExportCallback) for cb in callbacks):
+        return
+    callbacks.append(TorchScriptCheckpointExportCallback())
+
+
 class ClosureLightningCLI(LightningCLI):
     """Project LightningCLI with reproducibility manifest support."""
 
@@ -519,6 +530,7 @@ class ClosureLightningCLI(LightningCLI):
         self._manifest_written = True
 
     def before_fit(self) -> None:
+        _ensure_checkpoint_pt_export_callback(self.trainer)
         self._write_repro_manifest(stage="fit")
 
     def before_validate(self) -> None:

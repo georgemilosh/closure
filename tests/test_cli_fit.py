@@ -9,8 +9,10 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
+from closure.callbacks import TorchScriptCheckpointExportCallback
 from closure.cli import (
     _extract_cli_overrides,
+    _ensure_checkpoint_pt_export_callback,
     _get_git_revision_info,
     _infer_csvlogger_save_dir_default,
     _infer_csvlogger_version_default,
@@ -274,6 +276,16 @@ def test_csvlogger_version_is_inferred_when_implicit(tmp_path):
 
     inferred = _infer_csvlogger_version_default(["fit", f"--config={config_path}"])
     assert inferred == "version_0"
+
+
+def test_checkpoint_pt_export_callback_is_attached_once():
+    trainer = SimpleNamespace(callbacks=[])
+
+    _ensure_checkpoint_pt_export_callback(trainer)
+    _ensure_checkpoint_pt_export_callback(trainer)
+
+    matching = [cb for cb in trainer.callbacks if isinstance(cb, TorchScriptCheckpointExportCallback)]
+    assert len(matching) == 1
 
 
 def test_norm_folder_defaults_to_default_root_dir(tmp_path):
