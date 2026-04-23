@@ -268,7 +268,7 @@ closure-eval \
 # 4. Reuse the trained model on a different test split.
 closure-eval \
   --run-dir models/Lightning/iPiC3D-nathan5-12/test/run_1 \
-  --test-samples-file splits/iPiC3D-nathan5-12/5-10-12/RunID_1.csv
+  --test-samples-file ./splits/iPiC3D-nathan5-12/5-10-12/RunID_1.csv
 
 # 5. Export only scalar reports when you do not want images.
 closure-eval \
@@ -298,7 +298,7 @@ closure-eval --log-root models/Lightning/iPiC3D-nathan5-12/test
 # Override the test split without editing config.yaml
 closure-eval \
   --run-dir models/Lightning/iPiC3D-nathan5-12/test/run_001 \
-  --test-samples-file ecsim/sampling/ecsim/Harris/Le/custom_test.csv
+  --test-samples-file ./splits/iPiC3D-nathan5-12/5-10-12/RunID_1.csv
 
 # Only export metrics/history (no field plots)
 closure-eval \
@@ -318,6 +318,12 @@ Default output layout:
 ## Logging and Artifacts
 
 Lightning logging is used by default (CSV logger in configs).
+
+`closure.log` is written alongside the Lightning CSV logger outputs. If you set
+`--trainer.logger.init_args.name` and `--trainer.logger.init_args.version`, the
+log file goes into that exact run directory. If you omit `version`, Lightning's
+auto-created `version_*` directory is used, so `closure.log` lives inside the
+same per-run folder as `metrics.csv`.
 
 Typical outputs include:
 

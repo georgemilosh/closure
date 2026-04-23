@@ -27,6 +27,7 @@ from typing import Any
 
 import yaml
 from lightning.pytorch.cli import LightningCLI
+from lightning.pytorch.loggers import CSVLogger
 
 from closure.module import ClosureLitModule
 from closure.datamodule import ClosureDataModule
@@ -147,11 +148,11 @@ def _load_config(config_path: Path | None) -> dict[str, Any]:
 
 
 def _logger_dir_from_config_and_cli(argv: list[str]) -> Path | None:
-    """Resolve logger directory as ``save_dir/name/version`` when explicit.
+    """Resolve CSVLogger directory as the same log_dir Lightning will use.
 
-    Important: if ``version`` is auto-assigned by Lightning (None), we must not
-    pre-create a guessed ``version_*`` directory here because that can shift the
-    version selected later by the logger itself.
+    When ``version`` is implicit, CSVLogger can still expose the eventual
+    ``version_*`` path without creating it, which keeps ``closure.log`` inside
+    the per-run directory without shifting the version counter.
     """
     cfg_path = _parse_config_path_from_cli(argv)
     cfg = _load_config(cfg_path)
@@ -186,14 +187,15 @@ def _logger_dir_from_config_and_cli(argv: list[str]) -> Path | None:
     if save_dir is None:
         return None
 
-    # Only route logs to a version directory when the version is explicit.
-    if version is None:
+    if logger_cfg.get("class_path") != "lightning.pytorch.loggers.CSVLogger":
         return None
 
-    root = Path(save_dir).expanduser().resolve()
-    version_dir = root / name / version
-    version_dir.mkdir(parents=True, exist_ok=True)
-    return version_dir
+    logger = CSVLogger(
+        save_dir=str(Path(save_dir).expanduser().resolve()),
+        name=name,
+        version=version,
+    )
+    return Path(logger.log_dir).resolve()
 
 
 def _resolve_log_file_path(argv: list[str]) -> Path:
@@ -268,6 +270,61 @@ def _infer_csvlogger_save_dir_default(argv: list[str]) -> str | None:
     return root_dir
 
 
+def _infer_csvlogger_version_default(argv: list[str]) -> str | None:
+    """Infer the implicit CSVLogger version directory name.
+
+    Returns a version folder name like ``version_0`` only when:
+    - logger class is explicitly ``lightning.pytorch.loggers.CSVLogger``
+    - ``trainer.logger.init_args.version`` is not provided via CLI/config
+    - ``trainer.logger.init_args.save_dir`` is available via CLI/config/inference
+    """
+    explicit_version = _parse_key_from_cli(argv, "trainer.logger.init_args.version")
+    if explicit_version is not None:
+        return None
+
+    cfg_path = _parse_config_path_from_cli(argv)
+    cfg = _load_config(cfg_path)
+
+    trainer_cfg = cfg.get("trainer", {}) if isinstance(cfg, dict) else {}
+    if not isinstance(trainer_cfg, dict):
+        return None
+
+    logger_cfg = trainer_cfg.get("logger", {})
+    if not isinstance(logger_cfg, dict):
+        return None
+
+    class_path = logger_cfg.get("class_path")
+    if class_path != "lightning.pytorch.loggers.CSVLogger":
+        return None
+
+    init_args = logger_cfg.get("init_args", {})
+    if not isinstance(init_args, dict):
+        init_args = {}
+
+    cfg_version = init_args.get("version")
+    if cfg_version is not None:
+        return None
+
+    save_dir = _parse_key_from_cli(argv, "trainer.logger.init_args.save_dir")
+    if save_dir is None:
+        cfg_save_dir = init_args.get("save_dir")
+        save_dir = str(cfg_save_dir) if cfg_save_dir else None
+    if save_dir is None:
+        return None
+
+    name = _parse_key_from_cli(argv, "trainer.logger.init_args.name")
+    if name is None:
+        cfg_name = init_args.get("name")
+        name = str(cfg_name) if cfg_name else "lightning_logs"
+
+    logger = CSVLogger(
+        save_dir=str(Path(save_dir).expanduser().resolve()),
+        name=name,
+        version=None,
+    )
+    return Path(logger.log_dir).name
+
+
 def _infer_norm_folder_default(argv: list[str]) -> str | None:
     """Infer fallback ``data.norm_folder`` from ``trainer.default_root_dir``.
 
@@ -310,6 +367,7 @@ def _configure_python_logging(argv: list[str]) -> None:
 
     _install_rank_record_factory()
     log_file = _resolve_log_file_path(argv)
+    log_file.parent.mkdir(parents=True, exist_ok=True)
     fmt = (
         "%(asctime)s %(levelname)s [%(name)s]"
         " [rank=%(global_rank)s local_rank=%(local_rank)s] %(message)s"
@@ -488,6 +546,12 @@ def main():
     inferred_save_dir = _infer_csvlogger_save_dir_default(argv)
     if inferred_save_dir:
         arg = f"--trainer.logger.init_args.save_dir={inferred_save_dir}"
+        argv = [*argv, arg]
+        inferred_overrides.append(arg)
+
+    inferred_version = _infer_csvlogger_version_default(argv)
+    if inferred_version:
+        arg = f"--trainer.logger.init_args.version={inferred_version}"
         argv = [*argv, arg]
         inferred_overrides.append(arg)
 

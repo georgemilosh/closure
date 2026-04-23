@@ -13,6 +13,7 @@ from closure.cli import (
     _extract_cli_overrides,
     _get_git_revision_info,
     _infer_csvlogger_save_dir_default,
+    _infer_csvlogger_version_default,
     _infer_norm_folder_default,
     _run_git_command,
     _resolve_log_file_path,
@@ -180,7 +181,7 @@ def test_log_file_falls_back_to_default_root_dir(tmp_path):
 
 
 def test_log_file_falls_back_when_logger_version_is_implicit(tmp_path):
-    """Without explicit logger version, keep using default_root_dir."""
+    """Without explicit version, use the same version_* dir as CSVLogger."""
     config_path = tmp_path / "cfg.yaml"
     config_path.write_text(
         yaml.dump(
@@ -200,7 +201,7 @@ def test_log_file_falls_back_when_logger_version_is_implicit(tmp_path):
     )
 
     path = _resolve_log_file_path(["fit", f"--config={config_path}"])
-    expected = tmp_path / "models" / "closure.log"
+    expected = tmp_path / "logs" / "CNN" / "version_0" / "closure.log"
     assert path == expected.resolve()
 
 
@@ -249,6 +250,30 @@ def test_csvlogger_save_dir_not_overridden_when_explicit(tmp_path):
 
     inferred = _infer_csvlogger_save_dir_default(["fit", f"--config={config_path}"])
     assert inferred is None
+
+
+def test_csvlogger_version_is_inferred_when_implicit(tmp_path):
+    """Infer the implicit version_* folder so logging can target the run dir."""
+    config_path = tmp_path / "cfg.yaml"
+    config_path.write_text(
+        yaml.dump(
+            {
+                "trainer": {
+                    "default_root_dir": str(tmp_path / "models"),
+                    "logger": {
+                        "class_path": "lightning.pytorch.loggers.CSVLogger",
+                        "init_args": {
+                            "save_dir": str(tmp_path / "logs"),
+                            "name": "CNN",
+                        },
+                    },
+                }
+            }
+        )
+    )
+
+    inferred = _infer_csvlogger_version_default(["fit", f"--config={config_path}"])
+    assert inferred == "version_0"
 
 
 def test_norm_folder_defaults_to_default_root_dir(tmp_path):
