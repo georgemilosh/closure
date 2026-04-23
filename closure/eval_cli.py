@@ -13,11 +13,34 @@ from __future__ import annotations
 
 import argparse
 import gc
+import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 
 from closure.run_loader import RunLoader
+
+
+def _configure_eval_logging(log_file: Path) -> None:
+    """Configure console + file logging for closure-eval."""
+    root_logger = logging.getLogger()
+    if getattr(root_logger, "_closure_eval_configured", False):
+        return
+
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    fmt = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
+    stream_handler = logging.StreamHandler()
+    file_handler = logging.FileHandler(log_file)
+    for handler in (stream_handler, file_handler):
+        handler.setFormatter(logging.Formatter(fmt))
+
+    logging.basicConfig(
+        level=logging.INFO,
+        handlers=[stream_handler, file_handler],
+        force=True,
+    )
+    root_logger._closure_eval_configured = True
+    logging.getLogger(__name__).info("Evaluation logging initialized -> %s", log_file)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -225,6 +248,9 @@ def _save_metrics_plot(metrics_df, out_img_dir: Path) -> None:
 def main() -> None:
     args = _parse_args()
     version_dir = _select_version_dir(args)
+    output_dir = (args.output_dir or version_dir).expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    _configure_eval_logging(output_dir / "closure-eval.log")
 
     data_overrides = {}
     if args.test_samples_file:
@@ -238,8 +264,6 @@ def main() -> None:
         data_overrides=data_overrides or None,
     )
 
-    output_dir = (args.output_dir or version_dir).expanduser().resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
     output_img_dir = output_dir / "img"
     output_img_dir.mkdir(parents=True, exist_ok=True)
 

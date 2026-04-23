@@ -13,6 +13,7 @@ __all__ = ["ClosureDataModule"]
 import logging
 import os
 import time
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Optional
 
@@ -243,6 +244,15 @@ class ClosureDataModule(L.LightningDataModule):
             else None
         )
 
+        self._log_dataset_plan(
+            stage=stage,
+            data_folder=data_folder,
+            norm_folder=norm_folder,
+            train_samples_file=train_samples_file,
+            val_samples_file=val_samples_file,
+            test_samples_file=test_samples_file,
+        )
+
         # Build common dataset kwargs
         common = dict(
             data_folder=data_folder,
@@ -279,12 +289,14 @@ class ClosureDataModule(L.LightningDataModule):
                 transform=transform,
                 **common,
             )
+            self._log_dataset_summary(self.train_dataset)
             self._log_resource_snapshot("after train data load")
             self.val_dataset = DataFrameDataset(
                 samples_file=val_samples_file,
                 datalabel="val",
                 **common,
             )
+            self._log_dataset_summary(self.val_dataset)
             self._log_resource_snapshot("after val data load")
             self._data_load_time_s = time.perf_counter() - t0
             _logger.info(
@@ -301,6 +313,7 @@ class ClosureDataModule(L.LightningDataModule):
                     datalabel="test",
                     **common,
                 )
+                self._log_dataset_summary(self.test_dataset)
                 self._resolve_channel_indices(self.test_dataset)
 
         if stage == "predict":
@@ -310,6 +323,7 @@ class ClosureDataModule(L.LightningDataModule):
                     datalabel="test",
                     **common,
                 )
+                self._log_dataset_summary(self.test_dataset)
                 self._resolve_channel_indices(self.test_dataset)
 
     # ------------------------------------------------------------------
@@ -387,6 +401,103 @@ class ClosureDataModule(L.LightningDataModule):
             self.target_channels = [
                 dataset.request_targets.index(ch) for ch in hp.target_channel_names
             ]
+
+    def _log_dataset_plan(
+        self,
+        stage: str | None,
+        data_folder: str,
+        norm_folder: str,
+        train_samples_file: str,
+        val_samples_file: str,
+        test_samples_file: str | None,
+    ) -> None:
+        """Log the resolved dataset inputs before any loading starts."""
+        parts = [
+            "Resolved dataset inputs",
+            f"stage={stage or 'all'}",
+            f"data_folder={data_folder}",
+            f"norm_folder={norm_folder}",
+            f"use_readonly={self.hparams.use_readonly}",
+            f"alfven_units={self.hparams.alfven_units}",
+            f"train_samples_file={train_samples_file}",
+            f"val_samples_file={val_samples_file}",
+        ]
+        if test_samples_file is not None:
+            parts.append(f"test_samples_file={test_samples_file}")
+        _logger.info(" | ".join(parts))
+
+    def _log_dataset_summary(self, dataset: DataFrameDataset) -> None:
+        """Log what data was loaded and how preprocessing is applied."""
+        _logger.info(
+            "Dataset ready | split=%s | samples_file=%s | samples=%s | features_shape=%s | targets_shape=%s | flatten=%s",
+            dataset.datalabel,
+            dataset.samples_file,
+            dataset.samples,
+            dataset.features_shape,
+            dataset.targets_shape,
+            dataset.flatten,
+        )
+        _logger.info(
+            "Dataset scaling | split=%s | features=%s | targets=%s | alfven=%s",
+            dataset.datalabel,
+            self._format_scaling_spec(
+                channel_names=dataset.request_features,
+                prescalers=dataset.prescaler_features,
+                normalized=dataset.scaler_features,
+            ),
+            self._format_scaling_spec(
+                channel_names=dataset.request_targets,
+                prescalers=dataset.prescaler_targets,
+                normalized=dataset.scaler_targets,
+            ),
+            self._format_alfven_summary(dataset),
+        )
+
+    @staticmethod
+    def _format_scaling_spec(
+        channel_names: Iterable[str] | None,
+        prescalers: Iterable[object] | None,
+        normalized: bool | None,
+    ) -> str:
+        """Return a compact channel->prescaler summary plus normalization flag."""
+        names = list(channel_names or [])
+        funcs = list(prescalers or [])
+        if names and len(funcs) == len(names):
+            mapping = ", ".join(
+                f"{name}:{getattr(func, '__name__', 'none') if func is not None else 'none'}"
+                for name, func in zip(names, funcs)
+            )
+        elif funcs:
+            mapping = ", ".join(
+                getattr(func, "__name__", "none") if func is not None else "none"
+                for func in funcs
+            )
+        else:
+            mapping = "none"
+        return f"prescalers=[{mapping}] normalize={bool(normalized)}"
+
+    @staticmethod
+    def _format_alfven_summary(dataset: DataFrameDataset) -> str:
+        """Describe Alfvén-unit scaling across all loaded experiments."""
+        if not getattr(dataset, "alfven_units", False):
+            return "disabled"
+
+        params = list(getattr(dataset, "alfven_params", {}).values())
+        if not params:
+            return "enabled (scales unavailable)"
+
+        parts = [f"enabled experiments={len(params)}"]
+        for key in ("b0x", "nb", "va", "j0", "p0", "e0"):
+            values = [float(scale[key]) for scale in params if key in scale]
+            if not values:
+                continue
+            low = min(values)
+            high = max(values)
+            if abs(high - low) < 1.0e-12:
+                parts.append(f"{key}={low:.6g}")
+            else:
+                parts.append(f"{key}=[{low:.6g}, {high:.6g}]")
+        return " ".join(parts)
 
     def _log_resource_snapshot(self, label: str) -> None:
         """Log RAM/GPU usage snapshot during loading stages."""
