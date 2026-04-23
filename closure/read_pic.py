@@ -359,6 +359,29 @@ def read_data_ipic3d(files_path, cycles, fields_to_read, qom=None, choose_specie
     X, Y = build_XY(files_path, choose_x=choose_x, choose_y=choose_y, choose_z=choose_z, indexing=indexing)
     data = {}
 
+    # Normalize and harden dependency flags for derived quantities.
+    # divP and Ohmres require pressure/current/density (and Ohmres also E,B).
+    if fields_to_read is None:
+        fields_to_read = {}
+    else:
+        fields_to_read = dict(fields_to_read)
+    auto_enabled = []
+    if fields_to_read.get("divP", False) or fields_to_read.get("Ohmres", False):
+        for dep in ["P", "J", "rho"]:
+            if not fields_to_read.get(dep, False):
+                fields_to_read[dep] = True
+                auto_enabled.append(dep)
+    if fields_to_read.get("Ohmres", False):
+        for dep in ["E", "B"]:
+            if not fields_to_read.get(dep, False):
+                fields_to_read[dep] = True
+                auto_enabled.append(dep)
+    if auto_enabled:
+        logger.warning(
+            "Auto-enabled dependent fields for derived targets: %s",
+            sorted(set(auto_enabled)),
+        )
+
     species_index = {
         species: i
         for i, species in enumerate(choose_species)
@@ -517,7 +540,7 @@ def read_data_ipic3d(files_path, cycles, fields_to_read, qom=None, choose_specie
                     data['gyro_radius'][species] = np.abs(vth / (species_qom * data['Bmagn']))
             except Exception as e:
                 logger.warning(f"Failed to calculate gyro_radius, see: {e}")
-    if "divP" in fields_to_read and fields_to_read["divP"] or "Ohmres" in fields_to_read and fields_to_read["Ohmres"]:
+    if fields_to_read.get("divP", False) or fields_to_read.get("Ohmres", False):
         if verbose:
             logger.info(f"computing divP and or Ohmres")
 
@@ -531,7 +554,7 @@ def read_data_ipic3d(files_path, cycles, fields_to_read, qom=None, choose_specie
         data['EPy'] = -(highdiff(data['Pxy']['e'], dx, dy, axis=0, mode='wrap') + highdiff(data['Pyy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
         data['EPz'] = -(highdiff(data['Pxz']['e'], dx, dy, axis=0, mode='wrap') + highdiff(data['Pyz']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
         
-        if "Ohmres" in fields_to_read and fields_to_read["Ohmres"]:
+        if fields_to_read.get("Ohmres", False):
             #logger.info(f"{data['Bx'].shape = }")
             #B = np.array([data['Bx'], data['By'], data['Bz']]).transpose(1,2,3,0)
             #E = np.array([data['Ex'], data['Ey'], data['Ez']]).transpose(1,2,3,0)
@@ -951,6 +974,83 @@ def build_XY(files_path, choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y,
         return X, Y
 
 
+def _augment_fields_to_read_from_requests(fields_to_read, request_features, request_targets):
+    """Enable required source fields based on requested feature/target channels.
+
+    This guards against config/CLI mismatches where a requested channel (e.g. Bx)
+    is not accompanied by the matching ``fields_to_read`` flag (e.g. B=True).
+    """
+    merged = {}
+    if isinstance(fields_to_read, dict):
+        merged.update(fields_to_read)
+
+    requested = []
+    for seq in (request_features, request_targets):
+        if seq is None:
+            continue
+        requested.extend(seq)
+
+    enabled = []
+
+    def _enable(flag):
+        if not merged.get(flag, False):
+            merged[flag] = True
+            enabled.append(flag)
+
+    for req in requested:
+        if not isinstance(req, str):
+            continue
+        base = req.split("_", 1)[0]
+        if base in {"Bx", "By", "Bz", "Bmagn"}:
+            _enable("B")
+        elif base in {"Ex", "Ey", "Ez", "Emagn"}:
+            _enable("E")
+        elif base in {"Bx_ext", "By_ext", "Bz_ext"}:
+            _enable("B_ext")
+        elif base == "divB":
+            _enable("divB")
+        elif base in {"rho", "N", "Qrem"}:
+            _enable(base)
+        elif base in {"Jx", "Jy", "Jz", "Jmagn", "Jtotx", "Jtoty", "Jtotz", "Vx", "Vy", "Vz", "Vmagn"}:
+            _enable("J")
+            _enable("rho")
+        elif base in {"Pxx", "Pxy", "Pxz", "Pyy", "Pyz", "Pzz", "Ppar", "Pperp"}:
+            _enable("P")
+            _enable("J")
+            _enable("rho")
+        elif base in {"PIxx", "PIxy", "PIxz", "PIyy", "PIyz", "PIzz"}:
+            _enable("PI")
+            _enable("J")
+            _enable("rho")
+        elif base in {"EPx", "EPy", "EPz"}:
+            _enable("divP")
+            _enable("P")
+            _enable("J")
+            _enable("rho")
+        elif base in {"Ohmresx", "Ohmresy", "Ohmresz", "EHallx", "EHally", "EHallz", "EMHDx", "EMHDy", "EMHDz"}:
+            _enable("Ohmres")
+            _enable("divP")
+            _enable("P")
+            _enable("J")
+            _enable("rho")
+            _enable("E")
+            _enable("B")
+        elif base in {"qx", "qy", "qz"}:
+            _enable("Heat_flux")
+            _enable("J")
+            _enable("P")
+            _enable("rho")
+        elif base in {"EFx", "EFy", "EFz"}:
+            _enable("EF")
+
+    if enabled:
+        logger.warning(
+            "Auto-enabled fields_to_read from requested channels: %s",
+            sorted(set(enabled)),
+        )
+    return merged
+
+
 def read_features_targets(files_path, filenames, fields_to_read=None, request_features = None, request_targets = None, 
                choose_species=None,choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, choose_z=DEFAULT_CHOOSE_Z, features_dtype = np.float32, targets_dtype = np.float32,  verbose=DEFAULT_VERBOSE,
                alfven_units: bool = False, num_workers: int = 1):
@@ -994,6 +1094,11 @@ def read_features_targets(files_path, filenames, fields_to_read=None, request_fe
     # Parse simulation data using the new unified parser
     sim_data = parse_simulation_data(lookup_path)
     qom = sim_data['qom']
+    fields_to_read = _augment_fields_to_read_from_requests(
+        fields_to_read,
+        request_features,
+        request_targets,
+    )
 
     if choose_x is not None and isinstance(choose_x[0],list):
         if not isinstance(choose_y[0],list):
@@ -1065,8 +1170,12 @@ def read_files(files_path, filenames, fields_to_read, qom, dtype, extract_fields
                     logger.info(f"Available data keys are {data.keys() = }")
                     logger.info(f"Attempting to extract {extract_field_index = } which should a list of length 2,")
                     logger.info(f"where the first element is the field name and the second element is the species name")
-                    logger.warning(f"The extracted field is {data[extract_field_index[0]] = }")
-                    raise e
+                    if extract_field_index[0] in data:
+                        logger.warning(f"The extracted field is {data[extract_field_index[0]] = }")
+                    raise KeyError(
+                        f"Missing nested field {extract_field_index!r} for filename={filename!r}. "
+                        f"Top-level keys: {sorted(data.keys())}"
+                    ) from e
             else:
                 try:
                     out.append(data[extract_field_index])
@@ -1074,7 +1183,10 @@ def read_files(files_path, filenames, fields_to_read, qom, dtype, extract_fields
                     logger.info(f"Attempting to read {filename = }")
                     logger.info(f"Available data keys are {data.keys() = }")
                     logger.info(f"Attempting to extract {extract_field_index = } which should be a field name")
-                    raise e
+                    raise KeyError(
+                        f"Missing field {extract_field_index!r} for filename={filename!r}. "
+                        f"Top-level keys: {sorted(data.keys())}"
+                    ) from e
         return np.array(out)
 
     try:
@@ -1201,9 +1313,32 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
     #choose_species_new = ut.append_index_to_duplicates(choose_species) 
     #dublicatespecies = ut.get_duplicate_indices(choose_species)
     data = {}
+
+    # Normalize and harden dependency flags for derived quantities.
+    # divP and Ohmres require pressure/current/density (and Ohmres also E,B).
+    if fields_to_read is None:
+        fields_to_read = {}
+    else:
+        fields_to_read = dict(fields_to_read)
+    auto_enabled = []
+    if fields_to_read.get("divP", False) or fields_to_read.get("Ohmres", False):
+        for dep in ["P", "J", "rho"]:
+            if not fields_to_read.get(dep, False):
+                fields_to_read[dep] = True
+                auto_enabled.append(dep)
+    if fields_to_read.get("Ohmres", False):
+        for dep in ["E", "B"]:
+            if not fields_to_read.get(dep, False):
+                fields_to_read[dep] = True
+                auto_enabled.append(dep)
+    if auto_enabled:
+        logger.warning(
+            "Auto-enabled dependent fields for derived targets: %s",
+            sorted(set(auto_enabled)),
+        )
     # The magnetic and electric field is read.
     for fields in ['B', 'E']:
-        if fields_to_read[fields]:
+        if fields_to_read.get(fields, False):
             if verbose:
                 logger.info(f"loading {fields}")
             for component in ['x','y','z']:
@@ -1213,11 +1348,11 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
             except Exception as e:
                 logger.info(f"{fields}magn failed")
                 raise e
-        if fields_to_read[f"{fields}_ext"]:
+        if fields_to_read.get(f"{fields}_ext", False):
             for component in ['x','y','z']:
                 data[f'B{component}_ext'] = read_fieldname(files_path,filenames,f"{fields}{component}_ext",choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
     # The divergence of B is read.
-    if fields_to_read["divB"]:
+    if fields_to_read.get("divB", False):
         if verbose:
                 logger.info(f"loading divB")
         data['divB'] = read_fieldname(files_path,filenames,'divB',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
@@ -1234,9 +1369,9 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                         data[fields][species] = read_fieldname(files_path,filenames,f'{fields}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
 
 
-    if fields_to_read["J"]:
+    if fields_to_read.get("J", False):
         data['Jx'], data['Jy'], data['Jz'] = {}, {}, {}
-        if fields_to_read['rho']:
+        if fields_to_read.get('rho', False):
             data['Vx'], data['Vy'], data['Vz'] = {}, {}, {}
         if verbose:
             logger.info(f"loading J")
@@ -1247,7 +1382,7 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                         data[f'J{component}'][species] += read_fieldname(files_path,filenames,f'J{component}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
                     else:
                         data[f'J{component}'][species] = read_fieldname(files_path,filenames,f'J{component}_{i}',choose_x,choose_y,choose_z,verbose=verbose, **kwargs)
-            if fields_to_read['rho']:
+            if fields_to_read.get('rho', False):
                 for species in data[f'J{component}'].keys():
                     data[f'V{component}'][species] = data[f'J{component}'][species]/(data['rho'][species]+small*np.sign(qom[i]))
         data['Jmagn'] = {}
@@ -1264,7 +1399,7 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                 
 
     # The diagonal and offdiagonal part of the pressure is calculated (to do so you need to read rho and J first).
-    if fields_to_read["P"] or fields_to_read["PI"]:
+    if fields_to_read.get("P", False) or fields_to_read.get("PI", False):
         if verbose:
             logger.info(f"loading P and/or PI")
         # Cache shapes of diagonal components so we can build zero-fill arrays when
@@ -1324,12 +1459,12 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                     data[f'P{component_1}{component_2}'][species]  = (data[f'PI{component_1}{component_2}'][species] - \
                                 data[f'J{component_1}'][species]*data[f'J{component_2}'][species]/(data[f'rho'][species]+small*np.sign(qom[i])))/qom[i]
 
-                if not fields_to_read["P"]:
+                if not fields_to_read.get("P", False):
                     del data[f'P{component_1}{component_2}']
-                if not fields_to_read["PI"]:
+                if not fields_to_read.get("PI", False):
                     del data[f'PI{component_1}{component_2}']  
                        
-        if fields_to_read["PI"]:
+        if fields_to_read.get("PI", False):
             for species in data[f'PI{component_1}{component_2}']:
                 if species in data['PIxy']:
                     data['PIyx'][species] = data['PIxy'][species]
@@ -1337,7 +1472,7 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                     data['PIzx'][species] = data['PIxz'][species]
                 if species in data['PIyz']:
                     data['PIzy'][species] = data['PIyz'][species]
-        if fields_to_read["P"]:
+        if fields_to_read.get("P", False):
             data['Ppar'], data['Pperp'] = {}, {}
             for species in data[f'P{component_1}{component_2}']:
                 if species in data['Pxy']:
@@ -1358,7 +1493,7 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                     data['Pperp'][species] = (data['Pxx'][species] + data['Pyy'][species] + data['Pzz'][species] - data['Ppar'][species])/2
                 except Exception as e:
                     logger.warning(f"Failed to calculate Pperp for {species} likely due to missing fields, see: {e}")
-        if "gyro_radius" in fields_to_read and fields_to_read["gyro_radius"]:
+        if fields_to_read.get("gyro_radius", False):
             try:
                 data['gyro_radius'] = {}
                 for species in data['rho']:
@@ -1368,7 +1503,7 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                     data['gyro_radius'][species] = np.abs(vth/(qom[i]*data['Bmagn']))
             except Exception as e:
                 logger.warning(f"Failed to calculate gyro_radius, see: {e}")
-    if "divP" in fields_to_read and fields_to_read["divP"] or "Ohmres" in fields_to_read and fields_to_read["Ohmres"]:
+    if fields_to_read.get("divP", False) or fields_to_read.get("Ohmres", False):
         if verbose:
             logger.info(f"computing divP and or Ohmres")
 
@@ -1380,11 +1515,29 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
         
         
 
+        required_divp_keys = ["Pxx", "Pxy", "Pyy", "Pxz", "Pyz", "rho"]
+        missing = [k for k in required_divp_keys if k not in data]
+        if missing:
+            raise ValueError(
+                f"Cannot compute divP: missing required fields {missing}. "
+                f"Available keys: {sorted(data.keys())}"
+            )
+        if 'e' not in data['rho']:
+            raise ValueError(
+                f"Cannot compute divP: electron species 'e' missing in rho keys {list(data['rho'].keys())}"
+            )
+        for tensor_key in ["Pxx", "Pxy", "Pyy", "Pxz", "Pyz"]:
+            if 'e' not in data[tensor_key]:
+                raise ValueError(
+                    f"Cannot compute divP: electron species 'e' missing in {tensor_key} keys "
+                    f"{list(data[tensor_key].keys())}"
+                )
+
         data['EPx'] = -(highdiff(data['Pxx']['e'], dx, dy, axis=0, mode='wrap') + highdiff(data['Pxy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
         data['EPy'] = -(highdiff(data['Pxy']['e'], dx, dy, axis=0, mode='wrap') + highdiff(data['Pyy']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
         data['EPz'] = -(highdiff(data['Pxz']['e'], dx, dy, axis=0, mode='wrap') + highdiff(data['Pyz']['e'], dx, dy, axis=1, mode='wrap'))/(-data['rho']['e']) # density in ECsim is negative (electron charge density)
         
-        if "Ohmres" in fields_to_read and fields_to_read["Ohmres"]:
+        if fields_to_read.get("Ohmres", False):
             #logger.info(f"{data['Bx'].shape = }")
             #B = np.array([data['Bx'], data['By'], data['Bz']]).transpose(1,2,3,0)
             #E = np.array([data['Ex'], data['Ey'], data['Ez']]).transpose(1,2,3,0)
@@ -1416,7 +1569,7 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
             
 
     # The heat flux is calculated (to do so you need to read rho, J and P first).
-    if fields_to_read["Heat_flux"]:
+    if fields_to_read.get("Heat_flux", False):
         if verbose:
             logger.info(f"loading q")
         for component in ['x','y','z']:
@@ -1439,7 +1592,7 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
             except Exception as e:
                 logger.warning(f"Failed to calculate q{component} see: {e}")
                 #logger.info(f"{data[f'q{component}'].keys() = }")
-            if 'EF' not in fields_to_read or not fields_to_read['EF']:
+            if not fields_to_read.get('EF', False):
                 del data[f'EF{component}']
     empty_keys, empty_nested_keys = _collect_empty_data_keys(data)
     if empty_keys:
