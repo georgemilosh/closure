@@ -20,6 +20,7 @@ __all__ = ["RunLoader"]
 
 import importlib
 import logging
+import os
 from pathlib import Path
 from typing import Any, Optional
 
@@ -36,6 +37,7 @@ from closure.module import ClosureLitModule
 
 
 _logger = logging.getLogger(__name__)
+_FORCE_DIRECT_CKPT_LOAD = False
 
 
 def _instantiate_network(network_cfg: dict) -> torch.nn.Module:
@@ -61,20 +63,41 @@ def _load_module_checkpoint_robust(
     attributes are missing from shimmed namespaces. In that case we load the
     checkpoint directly via ``torch.load`` and restore the state dict.
     """
-    try:
-        module = ClosureLitModule.load_from_checkpoint(
-            str(ckpt_path),
-            network=network,
-            map_location=device,
-        )
-        module.eval()
-        return module
-    except AttributeError as exc:
-        _logger.warning(
-            "Lightning load_from_checkpoint failed (%s). Falling back to direct "
-            "torch.load state_dict restoration.",
-            exc,
-        )
+    global _FORCE_DIRECT_CKPT_LOAD
+
+    env_force_direct = os.environ.get("CLOSURE_FORCE_DIRECT_CKPT_LOAD", "").lower() in {
+        "1", "true", "yes", "on"
+    }
+
+    if not (_FORCE_DIRECT_CKPT_LOAD or env_force_direct):
+        try:
+            module = ClosureLitModule.load_from_checkpoint(
+                str(ckpt_path),
+                network=network,
+                map_location=device,
+            )
+            module.eval()
+            return module
+        except AttributeError as exc:
+            _FORCE_DIRECT_CKPT_LOAD = True
+            _logger.warning(
+                "Lightning load_from_checkpoint failed (%s). Falling back to direct "
+                "torch.load state_dict restoration and forcing direct mode for "
+                "subsequent loads in this process.",
+                exc,
+            )
+        except Exception as exc:
+            # Some HPC stacks can deadlock or error in Lightning checkpoint migration
+            # paths when called repeatedly. Direct torch.load is a safer fallback here.
+            _FORCE_DIRECT_CKPT_LOAD = True
+            _logger.warning(
+                "Lightning load_from_checkpoint raised %s. Falling back to direct "
+                "torch.load state_dict restoration and forcing direct mode for "
+                "subsequent loads in this process.",
+                type(exc).__name__,
+            )
+    else:
+        _logger.info("Using direct torch.load checkpoint restore (forced mode).")
 
     init_kwargs = {k: v for k, v in model_cfg.items() if k != "network"}
     module = ClosureLitModule(network=network, **init_kwargs)

@@ -14,7 +14,9 @@ from __future__ import annotations
 import argparse
 import gc
 import logging
+import os
 from pathlib import Path
+from typing import Iterable
 
 import matplotlib.pyplot as plt
 
@@ -56,7 +58,10 @@ def _parse_args() -> argparse.Namespace:
     source.add_argument(
         "--run-dir",
         type=Path,
-        help="Alias of --version-dir (for workflows using run_* directory names).",
+        help=(
+            "Run directory path. Can point to one run/version folder or to a parent "
+            "folder containing many run subdirectories for batch evaluation."
+        ),
     )
     source.add_argument(
         "--log-root",
@@ -174,6 +179,53 @@ def _select_version_dir(args: argparse.Namespace) -> Path:
     raise ValueError("Provide one of --version-dir, --run-dir, or --log-root")
 
 
+def _is_complete_run_dir(path: Path) -> bool:
+    """Return True when *path* looks like an evaluable run directory."""
+    if not path.is_dir():
+        return False
+    if not (path / "config.yaml").exists():
+        return False
+    ckpt_dir = path / "checkpoints"
+    if not ckpt_dir.is_dir():
+        return False
+    return any(ckpt_dir.glob("*.ckpt"))
+
+
+def _candidate_run_dirs(run_root: Path) -> Iterable[Path]:
+    """Yield direct child directories sorted by name."""
+    return sorted(p for p in run_root.iterdir() if p.is_dir())
+
+
+def _resolve_eval_dirs(args: argparse.Namespace) -> tuple[list[Path], bool]:
+    """Resolve one or many run directories from CLI args.
+
+    Returns
+    -------
+    eval_dirs : list[Path]
+        Directories to evaluate.
+    from_run_root : bool
+        True when using batch mode from a parent --run-dir folder.
+    """
+    if args.run_dir is not None and args.version_dir is None and args.log_root is None:
+        run_path = args.run_dir.expanduser().resolve()
+        if _is_complete_run_dir(run_path):
+            return [run_path], False
+
+        if not run_path.is_dir():
+            raise FileNotFoundError(f"Run directory does not exist: {run_path}")
+
+        candidates = list(_candidate_run_dirs(run_path))
+        if candidates:
+            return candidates, True
+
+        raise FileNotFoundError(
+            f"No complete run directories found under {run_path}. "
+            "A complete run requires config.yaml and checkpoints/*.ckpt"
+        )
+
+    return [_select_version_dir(args)], False
+
+
 def _print_config_summary(run: RunLoader) -> None:
     for section in ("trainer", "data"):
         print(f"\n[{section}]")
@@ -245,86 +297,177 @@ def _save_metrics_plot(metrics_df, out_img_dir: Path) -> None:
     print(f"Saved metrics plot -> {output_path}")
 
 
-def main() -> None:
-    args = _parse_args()
-    version_dir = _select_version_dir(args)
-    output_dir = (args.output_dir or version_dir).expanduser().resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    _configure_eval_logging(output_dir / "closure-eval.log")
+def _cleanup_process_memory() -> None:
+    """Release as much process memory as possible between batch runs."""
+    plt.close("all")
+    gc.collect()
+    try:
+        import torch  # Local import: optional dependency for this cleanup path.
 
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        # Keep cleanup best-effort and non-fatal on environments without torch/cuda.
+        pass
+
+
+def _evaluate_single_run(
+    version_dir: Path,
+    args: argparse.Namespace,
+    output_dir: Path,
+) -> bool:
+    """Evaluate one run directory.
+
+    Returns True on success, False if run should be skipped.
+    """
     data_overrides = {}
     if args.test_samples_file:
         data_overrides["test_samples_file"] = args.test_samples_file
 
-    run = RunLoader.from_version_dir(
-        version_dir,
-        stage=args.stage,
-        ckpt=args.ckpt,
-        device=args.device,
-        data_overrides=data_overrides or None,
-    )
+    run = None
+    history = None
+    metrics_df = None
+    ground_truth = None
+    prediction = None
 
-    output_img_dir = output_dir / "img"
-    output_img_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        run = RunLoader.from_version_dir(
+            version_dir,
+            stage=args.stage,
+            ckpt=args.ckpt,
+            device=args.device,
+            data_overrides=data_overrides or None,
+        )
+    except Exception as exc:  # pragma: no cover - defensive skip for partial runs
+        print(f"Skipping unfinished or invalid run: {version_dir}")
+        print(f"Reason: {exc}")
+        logging.getLogger(__name__).warning(
+            "Skipping run %s due to load failure: %s", version_dir, exc
+        )
+        _cleanup_process_memory()
+        return False
 
-    print(f"Loaded run directory: {version_dir}")
-    print(f"Output directory: {output_dir}")
-    if data_overrides:
-        print(f"Data overrides: {data_overrides}")
+    try:
+        output_img_dir = output_dir / "img"
+        output_img_dir.mkdir(parents=True, exist_ok=True)
 
-    _print_config_summary(run)
+        print(f"Loaded run directory: {version_dir}")
+        print(f"Output directory: {output_dir}")
+        if data_overrides:
+            print(f"Data overrides: {data_overrides}")
 
-    history = run.history()
-    print("\n[history tail]")
-    print(history.tail(8).to_string(index=False))
+        _print_config_summary(run)
 
-    print("\n[best epoch]")
-    print(run.best_epoch())
+        history = run.history()
+        print("\n[history tail]")
+        print(history.tail(8).to_string(index=False))
 
-    if not args.skip_history_plot:
-        _save_history_plot(run, output_img_dir)
+        print("\n[best epoch]")
+        print(run.best_epoch())
 
-    metrics_df = run.metrics().sort_values("r2", ascending=False)
-    print("\n[test metrics sorted by r2]")
-    print(metrics_df.to_string(index=False))
+        if not args.skip_history_plot:
+            _save_history_plot(run, output_img_dir)
 
-    metrics_csv_path = output_dir / args.metrics_csv_name
-    metrics_df.to_csv(metrics_csv_path, index=False)
-    print(f"Wrote metrics CSV -> {metrics_csv_path}")
+        metrics_df = run.metrics().sort_values("r2", ascending=False)
+        print("\n[test metrics sorted by r2]")
+        print(metrics_df.to_string(index=False))
 
-    if not args.skip_metrics_plot:
-        _save_metrics_plot(metrics_df, output_img_dir)
+        metrics_csv_path = output_dir / args.metrics_csv_name
+        metrics_df.to_csv(metrics_csv_path, index=False)
+        print(f"Wrote metrics CSV -> {metrics_csv_path}")
 
-    if not args.skip_field_plots:
-        targets = args.targets or list(run.dataset.request_targets)
-        step = max(1, args.plot_step)
-        indices = list(range(0, run.dataset.targets.shape[0], step))
-        if args.max_plots is not None:
-            indices = indices[: max(0, args.max_plots)]
+        if not args.skip_metrics_plot:
+            _save_metrics_plot(metrics_df, output_img_dir)
 
-        print("\n[field plots]")
-        print(f"targets: {targets}")
-        print(f"plot_indices: {indices[:10]}{' ...' if len(indices) > 10 else ''}")
+        if not args.skip_field_plots:
+            targets = args.targets or list(run.dataset.request_targets)
+            step = max(1, args.plot_step)
+            indices = list(range(0, run.dataset.targets.shape[0], step))
+            if args.max_plots is not None:
+                indices = indices[: max(0, args.max_plots)]
 
-        # Compute predictions once and reuse across target plots.
-        # This avoids repeated full-dataset forward passes that can trigger OOM.
-        print("Precomputing predictions once for all field plots...")
-        ground_truth, prediction = run.predict()
+            print("\n[field plots]")
+            print(f"targets: {targets}")
+            print(f"plot_indices: {indices[:10]}{' ...' if len(indices) > 10 else ''}")
 
-        for target_name in targets:
-            print(f"Rendering target {target_name}")
-            run.plot(
-                target_name,
-                ground_truth=ground_truth,
-                prediction=prediction,
-                robust_quantile=args.robust_quantile,
-                error_mode=args.error_mode,
-                plot_indices=indices,
-                signed_target_names=args.signed_target_names,
-                show_figure=False,
-                output_dir=str(output_dir),
-            )
-            gc.collect()
+            # Compute predictions once and reuse across target plots.
+            # This avoids repeated full-dataset forward passes that can trigger OOM.
+            print("Precomputing predictions once for all field plots...")
+            ground_truth, prediction = run.predict()
+
+            for target_name in targets:
+                print(f"Rendering target {target_name}")
+                run.plot(
+                    target_name,
+                    ground_truth=ground_truth,
+                    prediction=prediction,
+                    robust_quantile=args.robust_quantile,
+                    error_mode=args.error_mode,
+                    plot_indices=indices,
+                    signed_target_names=args.signed_target_names,
+                    show_figure=False,
+                    output_dir=str(output_dir),
+                )
+                gc.collect()
+
+        return True
+    finally:
+        # Explicitly drop large arrays/dataframes/models before next run in batch mode.
+        del prediction
+        del ground_truth
+        del metrics_df
+        del history
+        del run
+        _cleanup_process_memory()
+
+
+def main() -> None:
+    args = _parse_args()
+    eval_dirs, from_run_root = _resolve_eval_dirs(args)
+
+    if from_run_root:
+        # In batch mode, bypass Lightning checkpoint migration paths that can
+        # become unstable across repeated sequential loads on some HPC stacks.
+        os.environ.setdefault("CLOSURE_FORCE_DIRECT_CKPT_LOAD", "1")
+
+        root_output = (
+            (args.output_dir.expanduser().resolve())
+            if args.output_dir is not None
+            else args.run_dir.expanduser().resolve()
+        )
+        root_output.mkdir(parents=True, exist_ok=True)
+        _configure_eval_logging(root_output / "closure-eval.log")
+
+        print(f"Batch mode: evaluating {len(eval_dirs)} run directories under {args.run_dir}")
+        completed = 0
+        skipped = 0
+        for run_dir in eval_dirs:
+            print(f"\n===== Evaluating: {run_dir.name} =====")
+            output_dir = root_output / run_dir.name
+            output_dir.mkdir(parents=True, exist_ok=True)
+            _cleanup_process_memory()
+            if not _is_complete_run_dir(run_dir):
+                print(f"Skipping unfinished run: {run_dir}")
+                skipped += 1
+                continue
+
+            if _evaluate_single_run(run_dir, args, output_dir):
+                completed += 1
+            else:
+                skipped += 1
+
+        print("\nBatch evaluation complete.")
+        print(f"Completed: {completed}")
+        print(f"Skipped: {skipped}")
+        return
+
+    version_dir = eval_dirs[0]
+    output_dir = (args.output_dir or version_dir).expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    _configure_eval_logging(output_dir / "closure-eval.log")
+
+    if not _evaluate_single_run(version_dir, args, output_dir):
+        raise RuntimeError(f"Evaluation failed for run directory: {version_dir}")
 
     print("\nEvaluation complete.")
 

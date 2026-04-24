@@ -279,6 +279,7 @@ closure-eval \
 Useful options:
 
 - `--run-dir` or `--version-dir`: evaluate one explicit saved run
+- `--run-dir <parent_folder>`: evaluate all direct child run folders in batch mode (unfinished runs are skipped)
 - `--log-root`: automatically pick the latest `run_*` or `version_*` folder
 - `--targets`: restrict field plots to selected target names
 - `--max-plots`: limit how many time slices are rendered
@@ -291,6 +292,9 @@ Examples:
 ```bash
 # Evaluate one explicit run/version directory
 closure-eval --run-dir models/Lightning/iPiC3D-nathan5-12/test/run_001
+
+# Evaluate all runs under a parent folder (skips unfinished runs)
+closure-eval --run-dir models/Lightning/iPiC3D-nathan5-12/ablations_long1000_serial/runs
 
 # Or pick the latest run_*/version_* under a root directory
 closure-eval --log-root models/Lightning/iPiC3D-nathan5-12/test

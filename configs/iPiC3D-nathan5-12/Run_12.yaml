@@ -1,0 +1,132 @@
+# ---------------------------------------------------------------
+# Based on /dodrio/scratch/projects/2026_018/george/closure/configs/testing/testing_npz.yaml
+# ---------------------------------------------------------------
+#
+# Usage:
+#   closure-train fit --config configs/iPiC3D-nathan5-12/Runs_7-9-10-11-12.yaml
+
+
+seed_everything: 42
+
+model:
+  network:
+    class_path: closure.models.FCNN
+    init_args:
+      channels: [10, 128, 128, 64, 6]
+      kernels:  [3, 3, 5, 3]
+      activations: [SiLU, SiLU, SiLU, null]
+      batch_norms: [true, true, true, false]
+      dropouts:    [0.0, 0.10, 0.10, 0.0]
+  criterion: MSELoss
+  optimizer: AdamW
+  lr: 0.001
+  weight_decay: 1.0e-04
+  scheduler: OneCycleLR
+  scheduler_kwargs:
+    max_lr: 1.0e-3
+    total_steps: null       # set via Lightning, or compute steps_per_epoch * max_epochs
+    pct_start: 0.1
+    anneal_strategy: cos
+    div_factor: 25
+    final_div_factor: 1.0e3
+    interval: step
+
+data:
+  data_folder: iPiC3D-nathan
+  train_samples_file: ./splits/iPiC3D-nathan5-12/Run_12/train.csv
+  val_samples_file: ./splits/iPiC3D-nathan5-12/Run_12/val.csv
+  test_samples_file: ./splits/iPiC3D-nathan5-12/Run_12/test.csv
+  batch_size: 32
+  num_workers: 12
+  flatten: false
+  scaler_features: true
+  scaler_targets: true
+  prescaler_targets: [log, log, log, arcsinh, arcsinh, arcsinh]
+  features_dtype: float32
+  targets_dtype: float32
+  features_dtype_numpy: float32
+  targets_dtype_numpy: float32
+  patch_dim: [64, 64]
+  subsample_rate: 800
+  subsample_seed: 42
+  alfven_units: true
+  read_features_targets_kwargs:
+    fields_to_read:
+      B: true
+      B_ext: false
+      divB: false
+      E: true
+      E_ext: false
+      rho: true
+      J: true
+      P: true
+      PI: true
+      Heat_flux: false
+      N: false
+      Qrem: false
+    request_features:
+      - rho_e
+      - Bx
+      - By
+      - Bz
+      - Vx_e
+      - Vy_e
+      - Vz_e
+      - Ex
+      - Ey
+      - Ez
+    request_targets:
+      - Pxx_e
+      - Pyy_e
+      - Pzz_e
+      - Pxy_e
+      - Pxz_e
+      - Pyz_e
+    choose_species: ['e', null, 'e', null]
+    verbose: false
+
+trainer:
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: norm
+  max_epochs: 50
+  accelerator: auto
+  devices: auto
+  strategy: auto
+  default_root_dir: ./models/Lightning/iPiC3D-nathan5-12/Run_12
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: val_loss
+        patience: 55
+        mode: min
+        min_delta: 1.0e-3
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        monitor: val_loss
+        save_top_k: 1
+        mode: min
+        filename: best-{epoch}-{val_loss:.4f}
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+      init_args:
+        logging_interval: epoch
+    # --- Optional: Stochastic Weight Averaging ----------------------------
+    # Averages model weights over the final phase of training to flatten the
+    # loss landscape minimum and typically improves generalisation. SWA also
+    # installs its own annealed-LR schedule for the SWA epochs (overrides
+    # the main scheduler during that window). To enable, uncomment below.
+    # Notes:
+    #   * `swa_epoch_start`: int (epoch index) or float in (0,1] (fraction
+    #     of max_epochs at which SWA begins). 0.75 = last 25% of training.
+    #   * `swa_lrs`: constant or per-param-group LR used during SWA window.
+    #   * `annealing_epochs` / `annealing_strategy`: anneal from current LR
+    #     to `swa_lrs` over that many epochs ("cos" or "linear").
+    #   * Lightning automatically updates BatchNorm stats at the end of fit.
+    # ----------------------------------------------------------------------
+    - class_path: lightning.pytorch.callbacks.StochasticWeightAveraging
+      init_args:
+        swa_lrs: 1.0e-4
+        swa_epoch_start: 0.75
+        annealing_epochs: 5
+        annealing_strategy: cos
+  logger:
+    class_path: lightning.pytorch.loggers.CSVLogger

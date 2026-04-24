@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import lightning.pytorch as pl
 import yaml
 from lightning.pytorch.cli import LightningCLI
 from lightning.pytorch.loggers import CSVLogger
@@ -32,6 +33,32 @@ from lightning.pytorch.loggers import CSVLogger
 from closure.callbacks import TorchScriptCheckpointExportCallback
 from closure.module import ClosureLitModule
 from closure.datamodule import ClosureDataModule
+
+
+def _ensure_lightning_utilities_types_compat() -> None:
+    """Ensure ``pl.utilities.types`` exists across Lightning packaging variants.
+
+    Some cluster module combinations mix ``pytorch_lightning`` internals with
+    ``lightning.pytorch`` namespaces and can miss the ``types`` attribute at
+    runtime, which crashes DDP loops when SWA swaps schedulers.
+    """
+    try:
+        utilities = getattr(pl, "utilities", None)
+        if utilities is None or hasattr(utilities, "types"):
+            return
+
+        try:
+            from lightning.pytorch.utilities import types as pl_types
+        except Exception:
+            from pytorch_lightning.utilities import types as pl_types  # type: ignore
+
+        setattr(utilities, "types", pl_types)
+    except Exception:
+        # Keep startup resilient; normal environments don't need this shim.
+        return
+
+
+_ensure_lightning_utilities_types_compat()
 
 
 def _run_git_command(repo_dir: Path, *args: str) -> str | None:
