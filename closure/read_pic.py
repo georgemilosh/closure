@@ -808,14 +808,19 @@ def parse_simulation_data(files_path):
 
     try:
         f = open(sim_path, "r")
-    except Exception:
-        # Remove the last folder from files_path and try again
-        try:
-            fallback_path = os.path.join(os.path.dirname(os.path.normpath(files_path)), "SimulationData.txt")
-            f = open(fallback_path, "r")
-        except Exception as e:
-            logger.error(f"Failed to open SimulationData.txt at {files_path = } and fallback path {fallback_path = }")
-            raise e
+    except FileNotFoundError:
+        # /readonly/ is a periodic snapshot that may lag behind live writes.
+        # Fall back to the live path by stripping the leading /readonly prefix.
+        live_path = re.sub(r"^/readonly(?=/)", "", sim_path)
+        if live_path != sim_path and os.path.isfile(live_path):
+            logger.warning(
+                f"SimulationData.txt not found at snapshot path {sim_path!r}; "
+                f"falling back to live path {live_path!r}"
+            )
+            f = open(live_path, "r")
+        else:
+            logger.error(f"Failed to open SimulationData.txt at {sim_path = }")
+            raise
     
     content = f.readlines()
     f.close()

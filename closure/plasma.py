@@ -65,7 +65,15 @@ def _parse_float_list(value: str) -> list[float]:
 
 
 def _find_experiment_inp_file(experiment: str) -> Path:
-    """Locate an experiment ``.inp`` file from an absolute experiment path."""
+    """Locate an experiment ``.inp`` file from an absolute experiment path.
+
+    If the resolved path lives under ``/readonly/`` and no ``.inp`` file is
+    found there (the snapshot may lag behind live writes), the function retries
+    with the leading ``/readonly`` prefix stripped so that the live filesystem
+    is used instead.
+    """
+    import re as _re
+
     exp_path = Path(experiment).expanduser()
 
     if not exp_path.is_absolute():
@@ -73,16 +81,34 @@ def _find_experiment_inp_file(experiment: str) -> Path:
             "experiment must be an absolute path to an experiment directory or .inp file"
         )
 
-    # Accept explicit .inp file path.
-    if exp_path.is_file() and exp_path.suffix == ".inp":
-        return exp_path.resolve()
+    def _try_path(p: Path):
+        # Accept explicit .inp file path.
+        if p.is_file() and p.suffix == ".inp":
+            return p.resolve()
+        # Accept explicit directory path containing an .inp file.
+        if p.is_dir():
+            inp_files = sorted(p.glob("*.inp"))
+            if inp_files:
+                return inp_files[0].resolve()
+        return None
 
-    # Accept explicit directory path containing an .inp file.
-    if exp_path.is_dir():
-        inp_files = sorted(exp_path.glob("*.inp"))
-        if inp_files:
-            return inp_files[0].resolve()
-        raise FileNotFoundError(f"No .inp file found in experiment directory {exp_path}")
+    result = _try_path(exp_path)
+    if result is not None:
+        return result
+
+    # /readonly/ is a periodic snapshot; fall back to live path if needed.
+    exp_str = str(exp_path)
+    live_str = _re.sub(r"^/readonly(?=/)", "", exp_str)
+    if live_str != exp_str:
+        live_path = Path(live_str)
+        result = _try_path(live_path)
+        if result is not None:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                f".inp file not found at snapshot path {exp_path!r}; "
+                f"falling back to live path {live_path!r}"
+            )
+            return result
 
     raise FileNotFoundError(
         f"Could not locate experiment path {exp_path}. "

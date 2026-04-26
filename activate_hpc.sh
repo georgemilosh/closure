@@ -17,9 +17,11 @@ if [[ "$_loaded_modules" == *"gpu_rome_a100"*"rhel9"* ]]; then
 	_hpc_stack="gpu"
 elif [[ "$_loaded_modules" == *"debug_milan_rhel9"* ]]; then
 	_hpc_stack="debug"
+elif [[ "$_loaded_modules" == *"cpu_milan_rhel9"* ]]; then
+	_hpc_stack="cpu"
 else
 	echo "Could not detect Dodrio stack from module list."
-	echo "Expected one of: gpu_rome_a100*rhel9 or debug_milan_rhel9"
+	echo "Expected one of: gpu_rome_a100*rhel9, debug_milan_rhel9, or cpu_milan_rhel9"
 	echo "Run on the target node/partition and source this file again."
 	return 1
 fi
@@ -31,8 +33,8 @@ case "$_hpc_stack" in
 		module load PyTorch-Lightning/2.2.1-foss-2023a-CUDA-12.1.1
 		module load torchvision/0.16.0-foss-2023a-CUDA-12.1.1
 		;;
-	debug)
-		# env/software/dodrio/debug_milan_rhel9
+	debug|cpu)
+		# env/software/dodrio/debug_milan_rhel9 or cpu_milan_rhel9
 		module load PyTorch-bundle/2.1.2-foss-2023a
 		module load PyTorch-Lightning/2.2.1-foss-2023a
 		;;
