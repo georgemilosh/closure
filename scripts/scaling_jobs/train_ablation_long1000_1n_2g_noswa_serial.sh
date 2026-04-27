@@ -1,0 +1,137 @@
+#!/bin/bash
+# Serial 1000-epoch ablation for all 4x2 feature/target combinations (2 GPUs on 1 node, DDP, no SWA).
+# Runs all 8 combinations back-to-back (default, noE, noJ, noJnoE × P, divP).
+# Total estimated runtime: ~12 hours (8 × ~1.5 hours per combination).
+# Submit with:
+#   sbatch models/Lightning/iPiC3D-nathan5-12/scaling_jobs/train_ablation_long1000_1n_2g_noswa_serial.sh
+#SBATCH --job-name=ipic_ablate_long1000_1n_2g_noswa_serial
+#SBATCH --account=2026_018
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=2
+#SBATCH --gres=gpu:2
+#SBATCH --cpus-per-task=12
+#SBATCH --mem=64G
+#SBATCH --time=14:00:00
+#SBATCH --output=logs/%x_%j.out
+#SBATCH --error=logs/%x_%j.err
+#SBATCH --partition=gpu_rome_a100
+
+set -euo pipefail
+
+REPO_DIR="/dodrio/scratch/projects/2026_018/george/closure"
+cd "$REPO_DIR"
+mkdir -p logs
+
+module load PyTorch/2.1.2-foss-2023a-CUDA-12.1.1
+module load h5py/3.9.0-foss-2023a
+module load torchvision/0.16.0-foss-2023a-CUDA-12.1.1
+module load matplotlib/3.7.2-gfbf-2023a
+module load PyTorch-Lightning/2.2.1-foss-2023a-CUDA-12.1.1
+
+export PATH="${REPO_DIR}/_shims:${PATH}"
+export PYTHONPATH="${REPO_DIR}/_shims:${REPO_DIR}:${PYTHONPATH:-}"
+export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
+
+export MPI4PY_RC_INITIALIZE=0
+export OMPI_MCA_ess=singleton
+export OMPI_MCA_plm=isolated
+
+echo "=== Starting serial 1000-epoch ablation matrix (2 GPUs on 1 node, DDP, no SWA, all 8 combinations) ==="
+echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
+nvidia-smi -L || true
+echo ""
+
+# Function to run one ablation combination
+run_ablation() {
+  local feature_set="$1"
+  local target_set="$2"
+  local run_tag="ablate_${feature_set}_${target_set}"
+
+  echo "=========================================="
+  echo "Starting: ${run_tag}"
+  echo "=========================================="
+
+  # Determine feature override and channels
+  case "$feature_set" in
+    default)
+      feature_override='--data.read_features_targets_kwargs.request_features=[rho_e,Bx,By,Bz,Vx_e,Vy_e,Vz_e,Ex,Ey,Ez]'
+      feature_channels=10
+      ;;
+    noE)
+      feature_override='--data.read_features_targets_kwargs.request_features=[rho_e,Bx,By,Bz,Vx_e,Vy_e,Vz_e]'
+      feature_channels=7
+      ;;
+    noJ)
+      feature_override='--data.read_features_targets_kwargs.request_features=[rho_e,Bx,By,Bz,Ex,Ey,Ez]'
+      feature_channels=7
+      ;;
+    noJnoE)
+      feature_override='--data.read_features_targets_kwargs.request_features=[rho_e,Bx,By,Bz]'
+      feature_channels=4
+      ;;
+  esac
+
+  # Determine target override and channels
+  case "$target_set" in
+    P)
+      target_override='--data.read_features_targets_kwargs.request_targets=[Pxx_e,Pyy_e,Pzz_e,Pxy_e,Pxz_e,Pyz_e]'
+      prescaler_override='--data.prescaler_targets=[log,log,log,arcsinh,arcsinh,arcsinh]'
+      target_channels=6
+      fields_override='--data.read_features_targets_kwargs.fields_to_read.B=true --data.read_features_targets_kwargs.fields_to_read.B_ext=false --data.read_features_targets_kwargs.fields_to_read.divB=false --data.read_features_targets_kwargs.fields_to_read.E=true --data.read_features_targets_kwargs.fields_to_read.E_ext=false --data.read_features_targets_kwargs.fields_to_read.rho=true --data.read_features_targets_kwargs.fields_to_read.J=true --data.read_features_targets_kwargs.fields_to_read.P=true --data.read_features_targets_kwargs.fields_to_read.PI=true --data.read_features_targets_kwargs.fields_to_read.Heat_flux=false --data.read_features_targets_kwargs.fields_to_read.N=false --data.read_features_targets_kwargs.fields_to_read.Qrem=false --data.read_features_targets_kwargs.fields_to_read.divP=false'
+      ;;
+    divP)
+      target_override='--data.read_features_targets_kwargs.request_targets=[EPx,EPy,EPz]'
+      prescaler_override='--data.prescaler_targets=[null,null,null]'
+      target_channels=3
+      fields_override='--data.read_features_targets_kwargs.fields_to_read.B=true --data.read_features_targets_kwargs.fields_to_read.B_ext=false --data.read_features_targets_kwargs.fields_to_read.divB=false --data.read_features_targets_kwargs.fields_to_read.E=true --data.read_features_targets_kwargs.fields_to_read.E_ext=false --data.read_features_targets_kwargs.fields_to_read.rho=true --data.read_features_targets_kwargs.fields_to_read.J=true --data.read_features_targets_kwargs.fields_to_read.P=true --data.read_features_targets_kwargs.fields_to_read.PI=true --data.read_features_targets_kwargs.fields_to_read.Heat_flux=false --data.read_features_targets_kwargs.fields_to_read.N=false --data.read_features_targets_kwargs.fields_to_read.Qrem=false --data.read_features_targets_kwargs.fields_to_read.divP=true'
+      ;;
+  esac
+
+  model_channels_override="--model.network.init_args.channels=[${feature_channels},128,128,64,${target_channels}]"
+
+  srun --cpu-bind=none closure-train fit \
+    --config configs/iPiC3D-nathan5-12/Runs_7-9-10-11-12_long1000_cosine_noswa.yaml \
+    --trainer.devices=2 \
+    --trainer.num_nodes=1 \
+    --trainer.strategy=ddp_find_unused_parameters_false \
+    --trainer.enable_progress_bar=false \
+    --data.batch_size=16 \
+    --data.num_workers=12 \
+    --data.read_features_targets_kwargs.num_workers=4 \
+    --trainer.logger.init_args.save_dir=./models/Lightning/iPiC3D-nathan5-12/ablations_long1000_serial_1n_2g_noswa \
+    --trainer.logger.init_args.name=runs \
+    --trainer.logger.init_args.version="${run_tag}" \
+    --trainer.default_root_dir="./models/Lightning/iPiC3D-nathan5-12/ablations_long1000_serial_1n_2g_noswa" \
+    $feature_override \
+    $target_override \
+    $prescaler_override \
+    $model_channels_override \
+    $fields_override
+
+  if [ $? -eq 0 ]; then
+    echo "✓ ${run_tag} completed successfully"
+  else
+    echo "✗ ${run_tag} FAILED (exit code: $?)"
+    echo "Continuing with remaining ablations..."
+  fi
+  echo ""
+}
+
+# Run all 8 combinations in series
+total_start=$(date +%s)
+
+for feature_set in default noE noJ noJnoE; do
+  for target_set in P divP; do
+    run_ablation "$feature_set" "$target_set"
+  done
+done
+
+total_end=$(date +%s)
+total_seconds=$((total_end - total_start))
+total_hours=$((total_seconds / 3600))
+total_mins=$(((total_seconds % 3600) / 60))
+
+echo "=========================================="
+echo "All ablations completed!"
+echo "Total runtime: ${total_hours}h ${total_mins}m"
+echo "=========================================="

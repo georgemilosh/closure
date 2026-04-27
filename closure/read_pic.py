@@ -34,6 +34,7 @@ __all__ = [
     "get_experiments",
     "get_saved_iterations",
     "ipic3D_available_cycles",
+    "cycles_to_plot_indices",
     "parse_simulation_data",
     "read_data",
     "read_data_ipic3d",
@@ -230,6 +231,39 @@ def ipic3D_available_cycles(files_path):
     times = [np.round(cycle*dt, decimals=8) for cycle in cycles]
     cycles = [int(cycle) for cycle in cycles]
     return cycles, times
+
+def cycles_to_plot_indices(dataset, cycles):
+    """Return positional indices in *dataset* that correspond to the given cycle numbers.
+
+    The cycle number is parsed from each sample filename (the numeric suffix
+    before the file extension, e.g. ``Data_06000.h5`` → 6000).
+
+    Parameters
+    ----------
+    dataset :
+        A dataset object that exposes ``dataset.dataframe`` with a
+        ``filenames`` column (e.g. ``ClosureDataset``).
+    cycles : iterable of int
+        Simulation cycle numbers to look up.
+
+    Returns
+    -------
+    list[int]
+        Positional row indices (suitable for ``plot_indices=``) for each cycle
+        that is present in the dataset.  Cycles not found are silently skipped.
+    """
+    def _extract_cycle(fname):
+        token = os.path.basename(fname).rsplit("_", 1)[-1].split(".", 1)[0]
+        m = re.search(r"(\d+)$", token)
+        return int(m.group(1)) if m else None
+
+    cycle_to_idx = {
+        _extract_cycle(fn): i
+        for i, fn in enumerate(dataset.dataframe["filenames"])
+    }
+    cycle_to_idx.pop(None, None)  # discard rows where parsing failed
+    return [cycle_to_idx[c] for c in cycles if c in cycle_to_idx]
+
 
 def find_field_in_hdf5(f, path_prefix, field_name, time_cycle):
     """
