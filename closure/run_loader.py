@@ -21,6 +21,7 @@ __all__ = ["RunLoader"]
 import importlib
 import logging
 import os
+import pickle
 from pathlib import Path
 from typing import Any, Optional
 
@@ -101,7 +102,17 @@ def _load_module_checkpoint_robust(
 
     init_kwargs = {k: v for k, v in model_cfg.items() if k != "network"}
     module = ClosureLitModule(network=network, **init_kwargs)
-    checkpoint = torch.load(str(ckpt_path), map_location=device)
+    try:
+        checkpoint = torch.load(str(ckpt_path), map_location=device)
+    except pickle.UnpicklingError as exc:
+        # PyTorch 2.6 changed torch.load default to weights_only=True.
+        # Some trusted Lightning checkpoints require full unpickling.
+        _logger.warning(
+            "Default torch.load failed for %s (%s). Retrying with weights_only=False.",
+            ckpt_path,
+            exc,
+        )
+        checkpoint = torch.load(str(ckpt_path), map_location=device, weights_only=False)
     state_dict = checkpoint.get("state_dict", checkpoint)
     module.load_state_dict(state_dict, strict=True)
     module.eval()

@@ -138,8 +138,11 @@ def _parse_args() -> argparse.Namespace:
     eval_cfg.add_argument(
         "--signed-target-names",
         nargs="*",
-        default=["Pxy_e", "Pxz_e", "Pyz_e"],
-        help="Target names treated as signed for diverging colormap scaling.",
+        default=None,
+        help=(
+            "Optional explicit list of target names treated as signed for "
+            "diverging colormap scaling. Default: auto-detect from plotted values."
+        ),
     )
     eval_cfg.add_argument(
         "--skip-history-plot",

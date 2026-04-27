@@ -291,7 +291,11 @@ def plot_pred_targets(
         plot_indices = range(prediction_reshaped.shape[0])
 
     # Plot controls
-    signed_target_names = set(kwargs.pop("signed_target_names", ["Pxy_e", "Pxz_e", "Pyz_e"]))
+    # signed_target_names: explicit override list; pass an empty set or None to rely on
+    # auto-detection from the actual data values (recommended).
+    signed_target_names = kwargs.pop("signed_target_names", None)
+    if signed_target_names is not None:
+        signed_target_names = set(signed_target_names)
     robust_quantile = float(kwargs.pop("robust_quantile", 0.995))
     robust_quantile = min(max(robust_quantile, 0.5), 1.0)
     error_mode = kwargs.pop("error_mode", "relative")
@@ -317,7 +321,15 @@ def plot_pred_targets(
     if not os.path.exists(img_dir):
         os.makedirs(img_dir)
 
-    target_is_signed = target_name in signed_target_names
+    if signed_target_names is not None:
+        # Explicit override: trust the caller-supplied list.
+        target_is_signed = target_name in signed_target_names
+    else:
+        # Auto-detect: signed if the ground truth contains both positive and
+        # negative values across all plotted samples.
+        target_is_signed = bool(
+            np.any(ground_truth_reshaped < 0) and np.any(ground_truth_reshaped > 0)
+        )
     main_cmap = cmap_signed if target_is_signed else cmap_unsigned
     cycle_range_label = _cycle_range_label(dataset, plot_indices)
 
