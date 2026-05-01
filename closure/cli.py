@@ -595,15 +595,19 @@ def main():
         inferred_overrides.append(arg)
 
     _configure_python_logging(argv)
-    ClosureLightningCLI(
-        ClosureLitModule,
-        ClosureDataModule,
-        user_argv=user_argv,
-        inferred_overrides=inferred_overrides,
-        args=argv,
-        trainer_defaults={"precision": "32-true"},
-        save_config_kwargs={"overwrite": True},
-    )
+    try:
+        ClosureLightningCLI(
+            ClosureLitModule,
+            ClosureDataModule,
+            user_argv=user_argv,
+            inferred_overrides=inferred_overrides,
+            args=argv,
+            trainer_defaults={"precision": "32-true"},
+            save_config_kwargs={"overwrite": True},
+        )
+    except Exception:
+        logging.getLogger(__name__).exception("Unhandled exception in closure-train")
+        raise
 
 
 if __name__ == "__main__":

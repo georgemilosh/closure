@@ -272,9 +272,10 @@ class ClosureDataModule(L.LightningDataModule):
             alfven_units=hp.alfven_units,
         )
 
-        # Build transform for patch extraction (training only)
+        # Build transform for patch extraction (training only).
+        # Flattened datasets are pixel-wise vectors, so RandomCrop is invalid there.
         transform = None
-        if hp.patch_dim is not None:
+        if hp.patch_dim is not None and not hp.flatten:
             transform = {
                 "RandomCrop": {"size": hp.patch_dim},
                 "apply": ["train"],
