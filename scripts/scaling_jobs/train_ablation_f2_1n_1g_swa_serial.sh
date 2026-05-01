@@ -1,10 +1,10 @@
 #!/bin/bash
 # Serial ablation driver for all 4x2 feature/target combinations on single GPU.
 # Default runs 8 combinations (default, noE, noJ, noJnoE × P, divP) with baseline architecture.
-# You can also run a deeper variant in the same job using ARCH_LIST="baseline deeper".
+# You can also run shallower/deeper variants in the same job using ARCH_LIST="baseline shallower deeper".
 # Select training config via CONFIG_PATH (defaults to cosine SWA).
 # Submit with:
-#   sbatch --export=ALL,CONFIG_PATH=configs/iPiC3D-nathan5-12/Runs_7-9-10-11-12_f2_plateau_swa.yaml,ARCH_LIST="baseline deeper" scripts/scaling_jobs/train_ablation_f2_1n_1g_swa_serial.sh
+#   sbatch --export=ALL,CONFIG_PATH=configs/iPiC3D-nathan5-12/Runs_7-9-10-11-12_f2_plateau_swa.yaml,ARCH_LIST="baseline shallower deeper" scripts/scaling_jobs/train_ablation_f2_1n_1g_swa_serial.sh
 #SBATCH --job-name=ipic_ablate_f2_1g_serial
 #SBATCH --account=2026_018
 #SBATCH --nodes=1
@@ -43,7 +43,8 @@ nvidia-smi -L || true
 echo ""
 
 CONFIG_PATH="${CONFIG_PATH:-configs/iPiC3D-nathan5-12/Runs_7-9-10-11-12_f2_cosine_swa.yaml}"
-ARCH_LIST="${ARCH_LIST:-baseline}"
+ARCH_LIST="${ARCH_LIST:-baseline shallower deeper}"
+RUNS_DIR="./models/Lightning/iPiC3D-nathan5-12/ablations_f2_serial/runs"
 echo "Using CONFIG_PATH=${CONFIG_PATH}"
 echo "Using ARCH_LIST=${ARCH_LIST}"
 echo ""
@@ -54,6 +55,16 @@ run_ablation() {
   local target_set="$2"
   local arch="$3"
   local run_tag="ablate_${feature_set}_${target_set}_${arch}"
+  local run_dir="${RUNS_DIR}/${run_tag}"
+
+  # Skip reruns only when prior artifacts indicate a completed train+test pass.
+  if [[ -s "${run_dir}/test_metrics.csv" && -f "${run_dir}/checkpoints/last.ckpt" ]]; then
+    echo "=========================================="
+    echo "Skipping completed run: ${run_tag}"
+    echo "=========================================="
+    echo ""
+    return 0
+  fi
 
   echo "=========================================="
   echo "Starting: ${run_tag}"
@@ -101,15 +112,24 @@ run_ablation() {
     model_acts_override="--model.network.init_args.activations=[SiLU,SiLU,SiLU,SiLU,null]"
     model_bns_override="--model.network.init_args.batch_norms=[true,true,true,true,false]"
     model_drops_override="--model.network.init_args.dropouts=[0.0,0.15,0.15,0.1,0.0]"
-  else
+  elif [[ "$arch" == "shallower" ]]; then
+    model_channels_override="--model.network.init_args.channels=[${feature_channels},128,64,${target_channels}]"
+    model_kernels_override="--model.network.init_args.kernels=[3,5,3]"
+    model_acts_override="--model.network.init_args.activations=[SiLU,SiLU,null]"
+    model_bns_override="--model.network.init_args.batch_norms=[true,true,false]"
+    model_drops_override="--model.network.init_args.dropouts=[0.0,0.1,0.0]"
+  elif [[ "$arch" == "baseline" ]]; then
     model_channels_override="--model.network.init_args.channels=[${feature_channels},128,128,64,${target_channels}]"
     model_kernels_override="--model.network.init_args.kernels=[3,3,5,3]"
     model_acts_override="--model.network.init_args.activations=[SiLU,SiLU,SiLU,null]"
     model_bns_override="--model.network.init_args.batch_norms=[true,true,true,false]"
     model_drops_override="--model.network.init_args.dropouts=[0.0,0.15,0.15,0.0]"
+  else
+    echo "Unsupported architecture: ${arch} (expected baseline, shallower, or deeper)"
+    return 1
   fi
 
-  srun --cpu-bind=none closure-train fit \
+  if srun --cpu-bind=none closure-train fit \
     --config "${CONFIG_PATH}" \
     --trainer.devices=1 \
     --trainer.num_nodes=1 \
@@ -131,11 +151,10 @@ run_ablation() {
     $model_bns_override \
     $model_drops_override \
     $fields_override
-
-  if [ $? -eq 0 ]; then
+  then
     echo "✓ ${run_tag} completed successfully"
   else
-    echo "✗ ${run_tag} FAILED (exit code: $?)"
+    echo "✗ ${run_tag} FAILED"
     echo "Continuing with remaining ablations..."
   fi
   echo ""
