@@ -22,6 +22,37 @@ model:
   scheduler_kwargs:
     patience: 10
     factor: 0.5
+  # ---------------------------------------------------------------
+  # Physics-informed loss (pressure-gradient regularisation)
+  # ---------------------------------------------------------------
+  # lambda_gradP : weight on MSE between predicted and target pressure
+  #   gradients (4th-order 5-pt stencil matching Menura runtime).
+  #   Boundary bands (2 cells each side) are excluded from the loss,
+  #   consistent with Menura's ghost-cell approach.
+  # lambda_eamb  : weight on MSE between E_amb proxies
+  #   (EPx/EPy/EPz = -div P / |rho|) derived from predicted vs target
+  #   pressure channels.  Requires rho_e to be present in features.
+  # physics_dx / physics_dy : grid spacing in code units (dimensionless
+  #   Alfvén-unit runs: set to inter-cell distance after rescaling).
+  # physics_rho_abs : use |rho| in denominator (true = sign-agnostic,
+  #   correct for both ECsim negative-rho and Menura positive-rho
+  #   conventions after extract_features_kernel negation).
+  # physics_relative_loss : normalize physics MSE by detached signal energy
+  #   so physical-unit gradP/E_amb terms are dimensionless and stable across
+  #   grids/unit systems. Set false only for raw diagnostic experiments.
+  # physics_warmup_epochs / physics_ramp_epochs : optional epoch-wise schedule
+  #   for lambda_gradP/lambda_eamb. Warmup epochs use pure MSE; ramp epochs then
+  #   linearly increase physics weight to full strength.
+  # Set both lambdas to 0.0 to reproduce the original MSE-only baseline.
+  lambda_gradP: 0.0
+  lambda_eamb: 0.0
+  physics_dx: 1.0
+  physics_dy: 1.0
+  physics_small: 1.0e-10
+  physics_rho_abs: true
+  physics_relative_loss: true
+  physics_warmup_epochs: 0
+  physics_ramp_epochs: 0
 
 data:
   data_folder: ./data

@@ -17,6 +17,7 @@ from pathlib import Path
 import yaml
 import torch
 import lightning as L
+import torch.nn.functional as F
 from lightning.pytorch.utilities.model_summary import summarize
 
 from closure.resources import (
@@ -64,6 +65,15 @@ class ClosureLitModule(L.LightningModule):
         weight_decay: float = 0.0,
         scheduler: str | None = "ReduceLROnPlateau",
         scheduler_kwargs: dict | None = None,
+        lambda_gradP: float = 0.0,
+        lambda_eamb: float = 0.0,
+        physics_dx: float = 1.0,
+        physics_dy: float = 1.0,
+        physics_small: float = 1e-10,
+        physics_rho_abs: bool = True,
+        physics_relative_loss: bool = True,
+        physics_warmup_epochs: int = 0,
+        physics_ramp_epochs: int = 0,
     ):
         super().__init__()
         self.save_hyperparameters(ignore=["network"])
@@ -86,6 +96,8 @@ class ClosureLitModule(L.LightningModule):
         else:
             self.metric_fns = None
 
+        self._physics_warned_messages: set[str] = set()
+
     # ------------------------------------------------------------------
     # Forward
     # ------------------------------------------------------------------
@@ -98,8 +110,18 @@ class ClosureLitModule(L.LightningModule):
     def training_step(self, batch, batch_idx):
         features, targets = batch
         prediction = self(features)
-        loss = self.criterion(prediction, targets)
+        base_loss, gradp_loss, eamb_loss = self._compute_loss_terms(features, prediction, targets)
+        physics_scale = self._physics_loss_scale()
+        loss = (
+            base_loss
+            + physics_scale * float(self.hparams.lambda_gradP) * gradp_loss
+            + physics_scale * float(self.hparams.lambda_eamb) * eamb_loss
+        )
         self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("train_loss_base", base_loss, on_step=False, on_epoch=True)
+        self.log("train_loss_gradp", gradp_loss, on_step=False, on_epoch=True)
+        self.log("train_loss_eamb", eamb_loss, on_step=False, on_epoch=True)
+        self.log("train_loss_physics_scale", physics_scale, on_step=False, on_epoch=True)
         self._log_metrics(prediction, targets, prefix="train")
         self._train_batches_this_epoch = batch_idx + 1
         return loss
@@ -107,8 +129,18 @@ class ClosureLitModule(L.LightningModule):
     def validation_step(self, batch, batch_idx):
         features, targets = batch
         prediction = self(features)
-        loss = self.criterion(prediction, targets)
+        base_loss, gradp_loss, eamb_loss = self._compute_loss_terms(features, prediction, targets)
+        physics_scale = self._physics_loss_scale()
+        loss = (
+            base_loss
+            + physics_scale * float(self.hparams.lambda_gradP) * gradp_loss
+            + physics_scale * float(self.hparams.lambda_eamb) * eamb_loss
+        )
         self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("val_loss_base", base_loss, on_step=False, on_epoch=True)
+        self.log("val_loss_gradp", gradp_loss, on_step=False, on_epoch=True)
+        self.log("val_loss_eamb", eamb_loss, on_step=False, on_epoch=True)
+        self.log("val_loss_physics_scale", physics_scale, on_step=False, on_epoch=True)
         self._log_metrics(prediction, targets, prefix="val")
         return loss
 
@@ -414,6 +446,351 @@ class ClosureLitModule(L.LightningModule):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _compute_loss_terms(self, features, prediction, targets):
+        """Return base and optional physics-informed loss components."""
+        base_loss = self.criterion(prediction, targets)
+        zero = prediction.new_zeros(())
+        gradp_loss = zero
+        eamb_loss = zero
+
+        if float(self.hparams.lambda_gradP) > 0.0:
+            gradp_loss = self._gradient_loss(prediction, targets)
+        if float(self.hparams.lambda_eamb) > 0.0:
+            eamb_loss = self._eamb_proxy_loss(features, prediction, targets)
+
+        return base_loss, gradp_loss, eamb_loss
+
+    def _physics_loss_scale(self) -> float:
+        """Epoch-wise multiplier for optional physics loss warmup/ramp."""
+        epoch = int(getattr(self, "current_epoch", 0))
+        return self._physics_loss_scale_from_epoch(
+            epoch,
+            int(self.hparams.physics_warmup_epochs),
+            int(self.hparams.physics_ramp_epochs),
+        )
+
+    @staticmethod
+    def _physics_loss_scale_from_epoch(epoch: int, warmup_epochs: int, ramp_epochs: int) -> float:
+        """Compute epoch-wise physics-loss multiplier."""
+        warmup_epochs = max(0, int(warmup_epochs))
+        ramp_epochs = max(0, int(ramp_epochs))
+        if epoch < warmup_epochs:
+            return 0.0
+        if ramp_epochs <= 0:
+            return 1.0
+        return min(1.0, float(epoch - warmup_epochs + 1) / float(ramp_epochs))
+
+    @staticmethod
+    def _fd4_derivatives_2d(field: torch.Tensor, dx: float, dy: float) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute 2D fourth-order derivatives on interior-valid cells.
+
+        Uses the same five-point fourth-order central stencil as Menura:
+        ``(-f[i+2] + 8 f[i+1] - 8 f[i-1] + f[i-2]) / (12 dX)``.
+        Returns tensors cropped to interior ``[..., 2:-2, 2:-2]``.
+        """
+        if field.ndim < 2 or field.shape[-2] < 5 or field.shape[-1] < 5:
+            raise ValueError("field must have at least 5 points in each spatial dimension")
+
+        # Tensor layout: [..., H, W]. plasma.py convention: axis 0 (H/dim=-2) = x, axis 1 (W/dim=-1) = y.
+        # dfdx -> stencil along dim=-2 (H/rows/x), hold last dim interior.
+        dfdx = (
+            -field[..., 4:, 2:-2]
+            + 8.0 * field[..., 3:-1, 2:-2]
+            - 8.0 * field[..., 1:-3, 2:-2]
+            + field[..., :-4, 2:-2]
+        ) / (12.0 * dx)
+        # dfdy -> stencil along dim=-1 (W/cols/y), hold second-to-last dim interior.
+        dfdy = (
+            -field[..., 2:-2, 4:]
+            + 8.0 * field[..., 2:-2, 3:-1]
+            - 8.0 * field[..., 2:-2, 1:-3]
+            + field[..., 2:-2, :-4]
+        ) / (12.0 * dy)
+        return dfdx, dfdy
+
+    def _gradient_loss(self, prediction: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """MSE between predicted and target pressure gradients."""
+        if prediction.ndim != 4 or targets.ndim != 4:
+            self._warn_once("Skipping gradP loss: expected 4D tensors [B,C,H,W].")
+            return prediction.new_zeros(())
+        if prediction.shape[-2] < 5 or prediction.shape[-1] < 5:
+            self._warn_once("Skipping gradP loss: need H,W >= 5 for fourth-order stencil.")
+            return prediction.new_zeros(())
+
+        dataset = self._get_physics_dataset()
+        prediction_phys = self._inverse_targets_for_physics(prediction, dataset)
+        targets_phys = self._inverse_targets_for_physics(targets, dataset)
+
+        dpx, dpy = self._fd4_derivatives_2d(prediction_phys, float(self.hparams.physics_dx), float(self.hparams.physics_dy))
+        dtx, dty = self._fd4_derivatives_2d(targets_phys, float(self.hparams.physics_dx), float(self.hparams.physics_dy))
+        return 0.5 * (self._physics_mse(dpx, dtx) + self._physics_mse(dpy, dty))
+
+    def _physics_mse(self, prediction: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """Physics MSE, optionally normalized to a dimensionless relative error."""
+        loss = F.mse_loss(prediction, target)
+        if not bool(self.hparams.physics_relative_loss):
+            return loss
+
+        energy = 0.5 * (
+            prediction.detach().square().mean()
+            + target.detach().square().mean()
+        )
+        return loss / (energy + float(self.hparams.physics_small))
+
+    def _get_physics_dataset(self):
+        """Return a dataset carrying normalization metadata, if attached."""
+        try:
+            trainer = self.trainer
+        except RuntimeError:
+            return None
+
+        datamodule = getattr(trainer, "datamodule", None)
+        if datamodule is None:
+            return None
+
+        for attr in ("train_dataset", "val_dataset", "test_dataset"):
+            dataset = getattr(datamodule, attr, None)
+            if dataset is not None:
+                return dataset
+        return None
+
+    @staticmethod
+    def _inverse_targets_for_physics(tensor: torch.Tensor, dataset) -> torch.Tensor:
+        """Map normalized/prescaled target channels back to physical pressure."""
+        if dataset is None:
+            return tensor
+
+        channel_count = tensor.shape[1]
+        out = tensor
+
+        if bool(getattr(dataset, "scaler_targets", False)):
+            mean = getattr(dataset, "targets_mean", None)
+            std = getattr(dataset, "targets_std", None)
+            if mean is not None and std is not None:
+                mean_t = torch.as_tensor(mean[:channel_count], dtype=tensor.dtype, device=tensor.device).reshape(1, -1, 1, 1)
+                std_t = torch.as_tensor(std[:channel_count], dtype=tensor.dtype, device=tensor.device).reshape(1, -1, 1, 1)
+                out = out * std_t + mean_t
+
+        prescalers = getattr(dataset, "prescaler_targets", None)
+        if prescalers is None or prescalers is False:
+            return out
+
+        channels = []
+        for channel in range(channel_count):
+            value = out[:, channel]
+            func = prescalers[channel] if channel < len(prescalers) else None
+            name = getattr(func, "__name__", func if isinstance(func, str) else "")
+            if func is None:
+                channels.append(value)
+            elif name == "log":
+                channels.append(torch.exp(value))
+            elif name == "arcsinh":
+                channels.append(torch.sinh(value))
+            else:
+                raise ValueError(
+                    f"Unsupported target prescaler '{name}' for physics loss. "
+                    "Supported: None, log, arcsinh."
+                )
+        return torch.stack(channels, dim=1)
+
+    @staticmethod
+    def _inverse_feature_channel_for_physics(
+        channel: torch.Tensor,
+        dataset,
+        channel_index: int,
+    ) -> torch.Tensor:
+        """Map one normalized/prescaled feature channel back to physical units."""
+        if dataset is None:
+            return channel
+
+        out = channel
+        if bool(getattr(dataset, "scaler_features", False)):
+            mean = getattr(dataset, "features_mean", None)
+            std = getattr(dataset, "features_std", None)
+            if mean is not None and std is not None:
+                mean_t = torch.as_tensor(mean[channel_index], dtype=channel.dtype, device=channel.device)
+                std_t = torch.as_tensor(std[channel_index], dtype=channel.dtype, device=channel.device)
+                out = out * std_t + mean_t
+
+        prescalers = getattr(dataset, "prescaler_features", None)
+        if prescalers is None or prescalers is False or channel_index >= len(prescalers):
+            return out
+
+        func = prescalers[channel_index]
+        name = getattr(func, "__name__", func if isinstance(func, str) else "")
+        if func is None:
+            return out
+        if name == "log":
+            return torch.exp(out)
+        if name == "arcsinh":
+            return torch.sinh(out)
+        raise ValueError(
+            f"Unsupported feature prescaler '{name}' for physics loss. "
+            "Supported: None, log, arcsinh."
+        )
+
+    @staticmethod
+    def _compute_eamb_from_pressure(
+        pressure: torch.Tensor,
+        rho: torch.Tensor,
+        channel_map: dict[str, int],
+        dx: float,
+        dy: float,
+        small: float,
+        rho_abs: bool,
+    ) -> torch.Tensor:
+        """Build E_amb proxy from pressure channels using Menura formulas.
+
+        Sign convention note
+        --------------------
+        ECsim stores electron density as a **negative** number (charge-sign
+        convention).  Menura's ``extract_features_kernel`` negates
+        ``density_b`` before feeding it to the NN so the runtime feature is
+        **positive**.  Offline ``plasma.py::get_Ohm`` achieves the same result
+        by dividing by ``(-rho_e)``.  Training batches drawn from ECsim HDF5
+        files therefore carry a **negative** ``rho_e`` feature.
+
+        ``rho_abs=True`` (default) takes ``|rho|`` before forming the
+        denominator, making this method convention-agnostic and consistent with
+        both the Menura runtime path and the offline diagnostic.  Set
+        ``rho_abs=False`` only when rho is guaranteed to be positive.
+        """
+        pxx = pressure[:, channel_map["Pxx"], ...]
+        pxy = pressure[:, channel_map["Pxy"], ...]
+        pxz = pressure[:, channel_map["Pxz"], ...]
+        pyy = pressure[:, channel_map["Pyy"], ...]
+        pyz = pressure[:, channel_map["Pyz"], ...]
+
+        dpxx_dx, _ = ClosureLitModule._fd4_derivatives_2d(pxx, dx, dy)
+        _, dpxy_dy = ClosureLitModule._fd4_derivatives_2d(pxy, dx, dy)
+        dpxy_dx, _ = ClosureLitModule._fd4_derivatives_2d(pxy, dx, dy)
+        _, dpyy_dy = ClosureLitModule._fd4_derivatives_2d(pyy, dx, dy)
+        dpxz_dx, _ = ClosureLitModule._fd4_derivatives_2d(pxz, dx, dy)
+        _, dpyz_dy = ClosureLitModule._fd4_derivatives_2d(pyz, dx, dy)
+
+        rho_inner = rho[:, 2:-2, 2:-2]
+        rho_denom = rho_inner.abs() if rho_abs else rho_inner
+        rho_denom = rho_denom + small
+
+        epx = -(dpxx_dx + dpxy_dy) / rho_denom
+        epy = -(dpxy_dx + dpyy_dy) / rho_denom
+        epz = -(dpxz_dx + dpyz_dy) / rho_denom
+        return torch.stack([epx, epy, epz], dim=1)
+
+    def _eamb_proxy_loss(self, features: torch.Tensor, prediction: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """MSE between E_amb proxies derived from predicted and target pressures."""
+        if prediction.ndim != 4 or targets.ndim != 4 or features.ndim != 4:
+            self._warn_once("Skipping E_amb loss: expected 4D tensors [B,C,H,W].")
+            return prediction.new_zeros(())
+        if prediction.shape[1] < 6 or targets.shape[1] < 6:
+            self._warn_once("Skipping E_amb loss: requires at least six pressure channels.")
+            return prediction.new_zeros(())
+        if prediction.shape[-2] < 5 or prediction.shape[-1] < 5:
+            self._warn_once("Skipping E_amb loss: need H,W >= 5 for fourth-order stencil.")
+            return prediction.new_zeros(())
+
+        channel_map, rho_index = self._resolve_physics_channel_indices(features, prediction)
+        if channel_map is None or rho_index is None:
+            return prediction.new_zeros(())
+
+        dataset = self._get_physics_dataset()
+        prediction_phys = self._inverse_targets_for_physics(prediction, dataset)
+        targets_phys = self._inverse_targets_for_physics(targets, dataset)
+        rho = self._inverse_feature_channel_for_physics(features[:, rho_index, ...], dataset, rho_index)
+        e_pred = self._compute_eamb_from_pressure(
+            prediction_phys,
+            rho,
+            channel_map,
+            dx=float(self.hparams.physics_dx),
+            dy=float(self.hparams.physics_dy),
+            small=float(self.hparams.physics_small),
+            rho_abs=bool(self.hparams.physics_rho_abs),
+        )
+        e_targ = self._compute_eamb_from_pressure(
+            targets_phys,
+            rho,
+            channel_map,
+            dx=float(self.hparams.physics_dx),
+            dy=float(self.hparams.physics_dy),
+            small=float(self.hparams.physics_small),
+            rho_abs=bool(self.hparams.physics_rho_abs),
+        )
+        return self._physics_mse(e_pred, e_targ)
+
+    def _resolve_physics_channel_indices(
+        self,
+        features: torch.Tensor,
+        prediction: torch.Tensor,
+    ) -> tuple[dict[str, int] | None, int | None]:
+        """Infer pressure/rho channel indices from datamodule metadata or fallbacks."""
+        feature_names = None
+        target_names = None
+        # Lightning's .trainer property raises RuntimeError when no Trainer is
+        # attached (e.g. during unit tests or standalone inference). Catch it.
+        try:
+            trainer = self.trainer
+        except RuntimeError:
+            trainer = None
+        datamodule = getattr(trainer, "datamodule", None) if trainer is not None else None
+
+        if datamodule is not None:
+            dm_hp = getattr(datamodule, "hparams", {})
+            feature_names = dm_hp.get("feature_channel_names")
+            target_names = dm_hp.get("target_channel_names")
+            dataset = getattr(datamodule, "train_dataset", None)
+            if feature_names is None and dataset is not None:
+                feature_names = getattr(dataset, "request_features", None)
+            if target_names is None and dataset is not None:
+                target_names = getattr(dataset, "request_targets", None)
+
+        channel_map = None
+        if target_names:
+            short_to_full = {
+                "Pxx": "Pxx",
+                "Pxy": "Pxy",
+                "Pxz": "Pxz",
+                "Pyy": "Pyy",
+                "Pyz": "Pyz",
+            }
+            lookup = {name.split("_")[0]: i for i, name in enumerate(target_names)}
+            if all(key in lookup for key in short_to_full.values()):
+                channel_map = {
+                    "Pxx": lookup["Pxx"],
+                    "Pxy": lookup["Pxy"],
+                    "Pxz": lookup["Pxz"],
+                    "Pyy": lookup["Pyy"],
+                    "Pyz": lookup["Pyz"],
+                }
+
+        # Closure default target ordering fallback: Pxx, Pxy, Pxz, Pyy, Pyz, Pzz.
+        if channel_map is None and prediction.shape[1] >= 5:
+            channel_map = {"Pxx": 0, "Pxy": 1, "Pxz": 2, "Pyy": 3, "Pyz": 4}
+
+        rho_index = None
+        if feature_names:
+            for i, name in enumerate(feature_names):
+                if name.split("_")[0] == "rho":
+                    rho_index = i
+                    break
+
+        # Closure default feature ordering fallback places rho_e first.
+        if rho_index is None and features.shape[1] > 0:
+            rho_index = 0
+
+        if channel_map is None:
+            self._warn_once("Skipping E_amb loss: could not infer pressure channel indices.")
+        if rho_index is None:
+            self._warn_once("Skipping E_amb loss: could not infer rho channel index.")
+
+        return channel_map, rho_index
+
+    def _warn_once(self, message: str) -> None:
+        """Emit each physics warning at most once per module instance."""
+        if message in self._physics_warned_messages:
+            return
+        self._physics_warned_messages.add(message)
+        _logger.warning(message)
 
     @staticmethod
     def _build_metric(spec) -> torch.nn.Module:
