@@ -25,6 +25,7 @@ __all__ = [
     "parse_score",
     "plot_pred_targets",
     "pred_ground_targets",
+    "pred_pressure_gradients_jvp",
     "pred_unnormalize",
     "prediction2data",
     "set_nested_config",
@@ -292,6 +293,9 @@ def normalize_input(*args: Any, **kwargs: Any) -> Any:
 
 def pred_unnormalize(*args: Any, **kwargs: Any) -> Any:
     return _lazy_import("closure.evaluation", "pred_unnormalize")(*args, **kwargs)
+
+def pred_pressure_gradients_jvp(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_import("closure.evaluation", "pred_pressure_gradients_jvp")(*args, **kwargs)
 
 unnormalize_output = pred_unnormalize  # backward compat alias
 

@@ -20,6 +20,7 @@ __all__ = [
     "transform_targets",
     "normalize_input",
     "pred_unnormalize",
+    "pred_pressure_gradients_jvp",
     "unnormalize_output",
     "prediction2data",
     "compare_runs",
@@ -532,6 +533,243 @@ def pred_unnormalize(data, test_features, model, dataset, target_channels=None,
         else:
             if key in data:
                 data[key] = prediction_scaled[:, i, ...].numpy().transpose([1, 2, 0])
+
+
+def _torch_periodic_highdiff(
+    tensor: torch.Tensor,
+    spacing: float,
+    axis: int,
+    coeff: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Fourth-order periodic derivative (same stencil as plasma.highdiff)."""
+    if coeff is None:
+        coeff = tensor.new_tensor([-1.0, 8.0, 0.0, -8.0, 1.0]) / 12.0
+    else:
+        coeff = coeff.to(device=tensor.device, dtype=tensor.dtype)
+
+    out = torch.zeros_like(tensor)
+    for c, shift in zip(coeff, (-2, -1, 0, 1, 2)):
+        out = out + c * torch.roll(tensor, shifts=shift, dims=axis)
+    return out / spacing
+
+
+def _inverse_target_scaling_and_derivative(
+    prediction: torch.Tensor,
+    derivative: torch.Tensor,
+    dataset,
+    target_indices: list[int],
+    scaler_targets: bool,
+    prescaler_targets,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Map normalized targets and directional derivatives to physical space."""
+    if scaler_targets:
+        std = torch.as_tensor(
+            dataset.targets_std[target_indices],
+            dtype=prediction.dtype,
+            device=prediction.device,
+        ).reshape(1, -1, 1, 1)
+        mean = torch.as_tensor(
+            dataset.targets_mean[target_indices],
+            dtype=prediction.dtype,
+            device=prediction.device,
+        ).reshape(1, -1, 1, 1)
+        prediction_lin = prediction * std + mean
+        derivative_lin = derivative * std
+    else:
+        prediction_lin = prediction
+        derivative_lin = derivative
+
+    prediction_phys = prediction_lin.clone()
+    derivative_phys = derivative_lin.clone()
+
+    if prescaler_targets is not None and prescaler_targets is not False:
+        for channel, target_idx in enumerate(target_indices):
+            func = dataset.prescaler_targets[target_idx]
+            if func is None:
+                continue
+            name = getattr(func, "__name__", "")
+            if name == "log":
+                prediction_phys[:, channel] = torch.exp(prediction_lin[:, channel])
+                derivative_phys[:, channel] = prediction_phys[:, channel] * derivative_lin[:, channel]
+            elif name == "arcsinh":
+                prediction_phys[:, channel] = torch.sinh(prediction_lin[:, channel])
+                derivative_phys[:, channel] = torch.cosh(prediction_lin[:, channel]) * derivative_lin[:, channel]
+            else:
+                raise ValueError(
+                    f"Unsupported target prescaler '{name}' for channel {target_idx}. "
+                    "Supported: None, log, arcsinh."
+                )
+
+    return prediction_phys, derivative_phys
+
+
+def pred_pressure_gradients_jvp(
+    data: dict,
+    test_features: torch.Tensor,
+    model,
+    dataset,
+    x,
+    y,
+    species: str = "e",
+    target_channels: list[int] | None = None,
+    coeff: np.ndarray | torch.Tensor | None = None,
+    small: float = 1e-10,
+    scaler_targets=None,
+    prescaler_targets=None,
+    store_in_data: bool = False,
+) -> dict[str, Any]:
+    """Predict pressure fields and compute JVP-based spatial derivatives.
+
+    The function computes directional derivatives of model outputs via
+    chain rule with JVP:
+      dP/dx = J_f(z) @ dz/dx,
+      dP/dy = J_f(z) @ dz/dy,
+    where ``z`` is the normalized feature tensor and ``f`` is the network.
+
+    Derivatives are returned in physical target units after undoing
+    normalization/prescaling, and optional EP terms are computed using
+    provided density ``rho[species]``.
+
+    Notes
+    -----
+    - Requires non-flatten spatial tensors (``dataset.flatten`` must be False).
+    - Uses periodic fourth-order finite differences for ``dz/dx`` and ``dz/dy``.
+        - Does not modify ``data`` unless ``store_in_data=True``.
+        - When ``store_in_data=True``, predicted channels are written back
+            similarly to :func:`pred_unnormalize`.
+    """
+    if getattr(dataset, "flatten", False):
+        raise ValueError("pred_pressure_gradients_jvp requires dataset.flatten=False (spatial tensors).")
+
+    z = test_features.to(model.device)
+    if z.ndim != 4:
+        raise ValueError(f"Expected test_features with shape (nt, nfeat, nx, ny), got {tuple(z.shape)}")
+
+    dx = float(x[1] - x[0])
+    dy = float(y[1] - y[0])
+
+    coeff_tensor = None
+    if coeff is not None:
+        coeff_tensor = torch.as_tensor(coeff, dtype=z.dtype, device=z.device).reshape(-1)
+        if coeff_tensor.numel() != 5:
+            raise ValueError("coeff must have 5 entries for the fourth-order stencil")
+
+    dz_dx = _torch_periodic_highdiff(z, spacing=dx, axis=2, coeff=coeff_tensor)
+    dz_dy = _torch_periodic_highdiff(z, spacing=dy, axis=3, coeff=coeff_tensor)
+
+    model.eval()
+    prediction_norm, dnorm_dx = torch.autograd.functional.jvp(
+        lambda inp: model(inp),
+        z,
+        dz_dx,
+        create_graph=False,
+        strict=False,
+    )
+    _, dnorm_dy = torch.autograd.functional.jvp(
+        lambda inp: model(inp),
+        z,
+        dz_dy,
+        create_graph=False,
+        strict=False,
+    )
+
+    if target_channels is None:
+        target_indices = list(range(len(dataset.request_targets)))
+    else:
+        target_indices = list(target_channels)
+
+    if scaler_targets is None:
+        scaler_targets = dataset.scaler_targets
+    if prescaler_targets is None:
+        prescaler_targets = dataset.prescaler_targets
+
+    prediction_sel = prediction_norm[:, target_indices]
+    dnorm_dx_sel = dnorm_dx[:, target_indices]
+    dnorm_dy_sel = dnorm_dy[:, target_indices]
+
+    prediction_phys, dpdx_phys = _inverse_target_scaling_and_derivative(
+        prediction_sel,
+        dnorm_dx_sel,
+        dataset,
+        target_indices,
+        scaler_targets=bool(scaler_targets),
+        prescaler_targets=prescaler_targets,
+    )
+    _, dpdy_phys = _inverse_target_scaling_and_derivative(
+        prediction_sel,
+        dnorm_dy_sel,
+        dataset,
+        target_indices,
+        scaler_targets=bool(scaler_targets),
+        prescaler_targets=prescaler_targets,
+    )
+
+    prediction_np = prediction_phys.detach().cpu().numpy()
+    dpdx_np = dpdx_phys.detach().cpu().numpy()
+    dpdy_np = dpdy_phys.detach().cpu().numpy()
+
+    target_names = [dataset.request_targets[i] for i in target_indices]
+    result: dict[str, Any] = {
+        "target_indices": target_indices,
+        "target_names": target_names,
+        "prediction": {},
+        "dPdx": {},
+        "dPdy": {},
+    }
+
+    comp_index: dict[str, int] = {}
+    for local_i, target_name in enumerate(target_names):
+        field_name = target_name
+        species_name = None
+        if "_" in target_name:
+            field_name, species_name = target_name.split("_", 1)
+
+        field = prediction_np[:, local_i, ...].transpose(1, 2, 0)
+        dfdx = dpdx_np[:, local_i, ...].transpose(1, 2, 0)
+        dfdy = dpdy_np[:, local_i, ...].transpose(1, 2, 0)
+
+        result["prediction"][target_name] = field
+        result["dPdx"][target_name] = dfdx
+        result["dPdy"][target_name] = dfdy
+
+        if species_name == species:
+            comp_index[field_name] = local_i
+
+        if store_in_data and species_name is not None and field_name in data and species_name in data[field_name]:
+            data[field_name][species_name] = field
+
+    required = ["Pxx", "Pxy", "Pyy", "Pxz", "Pyz"]
+    has_required = all(name in comp_index for name in required)
+    has_rho = "rho" in data and species in data["rho"]
+    if has_required and has_rho:
+        rho = np.asarray(data["rho"][species])
+        denom = -rho + small
+
+        dPxxdx = dpdx_np[:, comp_index["Pxx"], ...].transpose(1, 2, 0)
+        dPxydy = dpdy_np[:, comp_index["Pxy"], ...].transpose(1, 2, 0)
+        dPxydx = dpdx_np[:, comp_index["Pxy"], ...].transpose(1, 2, 0)
+        dPyydy = dpdy_np[:, comp_index["Pyy"], ...].transpose(1, 2, 0)
+        dPxzdx = dpdx_np[:, comp_index["Pxz"], ...].transpose(1, 2, 0)
+        dPyzdy = dpdy_np[:, comp_index["Pyz"], ...].transpose(1, 2, 0)
+
+        epx = -(dPxxdx + dPxydy) / denom
+        epy = -(dPxydx + dPyydy) / denom
+        epz = -(dPxzdx + dPyzdy) / denom
+        result["EP_autodiff"] = {"EPx": epx, "EPy": epy, "EPz": epz}
+
+        if store_in_data:
+            data["EPx_autodiff"] = epx
+            data["EPy_autodiff"] = epy
+            data["EPz_autodiff"] = epz
+
+            data["dPxxdx_autodiff"] = dPxxdx
+            data["dPxydy_autodiff"] = dPxydy
+            data["dPxydx_autodiff"] = dPxydx
+            data["dPyydy_autodiff"] = dPyydy
+            data["dPxzdx_autodiff"] = dPxzdx
+            data["dPyzdy_autodiff"] = dPyzdy
+
+    return result
 
 
 # Backward-compatible alias

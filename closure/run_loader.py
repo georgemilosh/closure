@@ -22,6 +22,7 @@ import importlib
 import logging
 import os
 import pickle
+import copy
 from pathlib import Path
 from typing import Any, Optional
 
@@ -330,6 +331,82 @@ class RunLoader:
             test_features=self.dataset.features,
         )
         return gt, pred
+
+    def predict_pressure_gradients(
+        self,
+        data: dict,
+        x,
+        y,
+        species: str = "e",
+        test_features=None,
+        alfven_experiment: str | None = None,
+        target_channels: Optional[list[int]] = None,
+        coeff=None,
+        small: float = 1e-10,
+        store_in_data: bool = False,
+    ) -> dict[str, Any]:
+        """Predict pressure and compute JVP-based spatial derivatives.
+
+        This method computes directional derivatives through the network using
+        chain rule with JVP, then builds EP terms from pressure derivatives and
+        provided ``rho[species]`` in *data*.
+
+        Parameters
+        ----------
+        data : dict
+            Simulation data dict. Not modified unless ``store_in_data`` is True.
+        x, y : array-like
+            1D spatial coordinate arrays.
+        species : str
+            Species suffix used for pressure channels and density (default: ``"e"``).
+        test_features : torch.Tensor or None
+            Precomputed normalized features ``(nt, nfeat, nx, ny)``. If None,
+            features are built with :func:`closure.evaluation.normalize_input`.
+        alfven_experiment : str or None
+            Optional experiment path passed to ``normalize_input`` when
+            ``test_features`` is None.
+        target_channels : list[int] or None
+            Optional subset of target channels. Defaults to loader target subset.
+        coeff : array-like or None
+            Optional 5-point derivative stencil coefficients.
+        small : float
+            Stabilizer used in EP denominator ``(-rho + small)``.
+        store_in_data : bool
+            Whether to write predictions/diagnostics back to *data*.
+
+        Returns
+        -------
+        dict
+            Dictionary with predicted targets, ``dPdx``, ``dPdy``, and EP terms.
+        """
+        from closure.evaluation import normalize_input, pred_pressure_gradients_jvp
+
+        if test_features is None:
+            # normalize_input applies Alfvén conversion in-place; build features from
+            # a copy so we do not mutate the caller's diagnostic dictionary.
+            data_for_features = copy.deepcopy(data)
+            test_features = normalize_input(
+                data_for_features,
+                self.dataset,
+                alfven_experiment=alfven_experiment,
+            )
+
+        if target_channels is None:
+            target_channels = self.target_channels
+
+        return pred_pressure_gradients_jvp(
+            data=data,
+            test_features=test_features,
+            model=self.model,
+            dataset=self.dataset,
+            x=x,
+            y=y,
+            species=species,
+            target_channels=target_channels,
+            coeff=coeff,
+            small=small,
+            store_in_data=store_in_data,
+        )
 
     # ------------------------------------------------------------------
     # Metrics
