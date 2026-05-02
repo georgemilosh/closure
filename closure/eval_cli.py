@@ -246,28 +246,51 @@ def _print_config_summary(run: RunLoader) -> None:
 def _save_history_plot(run: RunLoader, out_img_dir: Path) -> None:
     history = run.history()
     lr_cols = [col for col in history.columns if col.startswith("lr-")]
-    n_panels = 1 + (1 if lr_cols else 0)
 
-    fig, axes = plt.subplots(1, n_panels, figsize=(14, 4))
+    physics_val_cols = [c for c in ["val_loss_base", "val_loss_gradp", "val_loss_eamb"] if c in history.columns]
+    physics_scale_col = "val_loss_physics_scale" if "val_loss_physics_scale" in history.columns else None
+    has_physics = bool(physics_val_cols)
+    n_panels = 1 + (1 if has_physics else 0) + (1 if lr_cols else 0)
+
+    fig, axes = plt.subplots(1, n_panels, figsize=(7 * n_panels, 4))
     if n_panels == 1:
         axes = [axes]
 
-    axes[0].plot(history["epoch"], history["train_loss"], label="train_loss")
-    axes[0].plot(history["epoch"], history["val_loss"], label="val_loss")
-    axes[0].set_title("Loss vs epoch")
-    axes[0].set_xlabel("epoch")
-    axes[0].set_ylabel("loss")
-    axes[0].grid(alpha=0.3)
-    axes[0].legend()
+    panel = 0
+    axes[panel].plot(history["epoch"], history["train_loss"], label="train_loss")
+    axes[panel].plot(history["epoch"], history["val_loss"], label="val_loss")
+    axes[panel].set_title("Total loss vs epoch")
+    axes[panel].set_xlabel("epoch")
+    axes[panel].set_ylabel("loss")
+    axes[panel].grid(alpha=0.3)
+    axes[panel].legend()
+
+    if has_physics:
+        panel += 1
+        for col in physics_val_cols:
+            axes[panel].plot(history["epoch"], history[col], label=col)
+        axes[panel].set_title("Physics component losses (val)")
+        axes[panel].set_xlabel("epoch")
+        axes[panel].set_ylabel("relative loss")
+        axes[panel].grid(alpha=0.3)
+        if physics_scale_col:
+            ax2 = axes[panel].twinx()
+            ax2.plot(history["epoch"], history[physics_scale_col],
+                     color="grey", linestyle="--", alpha=0.6, label="physics_scale")
+            ax2.set_ylabel("physics_scale")
+            ax2.set_ylim(-0.05, 1.15)
+            ax2.legend(loc="lower right", fontsize=8)
+        axes[panel].legend(loc="upper right")
 
     if lr_cols:
+        panel += 1
         for col in lr_cols:
-            axes[1].plot(history["epoch"], history[col], label=col)
-        axes[1].set_title("Learning rate vs epoch")
-        axes[1].set_xlabel("epoch")
-        axes[1].set_ylabel("lr")
-        axes[1].grid(alpha=0.3)
-        axes[1].legend()
+            axes[panel].plot(history["epoch"], history[col], label=col)
+        axes[panel].set_title("Learning rate vs epoch")
+        axes[panel].set_xlabel("epoch")
+        axes[panel].set_ylabel("lr")
+        axes[panel].grid(alpha=0.3)
+        axes[panel].legend()
 
     fig.tight_layout()
     output_path = out_img_dir / "history.png"

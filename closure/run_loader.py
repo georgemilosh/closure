@@ -570,6 +570,23 @@ class RunLoader:
             )
             history = history.merge(lr_epoch, on="epoch", how="left")
 
+        # Attach physics-loss component columns if present
+        physics_cols = [
+            c for c in m.columns
+            if c in {
+                "train_loss_base", "val_loss_base",
+                "train_loss_gradp", "val_loss_gradp",
+                "train_loss_eamb", "val_loss_eamb",
+                "val_loss_physics_scale", "train_loss_physics_scale",
+            }
+        ]
+        for col in physics_cols:
+            col_epoch = (
+                m.dropna(subset=[col])[["epoch", col]]
+                .groupby("epoch", as_index=False).last()
+            )
+            history = history.merge(col_epoch, on="epoch", how="left")
+
         return history.reset_index(drop=True)
 
     def plot_history(self, figsize: tuple = (14, 4)):
@@ -584,28 +601,51 @@ class RunLoader:
 
         h = self.history()
         lr_cols = [c for c in h.columns if c.startswith("lr-")]
-        n_panels = 1 + (1 if lr_cols else 0)
+        physics_val_cols = [c for c in ["val_loss_base", "val_loss_gradp", "val_loss_eamb"] if c in h.columns]
+        physics_scale_col = "val_loss_physics_scale" if "val_loss_physics_scale" in h.columns else None
+        has_physics = bool(physics_val_cols)
+        n_panels = 1 + (1 if has_physics else 0) + (1 if lr_cols else 0)
+        fig_w = max(figsize[0], 7 * n_panels)
 
-        fig, axes = plt.subplots(1, n_panels, figsize=figsize)
+        fig, axes = plt.subplots(1, n_panels, figsize=(fig_w, figsize[1]))
         if n_panels == 1:
             axes = [axes]
 
-        axes[0].plot(h["epoch"], h["train_loss"], label="train_loss")
-        axes[0].plot(h["epoch"], h["val_loss"], label="val_loss")
-        axes[0].set_title("Loss vs epoch")
-        axes[0].set_xlabel("epoch")
-        axes[0].set_ylabel("loss")
-        axes[0].grid(alpha=0.3)
-        axes[0].legend()
+        panel = 0
+        axes[panel].plot(h["epoch"], h["train_loss"], label="train_loss")
+        axes[panel].plot(h["epoch"], h["val_loss"], label="val_loss")
+        axes[panel].set_title("Total loss vs epoch")
+        axes[panel].set_xlabel("epoch")
+        axes[panel].set_ylabel("loss")
+        axes[panel].grid(alpha=0.3)
+        axes[panel].legend()
+
+        if has_physics:
+            panel += 1
+            for col in physics_val_cols:
+                axes[panel].plot(h["epoch"], h[col], label=col)
+            axes[panel].set_title("Physics component losses (val)")
+            axes[panel].set_xlabel("epoch")
+            axes[panel].set_ylabel("relative loss")
+            axes[panel].grid(alpha=0.3)
+            if physics_scale_col:
+                ax2 = axes[panel].twinx()
+                ax2.plot(h["epoch"], h[physics_scale_col],
+                         color="grey", linestyle="--", alpha=0.6, label="physics_scale")
+                ax2.set_ylabel("physics_scale")
+                ax2.set_ylim(-0.05, 1.15)
+                ax2.legend(loc="lower right", fontsize=8)
+            axes[panel].legend(loc="upper right")
 
         if lr_cols:
+            panel += 1
             for col in lr_cols:
-                axes[1].plot(h["epoch"], h[col], label=col)
-            axes[1].set_title("Learning rate vs epoch")
-            axes[1].set_xlabel("epoch")
-            axes[1].set_ylabel("lr")
-            axes[1].grid(alpha=0.3)
-            axes[1].legend()
+                axes[panel].plot(h["epoch"], h[col], label=col)
+            axes[panel].set_title("Learning rate vs epoch")
+            axes[panel].set_xlabel("epoch")
+            axes[panel].set_ylabel("lr")
+            axes[panel].grid(alpha=0.3)
+            axes[panel].legend()
 
         plt.tight_layout()
         plt.show()
@@ -623,6 +663,19 @@ class RunLoader:
         result["final_epoch"] = int(final["epoch"])
         result["final_train_loss"] = float(final["train_loss"]) if not np.isnan(final["train_loss"]) else None
         result["final_val_loss"] = float(final["val_loss"]) if not np.isnan(final["val_loss"]) else None
+
+        # Physics-loss breakdown (present only in physics-regularised runs)
+        physics_cols = [
+            "val_loss_base", "val_loss_gradp", "val_loss_eamb",
+            "val_loss_physics_scale",
+        ]
+        for col in physics_cols:
+            if col in h.columns:
+                if not val_only.empty:
+                    result[f"best_{col}"] = float(val_only.loc[best_idx, col]) if col in val_only.columns and not np.isnan(val_only.loc[best_idx, col]) else None
+                final_val = final.get(col, float("nan"))
+                result[f"final_{col}"] = float(final_val) if not np.isnan(final_val) else None
+
         return result
 
     @classmethod
