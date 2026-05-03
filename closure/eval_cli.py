@@ -421,7 +421,12 @@ def _evaluate_single_run(
         if not args.skip_field_plots:
             targets = args.targets or list(run.dataset.request_targets)
             step = max(1, args.plot_step)
-            indices = list(range(0, run.dataset.targets.shape[0], step))
+            # Use the pre-flatten time dimension when available.
+            # For MLP runs, dataset.targets is flattened to pixel-level rows,
+            # which can be orders of magnitude larger than the number of
+            # physical snapshots and makes plotting appear stuck.
+            time_count = getattr(run.dataset, "targets_shape", run.dataset.targets.shape)[0]
+            indices = list(range(0, time_count, step))
             if args.max_plots is not None:
                 indices = indices[: max(0, args.max_plots)]
 
