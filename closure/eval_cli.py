@@ -195,8 +195,21 @@ def _is_complete_run_dir(path: Path) -> bool:
 
 
 def _candidate_run_dirs(run_root: Path) -> Iterable[Path]:
-    """Yield direct child directories sorted by name."""
-    return sorted(p for p in run_root.iterdir() if p.is_dir())
+    """Yield candidate run version directories sorted by name.
+
+    Supports both flat (run_root/version/) and two-level
+    (run_root/group/version/) layouts.  If any direct child of *run_root*
+    is a complete run directory the flat layout is assumed; otherwise each
+    direct child is treated as a group and its children are returned.
+    """
+    direct = sorted(p for p in run_root.iterdir() if p.is_dir())
+    if any(_is_complete_run_dir(p) for p in direct):
+        return direct
+    # Two-level layout: run_root/physics_tag/run_tag/
+    grandchildren: list[Path] = []
+    for group in direct:
+        grandchildren.extend(sorted(p for p in group.iterdir() if p.is_dir()))
+    return grandchildren
 
 
 def _resolve_eval_dirs(args: argparse.Namespace) -> tuple[list[Path], bool]:
