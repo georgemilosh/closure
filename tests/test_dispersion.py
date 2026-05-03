@@ -11,13 +11,18 @@ from closure.dispersion import (
     apply_closure_correction,
     build_dispersion_matrix,
     build_hall_mhd_operator,
+    closure_tensor_fourier_symbol_at_equilibrium,
     closure_tensor_jacobian_at_equilibrium,
     electron_pressure_tensor_to_electric_jacobian,
     fourier_mode_vector,
+    hall_mhd_k_vector,
     isotropic_electron_closure_electric_jacobian,
     linearize_spatial_model,
     linearize_spatial_model_2d,
     match_eigenbranches,
+    mode_indices_from_physical_wavenumber,
+    patch_domain_lengths_from_grid,
+    physical_wavenumber_from_mode_indices,
     project_fourier_jacobian,
     project_fourier_jacobian_2d,
     scan_dispersion_relation,
@@ -33,6 +38,34 @@ class TestFourierModeVector:
     def test_rejects_non_positive_grid(self):
         with pytest.raises(ValueError, match="positive"):
             fourier_mode_vector(0, 1)
+
+
+class TestFourierModeCalibration:
+    def test_patch_domain_lengths_use_simulation_cell_spacing(self):
+        lengths = patch_domain_lengths_from_grid(
+            patch_shape=(32, 16),
+            simulation_domain_lengths=(20.0, 10.0),
+            simulation_grid_shape=(512, 256),
+        )
+        np.testing.assert_allclose(lengths, (1.25, 0.625))
+
+    def test_mode_indices_and_physical_wavenumber_round_trip(self):
+        domain_lengths = (1.25, 2.5)
+        mode = (2, -3)
+        kvec = physical_wavenumber_from_mode_indices(mode, domain_lengths)
+
+        np.testing.assert_allclose(
+            kvec,
+            (2.0 * 2.0 * np.pi / 1.25, -3.0 * 2.0 * np.pi / 2.5, 0.0),
+        )
+        assert mode_indices_from_physical_wavenumber(kvec, domain_lengths, patch_shape=(32, 32)) == mode
+
+    def test_mode_indices_reject_patch_nyquist_exceedance(self):
+        domain_lengths = (1.0, 1.0)
+        kvec = physical_wavenumber_from_mode_indices((9, 0), domain_lengths)
+
+        with pytest.raises(ValueError, match="Nyquist"):
+            mode_indices_from_physical_wavenumber(kvec, domain_lengths, patch_shape=(16, 16))
 
 
 class TestProjectFourierJacobian:
@@ -214,6 +247,47 @@ class TestHallMHDOperator:
         expected_bz_rho = 2.5 * 2.0 * 3.0 / background.rho0
         np.testing.assert_allclose(operator[6, 0], expected_bz_rho)
 
+    def test_tensor_closure_uses_full_3d_pressure_divergence(self):
+        background = HallMHDBackground(rho0=2.0, B0=(1.0, 0.0, 0.25))
+        tensor_jac = np.zeros((6, 1), dtype=np.complex128)
+        tensor_jac[:, 0] = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+
+        closure = electron_pressure_tensor_to_electric_jacobian(
+            (0.5, -0.25, 0.75),
+            background,
+            tensor_jac,
+        )
+
+        expected = (-1j / background.rho0) * np.array(
+            [
+                0.5 * 1.0 - 0.25 * 2.0 + 0.75 * 3.0,
+                0.5 * 2.0 - 0.25 * 4.0 + 0.75 * 5.0,
+                0.5 * 3.0 - 0.25 * 5.0 + 0.75 * 6.0,
+            ]
+        )
+        np.testing.assert_allclose(closure[:, 0], expected)
+
+
+class TestHallMHDKVector:
+    def test_simulation_plane_geometry_has_zero_kz(self):
+        background = HallMHDBackground(rho0=1.0, B0=(-2.0, 0.5, 1.5))
+        kvec = hall_mhd_k_vector(background, 3.0, np.pi / 3, geometry="simulation_plane")
+
+        np.testing.assert_allclose(np.linalg.norm(kvec), 3.0)
+        np.testing.assert_allclose(kvec[2], 0.0)
+
+    def test_field_aligned_geometry_parallel_at_zero_angle(self):
+        background = HallMHDBackground(rho0=1.0, B0=(-2.0, 0.5, 1.5))
+        kvec = hall_mhd_k_vector(background, 3.0, 0.0, geometry="field_aligned")
+        b0 = np.asarray(background.B0, dtype=float)
+
+        np.testing.assert_allclose(kvec / np.linalg.norm(kvec), b0 / np.linalg.norm(b0))
+
+    def test_simulation_plane_requires_in_plane_field(self):
+        background = HallMHDBackground(rho0=1.0, B0=(0.0, 0.0, 1.0))
+        with pytest.raises(ValueError, match="x-y projection"):
+            hall_mhd_k_vector(background, 1.0, 0.0, geometry="simulation_plane")
+
 
 class TestProjectFourierJacobian2D:
     def test_diagonal_kernel_gives_constant_coefficient(self):
@@ -255,6 +329,13 @@ class _ToySpatialModel2D:
     def __call__(self, x):
         # x shape: (1, 2, nx, ny); x[:,c] has shape (1, nx, ny)
         # dims=1 → x-direction, dims=2 → y-direction in (1,nx,ny)
+        y0 = 2.0 * x[:, 0] - 0.5 * torch.roll(x[:, 1], shifts=1, dims=1)
+        y1 = -1.0 * x[:, 1] + 0.25 * torch.roll(x[:, 0], shifts=-1, dims=2)
+        return torch.stack([y0, y1], dim=1)
+
+
+class _ToySpatialModel2DModule(torch.nn.Module):
+    def forward(self, x):
         y0 = 2.0 * x[:, 0] - 0.5 * torch.roll(x[:, 1], shifts=1, dims=1)
         y1 = -1.0 * x[:, 1] + 0.25 * torch.roll(x[:, 0], shifts=-1, dims=2)
         return torch.stack([y0, y1], dim=1)
@@ -347,6 +428,58 @@ class TestClosureTensorJacobianAtEquilibrium:
             closure_tensor_jacobian_at_equilibrium(model, ds, [1.0, 2.0, 3.0])
 
 
+class TestClosureTensorFourierSymbolAtEquilibrium:
+    def test_recovers_projected_symbol_without_full_jacobian(self):
+        ds = _ToyDataset()
+        model = _ToySpatialModel2DModule()
+        eq = np.array([1.2, 0.6], dtype=float)
+        nx, ny = 8, 6
+
+        symbol, target_names, feature_names = closure_tensor_fourier_symbol_at_equilibrium(
+            model,
+            ds,
+            eq,
+            mode_indices=(1, 0),
+            patch_shape=(nx, ny),
+        )
+
+        normalized_symbol = np.array(
+            [
+                [2.0, -0.5 * np.exp(-2.0j * np.pi / nx)],
+                [0.25, -1.0],
+            ]
+        )
+        expected = np.diag(ds.targets_std) @ normalized_symbol @ np.diag(1.0 / ds.features_std)
+        np.testing.assert_allclose(symbol, expected, atol=1e-6)
+        assert target_names == ds.request_targets
+        assert feature_names == ds.request_features
+
+    def test_finite_difference_path_matches_jvp(self):
+        ds = _ToyDataset()
+        model = _ToySpatialModel2DModule()
+        eq = np.array([1.2, 0.6], dtype=float)
+
+        symbol_jvp, _, _ = closure_tensor_fourier_symbol_at_equilibrium(
+            model,
+            ds,
+            eq,
+            mode_indices=(0, 1),
+            patch_shape=(6, 6),
+            method="jvp",
+        )
+        symbol_fd, _, _ = closure_tensor_fourier_symbol_at_equilibrium(
+            model,
+            ds,
+            eq,
+            mode_indices=(0, 1),
+            patch_shape=(6, 6),
+            method="finite_difference",
+            finite_difference_eps=1e-3,
+        )
+
+        np.testing.assert_allclose(symbol_fd, symbol_jvp, atol=1e-4)
+
+
 class TestScanDispersionRelation:
     def test_returns_correct_shape(self):
         background = HallMHDBackground(rho0=1.0, B0=(1.0, 0.0, 0.0))
@@ -363,6 +496,23 @@ class TestScanDispersionRelation:
         background = HallMHDBackground(rho0=2.0, B0=(1.0, 0.0, 0.0))
         result = scan_dispersion_relation(background, [0.0], [0.0])
         np.testing.assert_allclose(result["eigenvalues"][0, 0], 0.0)
+
+    def test_simulation_plane_geometry_passes_kz_zero_to_closure(self):
+        background = HallMHDBackground(rho0=1.0, B0=(1.0, 0.0, 2.0))
+        seen = []
+
+        def closure_fn(kvec, bg):
+            seen.append(np.asarray(kvec, dtype=float))
+            return np.zeros((3, 7), dtype=np.complex128)
+
+        scan_dispersion_relation(
+            background,
+            [1.0],
+            [0.4],
+            closure_fn=closure_fn,
+            geometry="simulation_plane",
+        )
+        np.testing.assert_allclose(seen[0][2], 0.0)
 
     def test_closure_fn_changes_eigenvalues(self):
         background = HallMHDBackground(rho0=1.0, B0=(1.0, 0.0, 0.0))

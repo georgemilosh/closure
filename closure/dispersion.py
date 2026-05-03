@@ -51,7 +51,7 @@ class HallMHDBackground:
 
     rho0: float
     u0: tuple[float, float, float] = (0.0, 0.0, 0.0)
-    B0: tuple[float, float, float] = (1.0, 0.0, 0.0)
+    B0: tuple[float, float, float] = (1.0, 0.0, 0.0) # default B0 along x for Harris sheet, but this is arbitrary
 
     def __post_init__(self):
         if self.rho0 <= 0.0:
@@ -98,8 +98,7 @@ def electron_pressure_tensor_to_electric_jacobian(
     Parameters
     ----------
     kvec : array-like, shape ``(2,)`` or ``(3,)``
-        Fourier wavevector. Only the in-plane ``kx`` and ``ky`` components are
-        used by the current 2D reduction.
+        Fourier wavevector. A length-2 vector is interpreted as ``(kx, ky, 0)``.
     background : HallMHDBackground
         Uniform Hall-MHD equilibrium.
     tensor_jacobian : ndarray, shape ``(6, n_state)``
@@ -107,24 +106,95 @@ def electron_pressure_tensor_to_electric_jacobian(
         respect to the reduced primitive state. The component order is
         ``(Pxx, Pxy, Pxz, Pyy, Pyz, Pzz)``.
 
+        In the Hall-MHD notebook ``n_state == 7`` and the columns are
+        ``(rho, ux, uy, uz, Bx, By, Bz)``. Electric-field components are not
+        columns because this reduced model treats ``E`` as an algebraic Ohm-law
+        quantity rather than an evolved primitive variable.
+
     Returns
     -------
     ndarray
         Electric-field Jacobian with shape ``(3, n_state)`` for the closure
         term ``-(\nabla \cdot P_e) / rho0``.
+
+    Notes
+    -----
+    For a 3D wavevector ``(kx, ky, kz)`` the row mapping is
+    ``Ex <- kx * dPxx + ky * dPxy + kz * dPxz``,
+    ``Ey <- kx * dPxy + ky * dPyy + kz * dPyz``, and
+    ``Ez <- kx * dPxz + ky * dPyz + kz * dPzz``, multiplied by ``-i / rho0``.
+    Simulation-plane scans recover the previous 2D expression by setting
+    ``kz = 0``.
     """
     tensor = np.asarray(tensor_jacobian, dtype=np.complex128)
     if tensor.ndim != 2 or tensor.shape[0] != 6:
         raise ValueError("tensor_jacobian must have shape (6, n_state)")
 
     k3 = _as_3vector(kvec, name="kvec")
-    kx, ky = k3[0], k3[1]
+    kx, ky, kz = k3
     scale = -1j / float(background.rho0)
     e_jac = np.zeros((3, tensor.shape[1]), dtype=np.complex128)
-    e_jac[0] = scale * (kx * tensor[0] + ky * tensor[1])
-    e_jac[1] = scale * (kx * tensor[1] + ky * tensor[3])
-    e_jac[2] = scale * (kx * tensor[2] + ky * tensor[4])
+    e_jac[0] = scale * (kx * tensor[0] + ky * tensor[1] + kz * tensor[2])
+    e_jac[1] = scale * (kx * tensor[1] + ky * tensor[3] + kz * tensor[4])
+    e_jac[2] = scale * (kx * tensor[2] + ky * tensor[4] + kz * tensor[5])
     return e_jac
+
+
+def hall_mhd_k_vector(
+    background: HallMHDBackground,
+    k_magnitude: float,
+    theta: float,
+    *,
+    geometry: str = "field_aligned",
+) -> np.ndarray:
+    r"""Construct a Hall-MHD wavevector for a requested scan geometry.
+
+    Parameters
+    ----------
+    background : HallMHDBackground
+        Uniform Hall-MHD equilibrium.
+    k_magnitude : float
+        Desired wavevector magnitude.
+    theta : float
+        Propagation angle in radians.
+    geometry : {``"field_aligned"``, ``"simulation_plane"``}
+        ``"field_aligned"`` measures ``theta`` from the full 3D background
+        magnetic field. ``"simulation_plane"`` constrains ``kz = 0`` and
+        measures ``theta`` from the in-plane projection of ``B0``.
+
+    Returns
+    -------
+    ndarray, shape ``(3,)``
+        Wavevector in the global ``(x, y, z)`` basis.
+    """
+    k_mag = float(k_magnitude)
+    b0 = np.asarray(background.B0, dtype=float)
+    mode = geometry.lower().replace("-", "_")
+
+    if mode in {"field_aligned", "full_b0", "full"}:
+        b0_norm = np.linalg.norm(b0)
+        if b0_norm <= 0.0:
+            raise ValueError("background.B0 must be non-zero for field_aligned geometry")
+        b0_hat = b0 / b0_norm
+        seed = np.array([0.0, 1.0, 0.0])
+        if abs(np.dot(b0_hat, seed)) > 0.99:
+            seed = np.array([1.0, 0.0, 0.0])
+        b0_perp = seed - np.dot(seed, b0_hat) * b0_hat
+        b0_perp /= np.linalg.norm(b0_perp) + 1e-40
+        return k_mag * (np.cos(theta) * b0_hat + np.sin(theta) * b0_perp)
+
+    if mode in {"simulation_plane", "xy", "in_plane"}:
+        b0_xy = np.array([b0[0], b0[1], 0.0], dtype=float)
+        b0_xy_norm = np.linalg.norm(b0_xy)
+        if b0_xy_norm <= 0.0:
+            raise ValueError(
+                "background.B0 must have a non-zero x-y projection for simulation_plane geometry"
+            )
+        b0_hat = b0_xy / b0_xy_norm
+        b0_perp = np.array([-b0_hat[1], b0_hat[0], 0.0], dtype=float)
+        return k_mag * (np.cos(theta) * b0_hat + np.sin(theta) * b0_perp)
+
+    raise ValueError("geometry must be 'field_aligned' or 'simulation_plane'")
 
 
 def build_hall_mhd_operator(
@@ -197,6 +267,83 @@ def fourier_mode_vector(n_grid: int, k_index: int, *, dtype=np.complex128) -> np
     x_idx = np.arange(n_grid, dtype=float)
     phase = 2.0j * np.pi * float(k_index) * x_idx / float(n_grid)
     return np.exp(phase).astype(dtype, copy=False)
+
+
+def patch_domain_lengths_from_grid(
+    patch_shape: tuple[int, int],
+    simulation_domain_lengths: tuple[float, float],
+    simulation_grid_shape: tuple[int, int],
+) -> tuple[float, float]:
+    """Return the physical size of a 2D patch from simulation grid metadata."""
+    if len(patch_shape) != 2 or len(simulation_domain_lengths) != 2 or len(simulation_grid_shape) != 2:
+        raise ValueError("patch_shape, simulation_domain_lengths, and simulation_grid_shape must be length-2")
+
+    patch_nx, patch_ny = (int(patch_shape[0]), int(patch_shape[1]))
+    domain_lx, domain_ly = (float(simulation_domain_lengths[0]), float(simulation_domain_lengths[1]))
+    grid_nx, grid_ny = (int(simulation_grid_shape[0]), int(simulation_grid_shape[1]))
+    if patch_nx <= 0 or patch_ny <= 0:
+        raise ValueError("patch_shape entries must be positive")
+    if domain_lx <= 0.0 or domain_ly <= 0.0:
+        raise ValueError("simulation_domain_lengths entries must be positive")
+    if grid_nx <= 0 or grid_ny <= 0:
+        raise ValueError("simulation_grid_shape entries must be positive")
+
+    return (patch_nx * domain_lx / grid_nx, patch_ny * domain_ly / grid_ny)
+
+
+def physical_wavenumber_from_mode_indices(
+    mode_indices: tuple[int, int],
+    domain_lengths: tuple[float, float],
+) -> np.ndarray:
+    r"""Map integer patch Fourier indices to a physical simulation-plane wavevector.
+
+    The Fourier basis vector uses ``exp(2*pi*i*m*j/N)``. If the physical patch
+    length is ``L_patch``, the corresponding wavenumber is ``k = 2*pi*m/L_patch``.
+    """
+    if len(mode_indices) != 2 or len(domain_lengths) != 2:
+        raise ValueError("mode_indices and domain_lengths must be length-2")
+
+    mx, my = (int(mode_indices[0]), int(mode_indices[1]))
+    lx, ly = (float(domain_lengths[0]), float(domain_lengths[1]))
+    if lx <= 0.0 or ly <= 0.0:
+        raise ValueError("domain_lengths entries must be positive")
+
+    return np.array([2.0 * np.pi * mx / lx, 2.0 * np.pi * my / ly, 0.0], dtype=float)
+
+
+def mode_indices_from_physical_wavenumber(
+    kvec: tuple[float, float] | tuple[float, float, float] | np.ndarray,
+    domain_lengths: tuple[float, float],
+    *,
+    patch_shape: tuple[int, int] | None = None,
+) -> tuple[int, int]:
+    r"""Map a physical simulation-plane wavevector to nearest patch Fourier indices.
+
+    This is the inverse of :func:`physical_wavenumber_from_mode_indices`, up to
+    nearest-integer rounding. Supplying ``patch_shape`` enables a Nyquist check.
+    """
+    k3 = _as_3vector(kvec, name="kvec")
+    if len(domain_lengths) != 2:
+        raise ValueError("domain_lengths must be length-2")
+    lx, ly = (float(domain_lengths[0]), float(domain_lengths[1]))
+    if lx <= 0.0 or ly <= 0.0:
+        raise ValueError("domain_lengths entries must be positive")
+
+    mx = int(np.rint(k3[0] * lx / (2.0 * np.pi)))
+    my = int(np.rint(k3[1] * ly / (2.0 * np.pi)))
+
+    if patch_shape is not None:
+        if len(patch_shape) != 2:
+            raise ValueError("patch_shape must be a length-2 tuple")
+        nx, ny = (int(patch_shape[0]), int(patch_shape[1]))
+        if nx <= 0 or ny <= 0:
+            raise ValueError("patch_shape entries must be positive")
+        if abs(mx) > nx // 2 or abs(my) > ny // 2:
+            raise ValueError(
+                f"mode {(mx, my)} exceeds the patch Nyquist range for patch_shape={patch_shape}"
+            )
+
+    return (mx, my)
 
 
 def project_fourier_jacobian_2d(
@@ -381,6 +528,211 @@ def linearize_spatial_model_2d(model, equilibrium_features) -> np.ndarray:
     return np.transpose(jac.detach().cpu().numpy(), (1, 2, 0, 3, 4, 5))
 
 
+def _prescaler_name(func) -> str:
+    return "" if func is None else getattr(func, "__name__", "")
+
+
+def _feature_prescaler_derivative(func, values) -> np.ndarray:
+    name = _prescaler_name(func)
+    arr = np.asarray(values, dtype=float)
+    if not name:
+        return np.ones_like(arr, dtype=float)
+    if name == "log":
+        return 1.0 / (arr + 1e-40)
+    if name == "arcsinh":
+        return 1.0 / np.sqrt(1.0 + arr**2)
+    raise ValueError(f"Unsupported feature prescaler '{name}'. Supported: None, log, arcsinh.")
+
+
+def _target_inverse_prescaler_derivative(func, values) -> np.ndarray:
+    name = _prescaler_name(func)
+    arr = np.asarray(values, dtype=float)
+    if not name:
+        return np.ones_like(arr, dtype=float)
+    if name == "log":
+        return np.exp(arr)
+    if name == "arcsinh":
+        return np.cosh(arr)
+    raise ValueError(f"Unsupported target prescaler '{name}'. Supported: None, log, arcsinh.")
+
+
+def _normalized_equilibrium_and_input_derivative(dataset, equilibrium_values):
+    eq = np.asarray(equilibrium_values, dtype=float).ravel()
+    n_feat = len(dataset.request_features)
+    if eq.shape != (n_feat,):
+        raise ValueError(
+            f"equilibrium_values must have shape ({n_feat},) to match "
+            f"dataset.request_features, got {eq.shape}"
+        )
+
+    eq_pre = eq.copy()
+    d_input = np.ones(n_feat, dtype=float)
+    for i, func in enumerate(dataset.prescaler_features or []):
+        if func is not None:
+            eq_pre[i] = func(float(eq[i]))
+            d_input[i] = _feature_prescaler_derivative(func, eq[i])
+
+    if dataset.scaler_features and dataset.features_mean is not None:
+        f_mean = np.asarray(dataset.features_mean, dtype=float).ravel()
+        f_std = np.asarray(dataset.features_std, dtype=float).ravel()
+        eq_norm = (eq_pre - f_mean) / (f_std + 1e-40)
+        d_input = d_input / (f_std + 1e-40)
+    else:
+        eq_norm = eq_pre.copy()
+
+    return eq, eq_norm, d_input
+
+
+def _target_output_derivative_field(dataset, y_norm_np: np.ndarray) -> np.ndarray:
+    n_target = len(dataset.request_targets)
+    if y_norm_np.shape[0] != n_target:
+        raise ValueError(
+            f"model returned {y_norm_np.shape[0]} targets, expected {n_target}"
+        )
+
+    if dataset.scaler_targets and dataset.targets_std is not None:
+        t_std = np.asarray(dataset.targets_std, dtype=float).reshape(n_target, 1, 1)
+        t_mean = np.asarray(dataset.targets_mean, dtype=float).reshape(n_target, 1, 1)
+        y_pre = y_norm_np * t_std + t_mean
+    else:
+        t_std = np.ones((n_target, 1, 1), dtype=float)
+        y_pre = y_norm_np.copy()
+
+    d_output = np.ones_like(y_pre, dtype=float)
+    for i, func in enumerate(dataset.prescaler_targets or []):
+        if func is not None:
+            d_output[i] = _target_inverse_prescaler_derivative(func, y_pre[i])
+    return d_output * t_std
+
+
+def closure_tensor_fourier_symbol_at_equilibrium(
+    model,
+    dataset,
+    equilibrium_values,
+    mode_indices,
+    *,
+    patch_shape: tuple[int, int] = (32, 32),
+    method: str = "jvp",
+    finite_difference_eps: float = 1e-4,
+) -> tuple[np.ndarray, list[str], list[str]]:
+    r"""Return the pressure-tensor Fourier symbol of a spatial closure.
+
+    The closure is evaluated around a homogeneous physical equilibrium. For each
+    input feature channel, this applies a unit-amplitude Fourier perturbation on
+    the periodic ``patch_shape`` grid, differentiates the model response, and
+    projects the output back onto the same mode. The result is the modal transfer
+    matrix :math:`\widehat{\delta P}(k) / \widehat{\delta f}(k)` in physical
+    units.
+
+    This helper is intended for convolutional or otherwise spatial closures. It
+    avoids materializing the full spatial Jacobian, whose memory scales like
+    ``nx**2 * ny**2 * n_in * n_out``.
+
+    Parameters
+    ----------
+    model : callable
+        Trained spatial model accepting ``(1, n_feat, nx, ny)`` and returning
+        ``(1, n_target, nx, ny)``.
+    dataset : DataFrameDataset
+        Dataset providing feature/target normalization and prescaler metadata.
+    equilibrium_values : array-like, shape ``(n_feat,)``
+        Physical feature values in ``dataset.request_features`` order.
+    mode_indices : tuple[int, int]
+        Integer Fourier mode indices ``(kx_index, ky_index)`` on the patch grid.
+    patch_shape : tuple[int, int]
+        Spatial patch size used for the modal perturbation.
+    method : {``"jvp"``, ``"finite_difference"``}
+        Directional-derivative method. ``"jvp"`` falls back to finite
+        differences if the model backend does not support JVP.
+    finite_difference_eps : float
+        Centered finite-difference amplitude in normalized-feature units.
+
+    Returns
+    -------
+    jac_phys : ndarray, shape ``(n_target, n_feat)``
+        Complex Fourier-symbol transfer matrix in physical units.
+    target_names, feature_names : list[str]
+        Channel names for rows and columns.
+    """
+    if torch is None:
+        raise ImportError("closure_tensor_fourier_symbol_at_equilibrium requires torch")
+
+    if len(patch_shape) != 2:
+        raise ValueError("patch_shape must be a length-2 tuple")
+    nx, ny = (int(patch_shape[0]), int(patch_shape[1]))
+    if nx <= 0 or ny <= 0:
+        raise ValueError("patch_shape entries must be positive")
+    kx_index, ky_index = (int(mode_indices[0]), int(mode_indices[1]))
+
+    _, eq_norm, d_input = _normalized_equilibrium_and_input_derivative(dataset, equilibrium_values)
+    n_feat = len(dataset.request_features)
+    n_target = len(dataset.request_targets)
+    if hasattr(model, "eval"):
+        model.eval()
+
+    z0 = torch.tensor(eq_norm, dtype=torch.float32).reshape(1, n_feat, 1, 1).expand(1, n_feat, nx, ny).clone()
+
+    with torch.no_grad():
+        y0_norm = model(z0)
+    if y0_norm.ndim != 4 or y0_norm.shape[0] != 1:
+        raise ValueError("model output must have shape (1, n_target, nx, ny)")
+    if y0_norm.shape[1] != n_target or y0_norm.shape[-2:] != (nx, ny):
+        raise ValueError(
+            f"model output must have shape (1, {n_target}, {nx}, {ny}), got {tuple(y0_norm.shape)}"
+        )
+
+    output_derivative = _target_output_derivative_field(dataset, y0_norm[0].detach().cpu().numpy())
+    e_kx = fourier_mode_vector(nx, kx_index)
+    e_ky = fourier_mode_vector(ny, ky_index)
+    mode = np.outer(e_kx, e_ky)
+    mode_real = torch.tensor(mode.real, dtype=z0.dtype).reshape(1, 1, nx, ny)
+    mode_imag = torch.tensor(mode.imag, dtype=z0.dtype).reshape(1, 1, nx, ny)
+    norm = float(nx * ny)
+
+    requested_method = method.lower().replace("-", "_")
+    if requested_method not in {"jvp", "finite_difference", "finite_difference_only"}:
+        raise ValueError("method must be 'jvp' or 'finite_difference'")
+
+    def model_fn(z):
+        return model(z)
+
+    def directional_output(tangent):
+        if requested_method == "jvp":
+            try:
+                _, tangent_out = torch.autograd.functional.jvp(
+                    model_fn,
+                    (z0,),
+                    (tangent,),
+                    create_graph=False,
+                    strict=False,
+                )
+                return tangent_out.detach().cpu().numpy()[0]
+            except Exception:
+                pass
+        eps = float(finite_difference_eps)
+        if eps <= 0.0:
+            raise ValueError("finite_difference_eps must be positive")
+        with torch.no_grad():
+            plus = model(z0 + eps * tangent)
+            minus = model(z0 - eps * tangent)
+        return ((plus - minus) / (2.0 * eps)).detach().cpu().numpy()[0]
+
+    coeffs = np.empty((n_target, n_feat), dtype=np.complex128)
+    for feature_idx in range(n_feat):
+        tangent_real = torch.zeros_like(z0)
+        tangent_imag = torch.zeros_like(z0)
+        tangent_real[:, feature_idx : feature_idx + 1] = float(d_input[feature_idx]) * mode_real
+        tangent_imag[:, feature_idx : feature_idx + 1] = float(d_input[feature_idx]) * mode_imag
+
+        response_real = directional_output(tangent_real) * output_derivative
+        response_imag = directional_output(tangent_imag) * output_derivative
+        projected_real = np.einsum("xy,oxy->o", np.conj(mode), response_real, optimize=True) / norm
+        projected_imag = np.einsum("xy,oxy->o", np.conj(mode), response_imag, optimize=True) / norm
+        coeffs[:, feature_idx] = projected_real + 1j * projected_imag
+
+    return coeffs, list(dataset.request_targets), list(dataset.request_features)
+
+
 def closure_tensor_jacobian_at_equilibrium(
     model,
     dataset,
@@ -416,31 +768,20 @@ def closure_tensor_jacobian_at_equilibrium(
         Names of the target channels (row order).
     feature_names : list[str]
         Names of the feature channels (column order).
+
+    Examples
+    --------
+    For a pressure model trained with six target channels and ten input
+    features, this returns ``jac_phys.shape == (6, 10)``. The row order is not
+    rearranged here; callers should use ``target_names`` and ``feature_names``
+    to map the Jacobian into any model-specific basis, such as the Hall-MHD
+    primitive state ``(rho, ux, uy, uz, Bx, By, Bz)``.
     """
     if torch is None:
         raise ImportError("closure_tensor_jacobian_at_equilibrium requires torch")
 
-    eq = np.asarray(equilibrium_values, dtype=float).ravel()
+    _, eq_norm, d_input = _normalized_equilibrium_and_input_derivative(dataset, equilibrium_values)
     n_feat = len(dataset.request_features)
-    if eq.shape != (n_feat,):
-        raise ValueError(
-            f"equilibrium_values must have shape ({n_feat},) to match "
-            f"dataset.request_features, got {eq.shape}"
-        )
-
-    # --- build normalized equilibrium point ---
-    eq_pre = eq.copy()
-    for i, func in enumerate(dataset.prescaler_features or []):
-        if func is not None:
-            eq_pre[i] = func(float(eq[i]))
-
-    if dataset.scaler_features and dataset.features_mean is not None:
-        f_mean = np.asarray(dataset.features_mean, dtype=float).ravel()
-        f_std = np.asarray(dataset.features_std, dtype=float).ravel()
-        eq_norm = (eq_pre - f_mean) / (f_std + 1e-40)
-    else:
-        f_std = np.ones(n_feat, dtype=float)
-        eq_norm = eq_pre.copy()
 
     # --- autograd Jacobian of model in normalized space ---
     model.eval()
@@ -470,33 +811,9 @@ def closure_tensor_jacobian_at_equilibrium(
     d_output = np.ones(n_target, dtype=float)
     for i, func in enumerate(dataset.prescaler_targets or []):
         if func is not None:
-            name = getattr(func, "__name__", "")
-            if name == "log":
-                d_output[i] = np.exp(float(y_pre[i]))
-            elif name == "arcsinh":
-                d_output[i] = np.cosh(float(y_pre[i]))
-            else:
-                raise ValueError(
-                    f"Unsupported target prescaler '{name}'. Supported: None, log, arcsinh."
-                )
+            d_output[i] = _target_inverse_prescaler_derivative(func, y_pre[i])
     if dataset.scaler_targets and dataset.targets_std is not None:
         d_output = d_output * t_std
-
-    # --- derivative of input prescaler: d(z_pre)/d(z_phys) ---
-    d_input = np.ones(n_feat, dtype=float)
-    for i, func in enumerate(dataset.prescaler_features or []):
-        if func is not None:
-            name = getattr(func, "__name__", "")
-            if name == "log":
-                d_input[i] = 1.0 / (float(eq[i]) + 1e-40)
-            elif name == "arcsinh":
-                d_input[i] = 1.0 / np.sqrt(1.0 + float(eq[i]) ** 2)
-            else:
-                raise ValueError(
-                    f"Unsupported feature prescaler '{name}'. Supported: None, log, arcsinh."
-                )
-    if dataset.scaler_features and dataset.features_std is not None:
-        d_input = d_input / (f_std + 1e-40)
 
     # full chain-rule product: diag(d_output) @ J_norm @ diag(d_input)
     jac_phys = np.diag(d_output) @ jac_norm_np @ np.diag(d_input)
@@ -513,8 +830,9 @@ def scan_dispersion_relation(
     ion_pressure_jacobian: np.ndarray | None = None,
     resistivity: float = 0.0,
     sort_by: str = "growth_rate",
+    geometry: str = "field_aligned",
 ) -> dict[str, np.ndarray]:
-    r"""Scan Hall-MHD eigenvalues over a grid of 2D wavenumbers.
+    r"""Scan Hall-MHD eigenvalues over a grid of wavevectors.
 
     For each ``(|k|, theta)`` pair the function builds the linearized operator
     with :func:`build_hall_mhd_operator` and records the seven eigenvalues.
@@ -540,6 +858,8 @@ def scan_dispersion_relation(
     sort_by : ``"growth_rate"`` or ``"frequency"``
         Sort eigenvalues by real part (growth rate) descending or by imaginary
         part (frequency) ascending at each grid point.
+    geometry : {``"field_aligned"``, ``"simulation_plane"``}
+        Wavevector geometry passed to :func:`hall_mhd_k_vector`.
 
     Returns
     -------
@@ -554,19 +874,9 @@ def scan_dispersion_relation(
 
     eigenvalues = np.empty((n_k, n_angle, n_modes), dtype=np.complex128)
 
-    b0 = np.asarray(background.B0, dtype=float)
-    b0_hat = b0 / (np.linalg.norm(b0) + 1e-40)
-
-    # unit vector perpendicular to b0 in the xy-plane
-    perp = np.array([0.0, 1.0, 0.0])
-    if abs(np.dot(b0_hat, perp)) > 0.99:
-        perp = np.array([1.0, 0.0, 0.0])
-    b0_perp = perp - np.dot(perp, b0_hat) * b0_hat
-    b0_perp /= np.linalg.norm(b0_perp) + 1e-40
-
     for ik, k_mag in enumerate(k_arr):
         for ia, theta in enumerate(theta_arr):
-            kvec = k_mag * (np.cos(theta) * b0_hat + np.sin(theta) * b0_perp)
+            kvec = hall_mhd_k_vector(background, k_mag, theta, geometry=geometry)
             closure_jac = closure_fn(kvec, background) if closure_fn is not None else None
             op = build_hall_mhd_operator(
                 background,
@@ -698,14 +1008,19 @@ __all__ = [
     "apply_closure_correction",
     "build_dispersion_matrix",
     "build_hall_mhd_operator",
+    "closure_tensor_fourier_symbol_at_equilibrium",
     "closure_tensor_jacobian_at_equilibrium",
     "electron_pressure_tensor_to_electric_jacobian",
     "eigensystem",
     "fourier_mode_vector",
+    "hall_mhd_k_vector",
     "isotropic_electron_closure_electric_jacobian",
     "linearize_spatial_model",
     "linearize_spatial_model_2d",
     "match_eigenbranches",
+    "mode_indices_from_physical_wavenumber",
+    "patch_domain_lengths_from_grid",
+    "physical_wavenumber_from_mode_indices",
     "project_fourier_jacobian",
     "project_fourier_jacobian_2d",
     "scan_dispersion_relation",
