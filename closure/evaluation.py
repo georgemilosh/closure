@@ -520,9 +520,44 @@ def pred_unnormalize(data, test_features, model, dataset, target_channels=None,
             prediction_scaled[:, channel] = invfunc(prediction_scaled[:, channel])
 
     if dataset.flatten:
-        prediction_scaled = prediction_scaled.reshape(
-            dataset.targets_shape[1:] + (-1,)
-        ).permute(3, 2, 0, 1)
+        runtime_shape = None
+        for key in dataset.request_targets:
+            arr = None
+            if "_" in key:
+                key1, key2 = key.split("_", 1)
+                if key1 in data and key2 in data[key1]:
+                    arr = data[key1][key2]
+            else:
+                if key in data:
+                    arr = data[key]
+            if isinstance(arr, np.ndarray) and arr.ndim == 3:
+                runtime_shape = arr.shape  # (nx, ny, nt)
+                break
+
+        if runtime_shape is None:
+            # Fallback kept for backward compatibility when data does not yet
+            # contain target placeholders.
+            if hasattr(dataset, "targets_shape") and len(dataset.targets_shape) == 4:
+                nt_guess, nx_guess, ny_guess, _ = dataset.targets_shape
+                runtime_shape = (nx_guess, ny_guess, nt_guess)
+            else:
+                raise ValueError(
+                    "Could not infer runtime target shape for flatten predictions. "
+                    "Provide target arrays in data (nx, ny, nt) or dataset.targets_shape."
+                )
+
+        nx, ny, nt = runtime_shape
+        n_rows = prediction_scaled.shape[0]
+        expected_rows = nx * ny * nt
+        if n_rows != expected_rows:
+            raise ValueError(
+                "Flatten prediction row count does not match runtime shape: "
+                f"rows={n_rows}, expected nx*ny*nt={expected_rows} "
+                f"with runtime_shape=(nx={nx}, ny={ny}, nt={nt})."
+            )
+
+        n_targets = prediction_scaled.shape[1]
+        prediction_scaled = prediction_scaled.reshape(nt, nx, ny, n_targets).permute(0, 3, 1, 2)
 
     print(f"{prediction_scaled.shape = }")
     for i, key in enumerate(dataset.request_targets):
@@ -632,18 +667,49 @@ def pred_pressure_gradients_jvp(
 
     Notes
     -----
-    - Requires non-flatten spatial tensors (``dataset.flatten`` must be False).
+    - Supports both spatial tensors (CNN/ResNet, ``dataset.flatten=False``)
+      and flattened pixel-wise tensors (MLP, ``dataset.flatten=True``).
     - Uses periodic fourth-order finite differences for ``dz/dx`` and ``dz/dy``.
-        - Does not modify ``data`` unless ``store_in_data=True``.
-        - When ``store_in_data=True``, predicted channels are written back
-            similarly to :func:`pred_unnormalize`.
+    - Does not modify ``data`` unless ``store_in_data=True``.
+    - When ``store_in_data=True``, predicted channels are written back
+      similarly to :func:`pred_unnormalize`.
     """
-    if getattr(dataset, "flatten", False):
-        raise ValueError("pred_pressure_gradients_jvp requires dataset.flatten=False (spatial tensors).")
-
     z = test_features.to(model.device)
-    if z.ndim != 4:
-        raise ValueError(f"Expected test_features with shape (nt, nfeat, nx, ny), got {tuple(z.shape)}")
+
+    flatten_mode = bool(getattr(dataset, "flatten", False))
+    if flatten_mode:
+        if not hasattr(dataset, "features_shape") or len(dataset.features_shape) != 4:
+            raise ValueError("Flatten mode requires dataset.features_shape = (nt, nx, ny, nfeat).")
+
+        nt, nx, ny, nfeat = dataset.features_shape
+        expected_rows = nt * nx * ny
+
+        if z.ndim == 2:
+            if z.shape[0] != expected_rows or z.shape[1] != nfeat:
+                raise ValueError(
+                    "Flatten test_features shape mismatch: expected "
+                    f"({expected_rows}, {nfeat}), got {tuple(z.shape)}"
+                )
+            z = z.reshape(nt, nx, ny, nfeat).permute(0, 3, 1, 2).contiguous()
+        elif z.ndim == 4:
+            # Accept both NCHW and NHWC input forms in flatten mode.
+            if tuple(z.shape) == (nt, nfeat, nx, ny):
+                pass
+            elif tuple(z.shape) == (nt, nx, ny, nfeat):
+                z = z.permute(0, 3, 1, 2).contiguous()
+            else:
+                raise ValueError(
+                    "Flatten mode expected test_features as (nt*nx*ny, nfeat), "
+                    f"(nt, nfeat, nx, ny), or (nt, nx, ny, nfeat); got {tuple(z.shape)}"
+                )
+        else:
+            raise ValueError(
+                "Flatten mode expected 2D or 4D test_features, "
+                f"got {tuple(z.shape)}"
+            )
+    else:
+        if z.ndim != 4:
+            raise ValueError(f"Expected test_features with shape (nt, nfeat, nx, ny), got {tuple(z.shape)}")
 
     dx = float(x[1] - x[0])
     dy = float(y[1] - y[0])
@@ -657,16 +723,31 @@ def pred_pressure_gradients_jvp(
     dz_dx = _torch_periodic_highdiff(z, spacing=dx, axis=2, coeff=coeff_tensor)
     dz_dy = _torch_periodic_highdiff(z, spacing=dy, axis=3, coeff=coeff_tensor)
 
+    if flatten_mode:
+        def model_forward(inp: torch.Tensor) -> torch.Tensor:
+            # Convert NCHW -> rows for pixel-wise MLP, then restore NCHW targets.
+            n_t, n_feat, n_x, n_y = inp.shape
+            out_flat = model(inp.permute(0, 2, 3, 1).reshape(-1, n_feat))
+            if out_flat.ndim != 2:
+                raise ValueError(
+                    "Flatten mode expects model output with shape (nt*nx*ny, n_targets); "
+                    f"got {tuple(out_flat.shape)}"
+                )
+            n_out = out_flat.shape[1]
+            return out_flat.reshape(n_t, n_x, n_y, n_out).permute(0, 3, 1, 2)
+    else:
+        model_forward = lambda inp: model(inp)
+
     model.eval()
     prediction_norm, dnorm_dx = torch.autograd.functional.jvp(
-        lambda inp: model(inp),
+        model_forward,
         z,
         dz_dx,
         create_graph=False,
         strict=False,
     )
     _, dnorm_dy = torch.autograd.functional.jvp(
-        lambda inp: model(inp),
+        model_forward,
         z,
         dz_dy,
         create_graph=False,

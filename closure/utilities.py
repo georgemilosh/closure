@@ -38,11 +38,15 @@ __all__ = [
     "do_cross",
     "do_dot",
     "get_Az",
+    "get_Az_3D",
     "get_D",
     "get_J_perp",
+    "get_J_perp_3D",
     "get_Ohm",
+    "get_Ohm_3D",
     "get_PS_2D",
     "get_PS_2D_field",
+    "get_PS_3D",
     "get_PS_3D_field",
     "get_T",
     "get_W",
@@ -318,6 +322,10 @@ def get_Ohm(*args: Any, **kwargs: Any) -> Any:
     return _lazy_import("closure.plasma", "get_Ohm")(*args, **kwargs)
 
 
+def get_Ohm_3D(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_import("closure.plasma", "get_Ohm_3D")(*args, **kwargs)
+
+
 def get_PS_2D_field(*args: Any, **kwargs: Any) -> Any:
     return _lazy_import("closure.plasma", "get_PS_2D_field")(*args, **kwargs)
 
@@ -330,12 +338,24 @@ def get_PS_2D(*args: Any, **kwargs: Any) -> Any:
     return _lazy_import("closure.plasma", "get_PS_2D")(*args, **kwargs)
 
 
+def get_PS_3D(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_import("closure.plasma", "get_PS_3D")(*args, **kwargs)
+
+
 def get_Az(*args: Any, **kwargs: Any) -> Any:
     return _lazy_import("closure.plasma", "get_Az")(*args, **kwargs)
 
 
+def get_Az_3D(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_import("closure.plasma", "get_Az_3D")(*args, **kwargs)
+
+
 def get_J_perp(*args: Any, **kwargs: Any) -> Any:
     return _lazy_import("closure.plasma", "get_J_perp")(*args, **kwargs)
+
+
+def get_J_perp_3D(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_import("closure.plasma", "get_J_perp_3D")(*args, **kwargs)
 
 
 def get_W(*args: Any, **kwargs: Any) -> Any:

@@ -152,6 +152,87 @@ class TestUnnormalizeAlias:
 
 
 # ---------------------------------------------------------------------------
+# pred_pressure_gradients_jvp
+# ---------------------------------------------------------------------------
+class _DummyFlatModel(torch.nn.Module):
+    def __init__(self, n_features: int, n_targets: int):
+        super().__init__()
+        self.layer = torch.nn.Linear(n_features, n_targets)
+        self.device = torch.device("cpu")
+
+    def forward(self, x):
+        return self.layer(x)
+
+
+class TestPredPressureGradientsJvp:
+    def test_flatten_mode_accepts_pixelwise_input(self):
+        nt, nx, ny = 2, 4, 3
+        n_features = 5
+        n_targets = 2
+
+        dataset = types.SimpleNamespace(
+            flatten=True,
+            features_shape=(nt, nx, ny, n_features),
+            request_targets=["Pxx_e", "Pxy_e"],
+            scaler_targets=False,
+            prescaler_targets=[None, None],
+            targets_std=np.ones((n_targets,), dtype=np.float32),
+            targets_mean=np.zeros((n_targets,), dtype=np.float32),
+        )
+
+        model = _DummyFlatModel(n_features=n_features, n_targets=n_targets)
+        test_features = torch.randn(nt * nx * ny, n_features)
+        data = {"rho": {"e": np.ones((nx, ny, nt), dtype=np.float32)}}
+
+        x = np.linspace(0.0, 1.0, nx)
+        y = np.linspace(0.0, 1.0, ny)
+
+        result = ev.pred_pressure_gradients_jvp(
+            data=data,
+            test_features=test_features,
+            model=model,
+            dataset=dataset,
+            x=x,
+            y=y,
+            species="e",
+        )
+
+        assert "prediction" in result
+        assert "dPdx" in result
+        assert "dPdy" in result
+        assert result["prediction"]["Pxx_e"].shape == (nx, ny, nt)
+        assert result["dPdx"]["Pxy_e"].shape == (nx, ny, nt)
+
+
+class TestPredUnnormalizeFlatten:
+    def test_uses_runtime_data_shape_not_dataset_targets_shape(self):
+        nt, nx, ny = 2, 4, 3
+        n_features = 5
+        n_targets = 2
+
+        dataset = types.SimpleNamespace(
+            flatten=True,
+            request_targets=["Pxx_e", "Pxy_e"],
+            prescaler_targets=[None, None],
+            scaler_targets=False,
+            # Intentionally wrong/training-like shape to ensure runtime data shape is used.
+            targets_shape=(25, 512, 512, n_targets),
+        )
+
+        model = _DummyFlatModel(n_features=n_features, n_targets=n_targets)
+        test_features = torch.randn(nt * nx * ny, n_features)
+        data = {
+            "Pxx": {"e": np.zeros((nx, ny, nt), dtype=np.float32)},
+            "Pxy": {"e": np.zeros((nx, ny, nt), dtype=np.float32)},
+        }
+
+        ev.pred_unnormalize(data, test_features, model, dataset)
+
+        assert data["Pxx"]["e"].shape == (nx, ny, nt)
+        assert data["Pxy"]["e"].shape == (nx, ny, nt)
+
+
+# ---------------------------------------------------------------------------
 # backward-compat stubs in utilities.py
 # ---------------------------------------------------------------------------
 class TestBackwardCompat:

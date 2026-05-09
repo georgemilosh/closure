@@ -14,11 +14,15 @@ __all__ = [
     "do_cross",
     "do_dot",
     "get_Az",
+    "get_Az_3D",
     "get_D",
     "get_J_perp",
+    "get_J_perp_3D",
     "get_Ohm",
+    "get_Ohm_3D",
     "get_PS_2D",
     "get_PS_2D_field",
+    "get_PS_3D",
     "get_PS_3D_field",
     "get_T",
     "get_W",
@@ -551,7 +555,7 @@ def get_PS_3D_field(data: DataDict, x: ArrayLike, y: ArrayLike, z: ArrayLike) ->
     e_field = np.array([data["Ex"], data["Ey"], data["Ez"]]).transpose(1, 2, 3, 4, 0)
     b_field = np.array([data["Bx"], data["By"], data["Bz"]]).transpose(1, 2, 3, 4, 0)
     j2 = data["Jtotx"] ** 2 + data["Jtoty"] ** 2 + data["Jtotz"] ** 2
-    data["QJ"] = 0.25 * j2 / np.mean(j2, axis=(0, 1))
+    data["QJ"] = 0.25 * j2 / np.mean(j2, axis=(0, 1, 2))
     for species in data["rho"].keys():
         j_field = np.array([data["Jx"][species], data["Jy"][species], data["Jz"][species]]).transpose(1, 2, 3, 4, 0)
         v_field = np.array([data["Vx"][species], data["Vy"][species], data["Vz"][species]]).transpose(1, 2, 3, 4, 0)
@@ -702,6 +706,148 @@ def get_PS_2D(data: DataDict, x: ArrayLike, y: ArrayLike) -> None:
     """Apply :func:`get_PS_2D_field` to each experiment entry in ``data``."""
     for experiment in data.keys():
         get_PS_2D_field(data[experiment], x, y)
+
+
+def get_PS_3D(data: DataDict, x: ArrayLike, y: ArrayLike, z: ArrayLike) -> None:
+    """Apply :func:`get_PS_3D_field` to each experiment entry in ``data``."""
+    for experiment in data.keys():
+        get_PS_3D_field(data[experiment], x, y, z)
+
+
+def get_Ohm_3D(
+    data: DataDict,
+    qom: list[float],
+    x: ArrayLike,
+    y: ArrayLike,
+    z: ArrayLike,
+    coeff: ArrayLike | None = None,
+    small: float = 1e-10,
+) -> None:
+    """3D extension of :func:`get_Ohm`.
+
+    Expects scalar fields shaped ``(nx, ny, nz, ...)`` (e.g. with a trailing
+    time axis) and computes Ohm-law decomposition consistently in all three
+    spatial directions.
+    """
+    b_field = np.array([data["Bx"], data["By"], data["Bz"]]).transpose(1, 2, 3, 4, 0)
+    e_field = np.array([data["Ex"], data["Ey"], data["Ez"]]).transpose(1, 2, 3, 4, 0)
+    b2 = (data["Bx"] ** 2 + data["By"] ** 2 + data["Bz"] ** 2)[..., np.newaxis]
+    data["ExB/B^2"] = np.cross(e_field, b_field) / b2
+    data["Jtotx"] = np.sum([data["Jx"][species] for species in data["Jx"].keys()], axis=0)
+    data["Jtoty"] = np.sum([data["Jy"][species] for species in data["Jy"].keys()], axis=0)
+    data["Jtotz"] = np.sum([data["Jz"][species] for species in data["Jz"].keys()], axis=0)
+    j_field = np.array([data["Jtotx"], data["Jtoty"], data["Jtotz"]]).transpose(1, 2, 3, 4, 0)
+    data["EHallx"], data["EHally"], data["EHallz"] = (
+        np.cross(j_field, b_field) / (-data["rho"]["e"] + small)[..., np.newaxis]
+    ).transpose(4, 0, 1, 2, 3)
+
+    norm = 0
+    data["uCMx"] = 0
+    data["uCMy"] = 0
+    data["uCMz"] = 0
+    for i, species in enumerate(data["rho"].keys()):
+        data["uCMx"] += (data["rho"][species] / qom[i]) * data["Vx"][species]
+        data["uCMy"] += (data["rho"][species] / qom[i]) * data["Vy"][species]
+        data["uCMz"] += (data["rho"][species] / qom[i]) * data["Vz"][species]
+        norm += data["rho"][species] / qom[i]
+    data["uCMx"] /= norm
+    data["uCMy"] /= norm
+    data["uCMz"] /= norm
+    ucm = np.array([data["uCMx"], data["uCMy"], data["uCMz"]]).transpose(1, 2, 3, 4, 0)
+    data["EMHDx"], data["EMHDy"], data["EMHDz"] = -np.cross(ucm, b_field).transpose(4, 0, 1, 2, 3)
+
+    dx = x[1] - x[0]
+    dy = y[1] - y[0]
+    dz = z[1] - z[0]
+    inv_rho_e = 1.0 / (-data["rho"]["e"] + small)
+
+    # Pressure-gradient electric field: E_P = -(div P_e) / (-rho_e)
+    data["EPx"] = -(
+        highdiff(data["Pxx"]["e"], dx, dy, coeff=coeff, axis=0, mode="wrap")
+        + highdiff(data["Pxy"]["e"], dx, dy, coeff=coeff, axis=1, mode="wrap")
+        + highdiff(data["Pxz"]["e"], dx, dy, coeff=coeff, axis=2, dz=dz, mode="wrap")
+    ) * inv_rho_e
+    data["EPy"] = -(
+        highdiff(data["Pxy"]["e"], dx, dy, coeff=coeff, axis=0, mode="wrap")
+        + highdiff(data["Pyy"]["e"], dx, dy, coeff=coeff, axis=1, mode="wrap")
+        + highdiff(data["Pyz"]["e"], dx, dy, coeff=coeff, axis=2, dz=dz, mode="wrap")
+    ) * inv_rho_e
+    data["EPz"] = -(
+        highdiff(data["Pxz"]["e"], dx, dy, coeff=coeff, axis=0, mode="wrap")
+        + highdiff(data["Pyz"]["e"], dx, dy, coeff=coeff, axis=1, mode="wrap")
+        + highdiff(data["Pzz"]["e"], dx, dy, coeff=coeff, axis=2, dz=dz, mode="wrap")
+    ) * inv_rho_e
+
+    # Electron inertia term: (m_e / e) * (V_e . grad) V_e
+    for component in ["x", "y", "z"]:
+        v_c = data[f"V{component}"]["e"]
+        data[f"mVgradV{component}/e"] = (
+            highdiff(v_c, dx, dy, coeff=coeff, axis=0, mode="wrap") * data["Vx"]["e"] / qom[0]
+            + highdiff(v_c, dx, dy, coeff=coeff, axis=1, mode="wrap") * data["Vy"]["e"] / qom[0]
+            + highdiff(v_c, dx, dy, coeff=coeff, axis=2, dz=dz, mode="wrap") * data["Vz"]["e"] / qom[0]
+        )
+
+
+def get_J_perp_3D(
+    data: DataDict,
+    x: ArrayLike,
+    y: ArrayLike,
+    z: ArrayLike,
+    coeff: ArrayLike | None = None,
+) -> None:
+    """3D extension of :func:`get_J_perp`.
+
+    Computes diamagnetic and curvature perpendicular-current contributions
+    using a full 3D pressure gradient and 3D unit-vector derivative.
+    """
+    dx = x[1] - x[0]
+    dy = y[1] - y[0]
+    dz = z[1] - z[0]
+    b_field = np.array([data["Bx"], data["By"], data["Bz"]]).transpose(1, 2, 3, 4, 0)
+    data["gradPperpx"] = highdiff(data["Pperp"]["e"], dx, dy, coeff=coeff, axis=0, mode="wrap")
+    data["gradPperpy"] = highdiff(data["Pperp"]["e"], dx, dy, coeff=coeff, axis=1, mode="wrap")
+    data["gradPperpz"] = highdiff(data["Pperp"]["e"], dx, dy, coeff=coeff, axis=2, dz=dz, mode="wrap")
+    grad_pperp = np.array([data["gradPperpx"], data["gradPperpy"], data["gradPperpz"]]).transpose(1, 2, 3, 4, 0)
+    b2 = np.sum(b_field ** 2, axis=-1, keepdims=True)
+    data["cross(B,DPperp)/B^2"] = np.cross(b_field, grad_pperp) / b2
+    data["b"] = b_field / np.sqrt(b2)
+    # (b . grad) b in 3D
+    data["b*Db"] = (
+        data["b"][..., 0, np.newaxis] * highdiff(data["b"], dx, dy, coeff=coeff, axis=0, mode="wrap")
+        + data["b"][..., 1, np.newaxis] * highdiff(data["b"], dx, dy, coeff=coeff, axis=1, mode="wrap")
+        + data["b"][..., 2, np.newaxis] * highdiff(data["b"], dx, dy, coeff=coeff, axis=2, dz=dz, mode="wrap")
+    )
+    data["(Ppar - Pperp) cros(B, b*Db)/B^2"] = (
+        (data["Ppar"]["e"] - data["Pperp"]["e"])[..., np.newaxis]
+        * np.cross(b_field, data["b*Db"])
+        / b2
+    )
+
+
+def get_Az_3D(x: ArrayLike, y: ArrayLike, data: DataDict) -> None:
+    """3D extension of :func:`get_Az`.
+
+    Computes the out-of-plane vector potential ``Az(x, y)`` independently per
+    ``z``-slice (and per trailing axis, e.g. time) using the same path-integral
+    formulation as the 2D version: ``Az = ∫₀ʸ Bx(x, y') dy' - ∫₀ˣ By(x', 0) dx'``.
+    """
+    bx = data["Bx"]
+    by = data["By"]
+    nx, ny = bx.shape[0], bx.shape[1]
+    dx = x[1] - x[0]
+    dy = y[1] - y[0]
+
+    f_field = np.zeros_like(bx)
+    g_field = np.zeros_like(bx)
+
+    for iy in range(1, ny):
+        g_field[:, iy] = g_field[:, iy - 1] + (bx[:, iy - 1] + bx[:, iy]) * dy / 2
+    # Use By along the y=0 line as the x-integration boundary, broadcast over
+    # remaining axes (z, t, ...).
+    for ix in range(1, nx):
+        f_field[ix] = f_field[ix - 1] - (by[ix - 1, 0:1] + by[ix, 0:1]) * dx / 2
+
+    data["Az"] = f_field + g_field
 
 
 def apply_filter(
@@ -886,9 +1032,15 @@ def highdiff(
     dy: float,
     coeff: ArrayLike | None = None,
     axis: int = 0,
+    dz: float | None = None,
     **kwargs: Any,
 ) -> ArrayLike:
-    """Compute a fourth-order central finite-difference derivative."""
+    """Compute a fourth-order central finite-difference derivative.
+
+    Supports ``axis`` 0 (x), 1 (y), and 2 (z). For ``axis=2`` the optional
+    ``dz`` argument must be provided. The 2D signature ``(data, dx, dy, ...)``
+    is preserved for backward compatibility.
+    """
     if coeff is None:
         coeff = np.array([-1, 8, 0, -8, 1]) / 12.0
 
@@ -898,7 +1050,14 @@ def highdiff(
     if axis == 1:
         dy_kernel = coeff.reshape((1, -1) + (1,) * (data.ndim - 2))
         return nd.convolve(data, dy_kernel, output=float, **kwargs) / dy
-    raise ValueError("Invalid axis. Use 0 or 1.")
+    if axis == 2:
+        if dz is None:
+            raise ValueError("highdiff(axis=2) requires the keyword argument 'dz'.")
+        if data.ndim < 3:
+            raise ValueError("highdiff(axis=2) requires data with at least 3 dimensions.")
+        dz_kernel = coeff.reshape((1, 1, -1) + (1,) * (data.ndim - 3))
+        return nd.convolve(data, dz_kernel, output=float, **kwargs) / dz
+    raise ValueError("Invalid axis. Use 0, 1 or 2.")
 
 
 def get_Ohm(
