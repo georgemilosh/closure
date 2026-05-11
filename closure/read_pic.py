@@ -72,6 +72,274 @@ def _resolve_experiment_dir(files_path: str, filename: str) -> str:
     return files_path
 
 
+def _parse_vtk_filename(filename: str):
+    """Parse legacy VTK filename ``<run>_<token>_<iter>.vtk``.
+
+    Returns ``(run_prefix, token, iteration)`` or ``None`` when the
+    filename does not match the expected pattern.
+    """
+    base = os.path.basename(str(filename))
+    match = re.match(r"(.+)_([^_]+)_(\d+)\.vtk$", base, re.IGNORECASE)
+    if not match:
+        return None
+    run_prefix, token, iteration = match.groups()
+    return run_prefix, token, int(iteration)
+
+
+def _fieldname_to_vtk_token(fieldname: str):
+    """Map a logical field name (e.g. ``Jx_0``) to VTK token metadata."""
+    # Vector fields with component selection.
+    if fieldname in {"Bx", "By", "Bz"}:
+        return "B", {"x": 0, "y": 1, "z": 2}[fieldname[1].lower()]
+    if fieldname in {"Ex", "Ey", "Ez"}:
+        return "E", {"x": 0, "y": 1, "z": 2}[fieldname[1].lower()]
+
+    match = re.match(r"J([xyz])_(\d+)$", fieldname, re.IGNORECASE)
+    if match:
+        component, species = match.groups()
+        return f"J{species}", {"x": 0, "y": 1, "z": 2}[component.lower()]
+
+    # Scalar per-species fields.
+    match = re.match(r"P([xyz]{2})_(\d+)$", fieldname, re.IGNORECASE)
+    if match:
+        component, species = match.groups()
+        return f"P{component.upper()}{species}", None
+
+    match = re.match(r"rho_(\d+)$", fieldname, re.IGNORECASE)
+    if match:
+        species = match.group(1)
+        return f"rho{species}", None
+
+    return None, None
+
+
+def _resolve_vtk_filename_for_field(filename: str, fieldname: str) -> tuple[str, int | None, str]:
+    """Return mapped VTK filename plus requested vector component index."""
+    parsed = _parse_vtk_filename(filename)
+    if parsed is None:
+        raise ValueError(
+            f"Cannot parse VTK filename pattern for {filename!r}; expected "
+            "'<run>_<token>_<iter>.vtk'."
+        )
+
+    run_prefix, _, iteration = parsed
+    token, component_idx = _fieldname_to_vtk_token(fieldname)
+    if token is None:
+        raise KeyError(
+            f"Field {fieldname!r} is not mapped to legacy VTK tokens. "
+            "Supported prefixes include Bx/By/Bz, Ex/Ey/Ez, Jx_i/Jy_i/Jz_i, "
+            "Pxx_i...Pzz_i, and rho_i."
+        )
+    mapped_filename = f"{run_prefix}_{token}_{iteration}.vtk"
+    return mapped_filename, component_idx, token
+
+
+def _read_legacy_vtk_structured_points(file_path: str):
+    """Read one legacy VTK structured-points array.
+
+    Supports both BINARY and ASCII files with one SCALARS/VECTORS block,
+    which is the format used by iPiC3D legacy dumps.
+    """
+    with open(file_path, "rb") as fh:
+        header = fh.readline().decode("latin1", errors="ignore").strip()
+        if not header.startswith("# vtk DataFile"):
+            raise ValueError(f"Not a legacy VTK file: {file_path!r}")
+
+        # Comment line
+        fh.readline()
+
+        format_line = fh.readline().decode("latin1", errors="ignore").strip().upper()
+        is_binary = format_line == "BINARY"
+        if not is_binary and format_line != "ASCII":
+            raise ValueError(f"Unsupported VTK format {format_line!r} in {file_path!r}")
+
+        dataset_line = fh.readline().decode("latin1", errors="ignore").strip().upper()
+        if dataset_line != "DATASET STRUCTURED_POINTS":
+            raise ValueError(
+                f"Only DATASET STRUCTURED_POINTS is supported for VTK fallback; "
+                f"got {dataset_line!r} in {file_path!r}"
+            )
+
+        nx = ny = nz = None
+        while True:
+            raw_line = fh.readline()
+            if not raw_line:
+                raise ValueError(f"Unexpected EOF while reading VTK header in {file_path!r}")
+            line = raw_line.decode("latin1", errors="ignore").strip()
+            if not line:
+                continue
+            upper = line.upper()
+
+            if upper.startswith("DIMENSIONS"):
+                parts = line.split()
+                nx, ny, nz = int(parts[1]), int(parts[2]), int(parts[3])
+            elif upper.startswith("POINT_DATA"):
+                break
+
+        if nx is None or ny is None or nz is None:
+            raise ValueError(f"Missing DIMENSIONS in VTK file {file_path!r}")
+
+        array_name = None
+        n_components = None
+        dtype_name = None
+
+        while True:
+            raw_line = fh.readline()
+            if not raw_line:
+                raise ValueError(f"Unexpected EOF before VTK data in {file_path!r}")
+            line = raw_line.decode("latin1", errors="ignore").strip()
+            if not line:
+                continue
+            upper = line.upper()
+
+            if upper.startswith("VECTORS"):
+                parts = line.split()
+                array_name = parts[1]
+                dtype_name = parts[2].lower()
+                n_components = 3
+                break
+            if upper.startswith("SCALARS"):
+                parts = line.split()
+                array_name = parts[1]
+                dtype_name = parts[2].lower()
+                n_components = 1
+                # Skip optional LOOKUP_TABLE line.
+                while True:
+                    pos = fh.tell()
+                    raw_lookup = fh.readline()
+                    if not raw_lookup:
+                        break
+                    lookup_line = raw_lookup.decode("latin1", errors="ignore").strip()
+                    if not lookup_line:
+                        continue
+                    if lookup_line.upper().startswith("LOOKUP_TABLE"):
+                        break
+                    # The data starts immediately; rewind one line.
+                    fh.seek(pos)
+                    break
+                break
+
+        dtype_map_binary = {
+            "float": ">f4",
+            "double": ">f8",
+            "int": ">i4",
+            "unsigned_int": ">u4",
+            "short": ">i2",
+            "unsigned_short": ">u2",
+            "char": "i1",
+            "unsigned_char": "u1",
+        }
+        dtype_map_ascii = {
+            "float": np.float32,
+            "double": np.float64,
+            "int": np.int32,
+            "unsigned_int": np.uint32,
+            "short": np.int16,
+            "unsigned_short": np.uint16,
+            "char": np.int8,
+            "unsigned_char": np.uint8,
+        }
+
+        if dtype_name not in dtype_map_binary:
+            raise ValueError(f"Unsupported VTK data type {dtype_name!r} in {file_path!r}")
+
+        count = nx * ny * nz * n_components
+        if is_binary:
+            data = np.fromfile(fh, dtype=dtype_map_binary[dtype_name], count=count)
+            if data.size < count:
+                raise ValueError(
+                    f"Unexpected EOF while reading binary VTK payload in {file_path!r}; "
+                    f"expected {count} values, got {data.size}"
+                )
+        else:
+            text_payload = fh.read().decode("latin1", errors="ignore")
+            data = np.fromstring(text_payload, sep=" ", dtype=dtype_map_ascii[dtype_name])
+            if data.size < count:
+                raise ValueError(
+                    f"Unexpected EOF while reading ASCII VTK payload in {file_path!r}; "
+                    f"expected {count} values, got {data.size}"
+                )
+            data = data[:count]
+
+    if n_components == 1:
+        data = data.reshape((nx * ny * nz,))
+    else:
+        data = data.reshape((nx * ny * nz, n_components))
+    return array_name, data, (nx, ny, nz)
+
+
+def _read_vtk_field(current_file_path: str, fieldname: str, token: str, component_idx: int | None):
+    """Read one field from a legacy VTK structured-points file.
+
+    Returns data in ``(z, y, x)`` layout to stay consistent with existing
+    readers in this module.
+    """
+    np_array = None
+    nx = ny = nz = None
+    vtk_array_name = token
+    try:
+        import importlib
+        vtk = importlib.import_module("vtk")
+        vtk_to_numpy = importlib.import_module("vtk.util.numpy_support").vtk_to_numpy
+
+        reader = vtk.vtkDataSetReader()
+        reader.SetFileName(current_file_path)
+        reader.ReadAllScalarsOn()
+        reader.ReadAllVectorsOn()
+        reader.Update()
+
+        output = reader.GetOutput()
+        point_data = output.GetPointData()
+        if point_data is None or point_data.GetNumberOfArrays() == 0:
+            raise KeyError(f"No point-data arrays found in VTK file {current_file_path!r}")
+
+        dims = output.GetDimensions()
+        nx, ny, nz = int(dims[0]), int(dims[1]), int(dims[2])
+        if nx <= 0 or ny <= 0 or nz <= 0:
+            raise ValueError(f"Invalid VTK dimensions {dims} in {current_file_path!r}")
+
+        # Try direct token match first; if absent and file contains a single
+        # array, use it as fallback to remain permissive with custom names.
+        vtk_array = point_data.GetArray(token)
+        if vtk_array is None and point_data.GetNumberOfArrays() == 1:
+            vtk_array = point_data.GetArray(0)
+
+        if vtk_array is None:
+            available = [point_data.GetArrayName(i) for i in range(point_data.GetNumberOfArrays())]
+            raise KeyError(
+                f"Array {token!r} not found in {current_file_path!r}. "
+                f"Available arrays: {available}"
+            )
+
+        vtk_array_name = vtk_array.GetName() or token
+        np_array = vtk_to_numpy(vtk_array)
+    except ImportError:
+        vtk_array_name, np_array, dims = _read_legacy_vtk_structured_points(current_file_path)
+        nx, ny, nz = dims
+
+    if component_idx is not None:
+        if np_array.ndim != 2 or np_array.shape[1] <= component_idx:
+            raise ValueError(
+                f"Array {vtk_array_name!r} in {current_file_path!r} does not expose "
+                f"component {component_idx}"
+            )
+        values = np_array[:, component_idx]
+    else:
+        if np_array.ndim == 2:
+            if np_array.shape[1] != 1:
+                raise ValueError(
+                    f"Field {fieldname!r} expects scalar data but array {vtk_array_name!r} "
+                    f"has {np_array.shape[1]} components in {current_file_path!r}"
+                )
+            values = np_array[:, 0]
+        else:
+            values = np_array
+
+    # VTK point-data ordering is x-fastest, then y, then z.
+    temp = np.asarray(values).reshape((nz, ny, nx), order="C")
+    return temp
+
+
 def get_saved_iterations(files_path, experiment, choose_times=None):
     """Return sorted saved field iterations and corresponding simulation times.
     Example:
@@ -88,7 +356,7 @@ def get_saved_iterations(files_path, experiment, choose_times=None):
     saved_iterations = sorted({
         int(match.group(1))
         for name in field_files
-        for match in [re.search(r"(\d+)\.h5(?:\.pkl)?$", name)]
+        for match in [re.search(r"(\d+)(?:\.h5(?:\.pkl)?|\.npz|\.vtk)$", str(name))]
         if match
     })
     saved_times = [parser['dt']*iteration for iteration in saved_iterations]
@@ -168,7 +436,7 @@ def ecsim_available_run_info(files_path, experiment=None):
     cycles = sorted({
         int(match.group(1))
         for name in filenames
-        for match in [re.search(r"(\d+)(?:\.h5(?:\.pkl)?|\.npz)?$", str(name))]
+        for match in [re.search(r"(\d+)(?:\.h5(?:\.pkl)?|\.npz|\.vtk)?$", str(name))]
         if match
     })
 
@@ -198,6 +466,39 @@ def ecsim_available_run_info(files_path, experiment=None):
             data = pickle.load(pklf)
         names = list(data.keys())
         fields, species_indices = _extract_fields_and_species_from_names(names)
+    elif str(sample).endswith(".vtk"):
+        tokens = set()
+        all_vtk_files = [n for n in os.listdir(run_path) if n.endswith(".vtk")]
+        for name in all_vtk_files:
+            parsed = _parse_vtk_filename(str(name))
+            if parsed is not None:
+                tokens.add(parsed[1])
+
+        for token in tokens:
+            token_upper = token.upper()
+            if token_upper == "B":
+                fields.update(["Bx", "By", "Bz"])
+                continue
+            if token_upper == "E":
+                fields.update(["Ex", "Ey", "Ez"])
+                continue
+
+            jmatch = re.match(r"J(\d+)$", token_upper)
+            if jmatch:
+                fields.update(["Jx", "Jy", "Jz"])
+                species_indices.add(int(jmatch.group(1)))
+                continue
+
+            pmatch = re.match(r"P([XYZ]{2})(\d+)$", token_upper)
+            if pmatch:
+                fields.add(f"P{pmatch.group(1).lower()}")
+                species_indices.add(int(pmatch.group(2)))
+                continue
+
+            rhomatch = re.match(r"rho(\d+)$", token, re.IGNORECASE)
+            if rhomatch:
+                fields.add("rho")
+                species_indices.add(int(rhomatch.group(1)))
 
     return {
         "cycles": cycles,
@@ -694,6 +995,15 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
             elif filename.endswith(".npz"):
                 with np.load(os.path.join(files_path, filename)) as n:
                     temp = n[fieldname]
+            elif filename.endswith(".vtk"):
+                vtk_filename, component_idx, vtk_token = _resolve_vtk_filename_for_field(filename, fieldname)
+                current_file_path = os.path.join(files_path, vtk_filename)
+                if not os.path.isfile(current_file_path):
+                    raise FileNotFoundError(
+                        f"Could not find VTK file {vtk_filename!r} for requested field {fieldname!r}. "
+                        f"Looked in {files_path!r}."
+                    )
+                temp = _read_vtk_field(current_file_path, fieldname, vtk_token, component_idx)
             else:
                 # Assuming that string of integers was passed
                 import h5py
@@ -1650,8 +1960,38 @@ def _collect_experiment_filenames(experiment_dir):
     """
     filenames = sorted([
         n for n in os.listdir(experiment_dir)
-        if "-Fields_" in n and (n.endswith(".pkl") or n.endswith(".h5") or n.endswith(".npz"))
+        if "-Fields_" in n and (n.endswith(".pkl") or n.endswith(".h5") or n.endswith(".npz") or n.endswith(".vtk"))
     ])
+    if filenames == []:
+        vtk_files = sorted([
+            n for n in os.listdir(experiment_dir)
+            if n.endswith(".vtk") and _parse_vtk_filename(n) is not None
+        ])
+        if vtk_files:
+            parsed = [_parse_vtk_filename(n) for n in vtk_files]
+            token_to_files = {}
+            for name, info in zip(vtk_files, parsed):
+                if info is None:
+                    continue
+                _, token, _ = info
+                token_to_files.setdefault(token, []).append(name)
+
+            preferred_tokens = ["B", "E"]
+            token_choice = None
+            for candidate in preferred_tokens:
+                for token in token_to_files.keys():
+                    if token.upper() == candidate:
+                        token_choice = token
+                        break
+                if token_choice is not None:
+                    break
+            if token_choice is None:
+                token_choice = sorted(token_to_files.keys())[0]
+
+            return sorted(
+                token_to_files[token_choice],
+                key=lambda n: _parse_vtk_filename(n)[2],
+            )
     if filenames == []:
         filenames = sorted([
             re.search(r'Fields_(\d+)', n).group(1)
@@ -1688,6 +2028,11 @@ def _extract_times_from_filenames(selected_filenames, dt):
             time_token = n_str[-9:-4]
         elif n_str.endswith(".h5"):
             time_token = n_str[-9:-3]
+        elif n_str.endswith(".vtk"):
+            match = re.search(r"_(\d+)\.vtk$", n_str)
+            if match is None:
+                raise ValueError(f"Could not parse VTK iteration from filename {n_str!r}")
+            time_token = match.group(1)
         else:  # deal with new ipic3d version where the time is directly after "Fields_"
             match = re.search(r'Fields_(\d+)', n_str)
             time_token = match.group(1) if match else int(n_str)
