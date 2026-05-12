@@ -251,6 +251,11 @@ def alfven_scales(
     dict
         Keys: ``b0x``, ``nb``, ``va``, ``j0``, ``p0``, ``e0``.
     """
+    if b0x is None or nb is None:
+        raise ValueError(
+            f"alfven_scales requires non-None values for b0x and nb. "
+            f"Got b0x={b0x}, nb={nb}"
+        )
     va = b0x / np.sqrt(nb)
     return {
         "b0x": b0x,
@@ -288,15 +293,28 @@ def code2alfven(
     returned in that position.
     """
     if (b0x is None or nb is None) and experiment is not None:
-        inferred_b0x, inferred_nb = _read_b0x_nb_from_inp(_find_experiment_inp_file(experiment))
-        if b0x is None:
-            b0x = inferred_b0x
-        if nb is None:
-            nb = inferred_nb
+        try:
+            inferred_b0x, inferred_nb = _read_b0x_nb_from_inp(_find_experiment_inp_file(experiment))
+            if b0x is None:
+                b0x = inferred_b0x
+            if nb is None:
+                nb = inferred_nb
+            print(f"Inferred b0x={b0x} and nb={nb} from {experiment!r}")
+        except FileNotFoundError as e:
+            raise ValueError(
+                f"Could not infer b0x and nb from experiment: {e}. "
+                f"Please provide b0x and nb directly."
+            ) from e
+        except ValueError as e:
+            raise ValueError(
+                f"Failed to parse b0x or nb from experiment .inp file: {e}. "
+                f"Please provide b0x and nb directly."
+            ) from e
 
     if b0x is None or nb is None:
         raise ValueError(
-            "code2alfven requires b0x and nb. Provide them directly or set experiment to infer from *.inp"
+            f"code2alfven requires b0x and nb. Provide them directly or set experiment to infer from *.inp. "
+            f"Got b0x={b0x}, nb={nb}"
         )
 
     sc = alfven_scales(b0x, nb)
