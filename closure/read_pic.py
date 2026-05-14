@@ -971,8 +971,7 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
     for filename in filenames:
         current_file_path = os.path.join(files_path, filename)
         try:
-            squeeze_needed = False
-            if filename.endswith(".h5"):  # leave h5 unchanged
+            if filename.endswith(".h5"):
                 import h5py
                 with h5py.File(current_file_path, "r") as n:
                     if "/Step#0/Block/" in n:
@@ -1007,6 +1006,9 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
                                     break
                            
                         temp = np.array(n[f"{field_string}{actual_fieldname}/0"] if field_string == "/Step#0/Block/" else n[f"{field_string}/{actual_fieldname}"])
+                        if field_string == "/Fields":
+                            # iPiC3D-GPU stores fields as (x, y, z); normalize to (z, y, x) like all other formats
+                            temp = np.transpose(temp, (2, 1, 0))
                         #logger.info(f"Successfully loaded {temp.shape = } from {filename} with actual field name {actual_fieldname}.")
                     except Exception as e:
                         available_fields = []
@@ -1025,11 +1027,9 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
             elif filename.endswith(".h5.pkl"):
                 with open(os.path.join(files_path, filename), "rb") as n:
                     temp = pickle.load(n)[fieldname]
-                squeeze_needed = True
             elif filename.endswith(".npz"):
                 with np.load(os.path.join(files_path, filename)) as n:
                     temp = n[fieldname]
-                squeeze_needed = True
             elif filename.endswith(".vtk"):
                 vtk_filename, component_idx, vtk_token = _resolve_vtk_filename_for_field(filename, fieldname)
                 current_file_path = os.path.join(files_path, vtk_filename)
@@ -1082,42 +1082,28 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
                     raise e
                 # Permute from (x, y, z) to (z, y, x)
                 temp = np.transpose(temp, (2, 1, 0))
-            # Squeeze out singleton dimensions for npz and h5.pkl (leaves h5/vtk/etc. unchanged).
-            # Only np.squeeze (removes size-1 dims); zero-sized dims are left for the caller to handle.
-            if squeeze_needed:
-                temp = np.squeeze(temp)
-
+            # Slicing if needed, if not specified we take the whole range (or 0,1 if the dimension is of size 1)
+            # temp is in (z, y, x) order at this point for all formats
+            if choose_x is None:
+                if temp.shape[2] > 1:
+                    choose_x = [0, temp.shape[2]-1]
+                else:
+                    choose_x = [0, 1]
+            if choose_y is None:
+                if temp.shape[1] > 1:
+                    choose_y = [0, temp.shape[1]-1]
+                else:
+                    choose_y = [0, 1]
+            if choose_z is None:
+                if temp.shape[0] > 1:
+                    choose_z = [0, temp.shape[0]-1]
+                else:
+                    choose_z = [0, 1]
             if indexing == 'ij':
-                if field_string != '/Fields' and temp is not None and hasattr(temp, 'ndim') and temp.ndim == 3:
-                    temp = np.transpose(temp, (2, 1, 0))  # to (x,y,z)
-                elif field_string != '/Fields' and temp is not None and hasattr(temp, 'ndim') and temp.ndim != 3:
-                    logger.warning(f"Skipping transpose for {filename}, {fieldname}: array shape {temp.shape} is not 3D.")
-                # Slicing if needed; guard against arrays that have fewer than 3 dimensions
-                # (e.g. 2-D spatial fields from npz/h5.pkl after squeezing out the z=1 axis).
-                if choose_x is None:
-                    if temp.ndim >= 3 and temp.shape[2] > 1:
-                        choose_x = [0, temp.shape[0]-1]
-                    else:
-                        choose_x = [0, 1]
-                if choose_y is None:
-                    if temp.shape[1] > 1:
-                        choose_y = [0, temp.shape[1]-1]
-                    else:
-                        choose_y = [0, 1]
-                if choose_z is None:
-                    if temp.ndim >= 3 and temp.shape[0] > 1:
-                        choose_z = [0, temp.shape[2]-1]
-                    else:
-                        choose_z = [0, 1]
-                    #logger.warning(f"{choose_x = }, {choose_y = }, {choose_z = } with shape {temp.shape}")
-                if temp.ndim >= 3:
-                    temp = temp[choose_x[0]:choose_x[1], choose_y[0]:choose_y[1], choose_z[0]:choose_z[1]]  # already in (x,y,z) order
-                elif temp.ndim == 2:
-                    temp = temp[choose_x[0]:choose_x[1], choose_y[0]:choose_y[1]]
+                temp = np.transpose(temp[choose_z[0]:choose_z[1], choose_y[0]:choose_y[1], choose_x[0]:choose_x[1]], (2, 1, 0))
             elif indexing == 'xy':
-                raise NotImplementedError("Indexing option 'xy' is not implemented yet.")
-                #temp = np.transpose(temp[choose_z[0]:choose_z[1], choose_y[0]:choose_y[1], choose_x[0]:choose_x[1]], (1, 0, 2))  # to (y,x,z)
-            #logger.info(f"{temp.shape = } after slicing with {choose_x = }, {choose_y = }, {choose_z = }")
+                temp = np.transpose(temp[choose_z[0]:choose_z[1], choose_y[0]:choose_y[1], choose_x[0]:choose_x[1]], (1, 0, 2))
+            #logger.warning(f"{choose_x = }, {choose_y = }, {choose_z = } with shape {temp.shape}")
             #logger.warning(f"Read {fieldname} from {filename} with shape {temp.shape} before squeeze")
             temp = temp.squeeze()
             #temp = temp.reshape([d for d in temp.shape if d != 0]) # remove dimensions of size 0
