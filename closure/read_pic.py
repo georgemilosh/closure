@@ -965,6 +965,7 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
 
     """
     field = []
+    field_string = None # to handle different formats of iPiC3D output, e.g. legacy format with /Step#0/Block/ and newer format with /Fields
     if not isinstance(filenames, list):
         filenames = [filenames]
     for filename in filenames:
@@ -973,13 +974,10 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
             if filename.endswith(".h5"):
                 import h5py
                 with h5py.File(current_file_path, "r") as n:
-
-                    field_string = None
                     if "/Step#0/Block/" in n:
                         field_string = "/Step#0/Block/" # Format of legacy iPiC3D/ ECsim output
                     elif "/Fields" in n:
                         field_string = "/Fields" # Format of https://github.com/iPIC3D/iPIC3D-GPU/tree/dev-cuda-particles-soa
-                    
                     try:
                         if field_string is None:
                             available_fields = list(n.keys())
@@ -989,7 +987,26 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
                                 f"Available fields: {available_fields}"
                             )
                             raise KeyError(f"Neither /Step#0/Block/ nor /Fields found in {filename}")
-                        temp = np.array(n[f"{field_string}{fieldname}/0"] if field_string == "/Step#0/Block/" else n[f"{field_string}/{fieldname}"])
+                        
+                        # Find the correct case-sensitive fieldname
+                        actual_fieldname = fieldname
+                        if field_string == "/Step#0/Block/":
+                            available_fields = list(n[field_string].keys())
+                            fieldname_lower = fieldname.lower()
+                            for field_key in available_fields:
+                                if field_key.lower() == fieldname_lower:
+                                    actual_fieldname = field_key
+                                    break
+                        else:
+                            available_fields = list(n[f"{field_string}"].keys())
+                            fieldname_lower = fieldname.lower()
+                            for field_key in available_fields:
+                                if field_key.lower() == fieldname_lower:
+                                    actual_fieldname = field_key
+                                    break
+                           
+                        temp = np.array(n[f"{field_string}{actual_fieldname}/0"] if field_string == "/Step#0/Block/" else n[f"{field_string}/{actual_fieldname}"])
+                        #logger.info(f"Successfully loaded {temp.shape = } from {filename} with actual field name {actual_fieldname}.")
                     except Exception as e:
                         available_fields = []
                         try:
@@ -1020,7 +1037,7 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
                     )
                 temp = _read_vtk_field(current_file_path, fieldname, vtk_token, component_idx)
             else:
-                # Assuming that string of integers was passed
+                # Assuming that string of integers was passed. This part of the code deals with https://github.com/Pranab-JD/iPIC3D-CPU-SPACE-CoE format
                 import h5py
                 iteration = int(filename)
                 # Split fieldname to handle cases like Jx_0 (field Jx, species 0)
@@ -1063,27 +1080,32 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
                 # Permute from (x, y, z) to (z, y, x)
                 temp = np.transpose(temp, (2, 1, 0))
             #print(f"{temp.shape = }")
-            # Slicing if needed, if not specified we take the whole range (or 0,1 if the dimension is of size 1)
-            if choose_x is None:
-                if temp.shape[2] > 1:
-                    choose_x = [0,temp.shape[2]-1]
-                else:
-                    choose_x = [0,1]
-            if choose_y is None:
-                if temp.shape[1] > 1:
-                    choose_y = [0,temp.shape[1]-1]
-                else:
-                    choose_y = [0,1]
-            if choose_z is None:
-                if temp.shape[0] > 1:
-                    choose_z = [0,temp.shape[0]-1]
-                else:
-                    choose_z = [0,1]
-            #logger.warning(f"{choose_x = }, {choose_y = }, {choose_z = } with shape {temp.shape}")
+            
             if indexing == 'ij':
-                temp = np.transpose(temp[choose_z[0]:choose_z[1], choose_y[0]:choose_y[1], choose_x[0]:choose_x[1]], (2, 1, 0))  # to (z,y,x)
+                if field_string != '/Fields':
+                    temp = np.transpose(temp, (2, 1, 0))  # to (z,y,x)
+                # Slicing if needed, if not specified we take the whole range (or 0,1 if the dimension is of size 1)
+                if choose_x is None:
+                    if temp.shape[2] > 1:
+                        choose_x = [0,temp.shape[0]-1]
+                    else:
+                        choose_x = [0,1]
+                if choose_y is None:
+                    if temp.shape[1] > 1:
+                        choose_y = [0,temp.shape[1]-1]
+                    else:
+                        choose_y = [0,1]
+                if choose_z is None:
+                    if temp.shape[0] > 1:
+                        choose_z = [0,temp.shape[2]-1]
+                    else:
+                        choose_z = [0,1]
+                    #logger.warning(f"{choose_x = }, {choose_y = }, {choose_z = } with shape {temp.shape}")
+                temp = temp[choose_x[0]:choose_x[1], choose_y[0]:choose_y[1], choose_z[0]:choose_z[1]] # already in (x,y,z) order
             elif indexing == 'xy':
-                temp = np.transpose(temp[choose_z[0]:choose_z[1], choose_y[0]:choose_y[1], choose_x[0]:choose_x[1]], (1, 0, 2))  # to (y,x,z)
+                raise NotImplementedError("Indexing option 'xy' is not implemented yet.")
+                #temp = np.transpose(temp[choose_z[0]:choose_z[1], choose_y[0]:choose_y[1], choose_x[0]:choose_x[1]], (1, 0, 2))  # to (y,x,z)
+            #logger.info(f"{temp.shape = } after slicing with {choose_x = }, {choose_y = }, {choose_z = }")
             #logger.warning(f"Read {fieldname} from {filename} with shape {temp.shape} before squeeze")
             temp = temp.squeeze()
             #temp = temp.reshape([d for d in temp.shape if d != 0]) # remove dimensions of size 0
