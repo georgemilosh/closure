@@ -973,13 +973,28 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
             if filename.endswith(".h5"):
                 import h5py
                 with h5py.File(current_file_path, "r") as n:
+
+                    field_string = None
+                    if "/Step#0/Block/" in n:
+                        field_string = "/Step#0/Block/" # Format of legacy iPiC3D/ ECsim output
+                    elif "/Fields" in n:
+                        field_string = "/Fields" # Format of https://github.com/iPIC3D/iPIC3D-GPU/tree/dev-cuda-particles-soa
+                    
                     try:
-                        temp = np.array(n[f"/Step#0/Block/{fieldname}/0"])
+                        if field_string is None:
+                            available_fields = list(n.keys())
+                            logger.error(
+                                f"Unable to open {fieldname = } from {files_path = } of {filename = }. "
+                                f"Neither /Step#0/Block/ nor /Fields found. "
+                                f"Available fields: {available_fields}"
+                            )
+                            raise KeyError(f"Neither /Step#0/Block/ nor /Fields found in {filename}")
+                        temp = np.array(n[f"{field_string}{fieldname}/0"] if field_string == "/Step#0/Block/" else n[f"{field_string}/{fieldname}"])
                     except Exception as e:
                         available_fields = []
                         try:
-                            if "/Step#0/Block" in n:
-                                available_fields = list(n["/Step#0/Block"].keys())
+                            if field_string in n:
+                                available_fields = list(n[field_string].keys())
                             else:
                                 available_fields = list(n.keys())
                         except Exception:
@@ -1960,7 +1975,7 @@ def _collect_experiment_filenames(experiment_dir):
     """
     filenames = sorted([
         n for n in os.listdir(experiment_dir)
-        if "-Fields_" in n and (n.endswith(".pkl") or n.endswith(".h5") or n.endswith(".npz") or n.endswith(".vtk"))
+        if "-Fields_" in n or 'GEMHarris' in n and (n.endswith(".pkl") or n.endswith(".h5") or n.endswith(".npz") or n.endswith(".vtk"))
     ])
     if filenames == []:
         vtk_files = sorted([
@@ -2022,21 +2037,11 @@ def _extract_times_from_filenames(selected_filenames, dt):
     times = []
     for n in selected_filenames:
         n_str = str(n)
-        if n_str.endswith(".h5.pkl"):
-            time_token = n_str[-13:-7]
-        elif n_str.endswith(".npz"):
-            time_token = n_str[-9:-4]
-        elif n_str.endswith(".h5"):
-            time_token = n_str[-9:-3]
-        elif n_str.endswith(".vtk"):
-            match = re.search(r"_(\d+)\.vtk$", n_str)
-            if match is None:
-                raise ValueError(f"Could not parse VTK iteration from filename {n_str!r}")
-            time_token = match.group(1)
-        else:  # deal with new ipic3d version where the time is directly after "Fields_"
-            match = re.search(r'Fields_(\d+)', n_str)
-            time_token = match.group(1) if match else int(n_str)
-        times.append(int(time_token) * dt)
+        # match digits after the last underscore, before first dot suffix
+        match = re.search(r'_(\d+)(?:\..+)?$', n_str)
+        if not match:
+            raise ValueError(f"Could not parse time iteration from filename {n_str!r}")
+        times.append(int(match.group(1)) * dt)
     return times
 
 def get_exp_times(experiments, files_path, fields_to_read, choose_species=None, choose_times=None,choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, choose_z=DEFAULT_CHOOSE_Z, 
