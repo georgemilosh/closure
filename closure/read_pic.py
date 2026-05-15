@@ -2402,14 +2402,21 @@ def _build_ipic3d_analysis_requests(fields_to_read, choose_species):
 def _filter_ipic3d_requests_by_availability(requests, available, verbose=DEFAULT_VERBOSE):
     filtered_requests = []
     skipped = []
+
+    available_fields_lower = {field.lower() for field in available.get("fields", set())}
+    available_moments_lower = {
+        species: {field.lower() for field in fields}
+        for species, fields in available.get("moments", {}).items()
+    }
+
     for request in requests:
         path_prefix = request["path_prefix"]
         field_name = request["field_name"]
         if path_prefix == "fields":
-            is_available = field_name in available["fields"]
+            is_available = field_name.lower() in available_fields_lower
         else:
             species = path_prefix.split("species_", 1)[1]
-            is_available = field_name in available["moments"].get(species, set())
+            is_available = field_name.lower() in available_moments_lower.get(species, set())
         if is_available:
             filtered_requests.append(request)
         else:
