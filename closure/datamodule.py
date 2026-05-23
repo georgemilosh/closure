@@ -26,7 +26,12 @@ import lightning as L
 _logger = logging.getLogger("closure.datamodule")
 
 from closure.config import load_paths
-from closure.datasets import DataFrameDataset
+from closure.datasets import (
+    DataFrameDataset,
+    FileChunkedSampler,
+    LazyNPZDataFrameDataset,
+    OnePatchPerFileBatchSampler,
+)
 from closure.resources import (
     aggregate_gpu_stats,
     cgroup_memory_peak_gb,
@@ -104,6 +109,31 @@ class ClosureDataModule(L.LightningDataModule):
         repeated HDF5 reads — with zero copy overhead.  The mount is
         read-only, which is fine since data loading never writes.
         Default ``False``.
+    loading_mode : str
+        ``"eager"`` (default) materializes the full train/val splits in
+        RAM via :class:`DataFrameDataset`.  ``"lazy_npz"`` uses
+        :class:`LazyNPZDataFrameDataset` and loads one file per
+        ``__getitem__`` with a small per-worker LRU cache; required for
+        datasets that no longer fit in RAM.  Eager remains the default
+        to preserve existing behaviour.
+    sample_cache_size : int
+        Number of decoded files held per DataLoader worker in lazy
+        mode.  Default ``1``.  For ``flatten=True`` (MLP) this should
+        match ``chunk_window``.
+    chunk_window : int
+        Number of files held in flight by
+        :class:`FileChunkedSampler` when ``flatten=True`` and
+        ``loading_mode="lazy_npz"``.  Larger values interleave more
+        files within a batch at the cost of holding more decoded files
+        in cache.  Default ``1``.
+    persistent_workers : bool or None
+        Forwarded to :class:`~torch.utils.data.DataLoader`.  When
+        ``None`` (default), set to ``True`` automatically for lazy mode
+        with ``num_workers > 0`` (decode cost is paid once per worker
+        lifetime) and left ``False`` otherwise.
+    prefetch_factor : int or None
+        Forwarded to :class:`~torch.utils.data.DataLoader`.  ``None``
+        defers to torch's default (2 when ``num_workers > 0``).
     """
 
     def __init__(
@@ -135,9 +165,19 @@ class ClosureDataModule(L.LightningDataModule):
         norm_version_dir: Optional[str] = None,
         alfven_units: bool = False,
         use_readonly: bool = False,
+        loading_mode: str = "eager",
+        sample_cache_size: int = 1,
+        chunk_window: int = 1,
+        persistent_workers: Optional[bool] = None,
+        prefetch_factor: Optional[int] = None,
     ):
         super().__init__()
         self.save_hyperparameters()
+
+        if loading_mode not in ("eager", "lazy_npz"):
+            raise ValueError(
+                f"loading_mode must be 'eager' or 'lazy_npz', got {loading_mode!r}"
+            )
 
         # Will be populated in setup()
         self.train_dataset: DataFrameDataset | None = None
@@ -176,8 +216,12 @@ class ClosureDataModule(L.LightningDataModule):
 
         Precedence:
         1) explicit ``hparams.norm_version_dir`` (used by RunLoader)
-        2) active trainer ``log_dir`` (used during normal training)
-        3) configured ``base_norm_folder`` fallback
+        2) configured ``base_norm_folder`` when it is explicit (i.e. differs
+           from the trainer's ``default_root_dir``, which is what the CLI
+           auto-fills when the user provides no value)
+        3) active trainer ``log_dir`` (per-version dir used during normal
+           training when ``norm_folder`` was not explicitly set)
+        4) configured ``base_norm_folder`` fallback
         """
         explicit_version_dir = self.hparams.get("norm_version_dir")
         if explicit_version_dir:
@@ -185,6 +229,19 @@ class ClosureDataModule(L.LightningDataModule):
 
         trainer = getattr(self, "trainer", None)
         trainer_log_dir = getattr(trainer, "log_dir", None) if trainer is not None else None
+        trainer_root_dir = (
+            getattr(trainer, "default_root_dir", None) if trainer is not None else None
+        )
+
+        if base_norm_folder:
+            base_resolved = str(Path(base_norm_folder).expanduser().resolve())
+            if trainer_root_dir:
+                root_resolved = str(Path(trainer_root_dir).expanduser().resolve())
+                if base_resolved != root_resolved:
+                    return base_resolved
+            else:
+                return base_resolved
+
         if trainer_log_dir:
             return str(Path(trainer_log_dir).expanduser().resolve())
 
@@ -272,6 +329,18 @@ class ClosureDataModule(L.LightningDataModule):
             alfven_units=hp.alfven_units,
         )
 
+        # Select dataset class based on loading mode
+        if hp.loading_mode == "lazy_npz":
+            dataset_cls = LazyNPZDataFrameDataset
+            common["sample_cache_size"] = hp.sample_cache_size
+            _logger.info(
+                "Lazy NPZ loading enabled (sample_cache_size=%d, chunk_window=%d)",
+                hp.sample_cache_size,
+                hp.chunk_window,
+            )
+        else:
+            dataset_cls = DataFrameDataset
+
         # Build transform for patch extraction (training only).
         # Flattened datasets are pixel-wise vectors, so RandomCrop is invalid there.
         transform = None
@@ -284,7 +353,7 @@ class ClosureDataModule(L.LightningDataModule):
         if stage in ("fit", None):
             t0 = time.perf_counter()
             self._log_resource_snapshot("before fit data load")
-            self.train_dataset = DataFrameDataset(
+            self.train_dataset = dataset_cls(
                 samples_file=train_samples_file,
                 datalabel="train",
                 transform=transform,
@@ -292,7 +361,7 @@ class ClosureDataModule(L.LightningDataModule):
             )
             self._log_dataset_summary(self.train_dataset)
             self._log_resource_snapshot("after train data load")
-            self.val_dataset = DataFrameDataset(
+            self.val_dataset = dataset_cls(
                 samples_file=val_samples_file,
                 datalabel="val",
                 **common,
@@ -307,19 +376,9 @@ class ClosureDataModule(L.LightningDataModule):
             # Resolve channel name → index mappings
             self._resolve_channel_indices(self.train_dataset)
 
-        if stage in ("test", None):
+        if stage in ("test", "predict", None):
             if test_samples_file is not None:
-                self.test_dataset = DataFrameDataset(
-                    samples_file=test_samples_file,
-                    datalabel="test",
-                    **common,
-                )
-                self._log_dataset_summary(self.test_dataset)
-                self._resolve_channel_indices(self.test_dataset)
-
-        if stage == "predict":
-            if test_samples_file is not None:
-                self.test_dataset = DataFrameDataset(
+                self.test_dataset = dataset_cls(
                     samples_file=test_samples_file,
                     datalabel="test",
                     **common,
@@ -331,6 +390,11 @@ class ClosureDataModule(L.LightningDataModule):
     # dataloaders
     # ------------------------------------------------------------------
     def train_dataloader(self):
+        hp = self.hparams
+
+        if hp.loading_mode == "lazy_npz":
+            return self._make_lazy_train_loader()
+
         dataset = self._maybe_subsample(self.train_dataset)
         return self._make_loader(dataset, shuffle=True)
 
@@ -346,23 +410,127 @@ class ClosureDataModule(L.LightningDataModule):
         return self.test_dataloader()
 
     # ------------------------------------------------------------------
+    # Lightning hook: keep custom samplers in sync with the epoch counter
+    # so each epoch reshuffles with a different seed (mirrors what
+    # Lightning already does for DistributedSampler).
+    # ------------------------------------------------------------------
+    def on_train_epoch_start(self) -> None:
+        sampler = getattr(self, "_train_sampler", None)
+        if sampler is None or self.trainer is None:
+            return
+        if hasattr(sampler, "set_epoch"):
+            sampler.set_epoch(int(self.trainer.current_epoch))
+
+    # ------------------------------------------------------------------
     # helpers
     # ------------------------------------------------------------------
-    def _make_loader(self, dataset, shuffle: bool) -> DataLoader:
-        hp = self.hparams
-
-        # Wrap dataset with channel-selection collate if needed
+    def _wrap_channels(self, dataset):
         if self.feature_channels is not None or self.target_channels is not None:
-            dataset = _ChannelSubsetDataset(
+            return _ChannelSubsetDataset(
                 dataset, self.feature_channels, self.target_channels
             )
+        return dataset
 
+    def _loader_extra_kwargs(self, *, shuffle: bool) -> dict:
+        """DataLoader kwargs common to eager and lazy paths."""
+        hp = self.hparams
+        kwargs: dict = {"pin_memory": True}
+        # persistent_workers: keep workers alive across epochs (avoids
+        # re-decoding warm caches in lazy mode).  Default ``None`` => True
+        # in lazy mode with workers, False otherwise.
+        if hp.num_workers > 0:
+            if hp.persistent_workers is None:
+                kwargs["persistent_workers"] = hp.loading_mode == "lazy_npz"
+            else:
+                kwargs["persistent_workers"] = bool(hp.persistent_workers)
+            if hp.prefetch_factor is not None:
+                kwargs["prefetch_factor"] = int(hp.prefetch_factor)
+        return kwargs
+
+    def _make_lazy_train_loader(self) -> DataLoader:
+        """Lazy training loader with cache-aware sampler selection.
+
+        - ``flatten=False`` (FCNN/CNN with ``patch_dim``): batches of
+          distinct files via :class:`OnePatchPerFileBatchSampler`.
+          ``subsample_rate`` (>= 1) becomes the sampler's ``oversample``
+          and replaces the eager :meth:`_maybe_subsample` index trick.
+        - ``flatten=True`` (MLP): pixel indices grouped per file via
+          :class:`FileChunkedSampler` so the per-worker LRU cache stays
+          warm.  ``subsample_rate`` is ignored here (one pixel per
+          sample already gives ``N*H*W`` samples per epoch); a warning
+          is emitted if it deviates from ``1.0``.
+        """
+        hp = self.hparams
+        dataset = self._wrap_channels(self.train_dataset)
+        underlying = self.train_dataset
+        seed = hp.subsample_seed if hp.subsample_seed is not None else 0
+        kwargs = self._loader_extra_kwargs(shuffle=True)
+
+        if not hp.flatten:
+            oversample = max(1, int(round(float(hp.subsample_rate))))
+            sampler = OnePatchPerFileBatchSampler(
+                num_files=underlying.num_files,
+                batch_size=hp.batch_size,
+                oversample=oversample,
+                drop_last=True,
+                shuffle=True,
+                seed=int(seed),
+            )
+            self._train_sampler = sampler
+            _logger.info(
+                "Lazy train loader: OnePatchPerFileBatchSampler "
+                "(num_files=%d, batch_size=%d, oversample=%d) -> %d batches/epoch",
+                underlying.num_files,
+                hp.batch_size,
+                oversample,
+                len(sampler),
+            )
+            return DataLoader(
+                dataset,
+                batch_sampler=sampler,
+                num_workers=hp.num_workers,
+                **kwargs,
+            )
+
+        if float(hp.subsample_rate) != 1.0:
+            _logger.warning(
+                "subsample_rate=%s ignored in lazy_npz + flatten=True mode "
+                "(one pixel is already one sample)",
+                hp.subsample_rate,
+            )
+        sampler = FileChunkedSampler(
+            num_files=underlying.num_files,
+            pixels_per_file=underlying._pixels_per_file,
+            window=int(hp.chunk_window),
+            shuffle=True,
+            seed=int(seed),
+        )
+        self._train_sampler = sampler
+        _logger.info(
+            "Lazy train loader: FileChunkedSampler "
+            "(num_files=%d, pixels_per_file=%d, window=%d)",
+            underlying.num_files,
+            underlying._pixels_per_file,
+            int(hp.chunk_window),
+        )
+        return DataLoader(
+            dataset,
+            batch_size=hp.batch_size,
+            sampler=sampler,
+            num_workers=hp.num_workers,
+            **kwargs,
+        )
+
+    def _make_loader(self, dataset, shuffle: bool) -> DataLoader:
+        hp = self.hparams
+        dataset = self._wrap_channels(dataset)
+        kwargs = self._loader_extra_kwargs(shuffle=shuffle)
         return DataLoader(
             dataset,
             batch_size=hp.batch_size,
             shuffle=shuffle,
             num_workers=hp.num_workers,
-            pin_memory=True,
+            **kwargs,
         )
 
     def _maybe_subsample(self, dataset):

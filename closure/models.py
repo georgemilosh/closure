@@ -258,16 +258,13 @@ class MLP(torch.nn.Module):
         for i in range(len(feature_dims) - 1):
             linear_layer = torch.nn.Linear(feature_dims[i], feature_dims[i + 1])
             if weights[i] is not None:
-                try:
-                    name = weights[i].pop('name')
-                except Exception as e:
-                    logger.info(f"{weights = }")
-                    logger.error(f"Error in weights: {i = }, {weights[i] = }")
-                    raise e
-                getattr(torch.nn.init, name)(linear_layer.weight, **weights[i])
+                w = dict(weights[i])
+                name = w.pop('name')
+                getattr(torch.nn.init, name)(linear_layer.weight, **w)
             if biases[i] is not None:
-                name = biases[i].pop('name')
-                getattr(torch.nn.init, name)(linear_layer.bias, **biases[i])
+                b = dict(biases[i])
+                name = b.pop('name')
+                getattr(torch.nn.init, name)(linear_layer.bias, **b)
             seq_list.append(linear_layer)
             if activations[i] is not None:
                 activation_layer = getattr(torch.nn, activations[i])() #  'ReLu' => torch.nn.ReLU() 

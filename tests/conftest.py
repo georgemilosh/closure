@@ -110,3 +110,63 @@ def mock_ecsim_dir(tmp_path: pathlib.Path) -> pathlib.Path:
                 grp.create_dataset("0", data=rng.random(shape) + cycle_idx)
 
     return sim_dir
+
+
+# ----------------------------------------------------------------------
+# Tiny on-disk NPZ fixture for LazyNPZDataFrameDataset integration tests.
+# Each `.npz` is a flat dict of {fieldname: (1, H, W) float32 array}, mirroring
+# the iPiC3D .npz output format (Bx, By, Bz, Ex, Ey, Ez). A minimal
+# SimulationData.txt sits alongside so `parse_simulation_data` succeeds.
+# ----------------------------------------------------------------------
+@pytest.fixture
+def tiny_npz_dir(tmp_path: pathlib.Path) -> pathlib.Path:
+    """Create a small on-disk NPZ snapshot set for lazy-loading tests.
+
+    Layout::
+
+        <tmp_path>/npz_run/
+            SimulationData.txt
+            snap_000000.npz
+            snap_000001.npz
+            ...
+            train.csv      (filenames column listing "npz_run/snap_NNNNNN.npz")
+            val.csv
+
+    Returns the top-level tmp_path (i.e. the `data_folder` to pass to the
+    dataset). CSVs reference files via the `npz_run/` subdirectory.
+    """
+    run_name = "npz_run"
+    run_dir = tmp_path / run_name
+    run_dir.mkdir()
+
+    H, W = 8, 8
+    n_train = 5
+    n_val = 2
+    fields = ("Bx", "By", "Bz", "Ex", "Ey", "Ez")
+    rng = np.random.default_rng(20260522)
+
+    def _write(idx: int) -> str:
+        arrays = {
+            name: rng.standard_normal((1, H, W)).astype(np.float32)
+            for name in fields
+        }
+        fname = f"snap_{idx:06d}.npz"
+        np.savez(run_dir / fname, **arrays)
+        return f"{run_name}/{fname}"
+
+    train_files = [_write(i) for i in range(n_train)]
+    val_files = [_write(n_train + i) for i in range(n_val)]
+
+    (run_dir / "SimulationData.txt").write_text(
+        "Simulation domain = 8 x 8 x 1\n"
+        "Grid resolution = 8 x 8 x 1\n"
+        "Time step size (dt) = 0.125\n"
+        "Charge-to-mass ratio = -1\n"
+        "Charge-to-mass ratio = 1\n"
+    )
+
+    import pandas as _pd
+    _pd.DataFrame({"filenames": train_files}).to_csv(tmp_path / "train.csv", index=False)
+    _pd.DataFrame({"filenames": val_files}).to_csv(tmp_path / "val.csv", index=False)
+
+    return tmp_path

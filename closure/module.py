@@ -663,8 +663,7 @@ class ClosureLitModule(L.LightningModule):
         pyz = pressure[:, channel_map["Pyz"], ...]
 
         dpxx_dx, _ = ClosureLitModule._fd4_derivatives_2d(pxx, dx, dy)
-        _, dpxy_dy = ClosureLitModule._fd4_derivatives_2d(pxy, dx, dy)
-        dpxy_dx, _ = ClosureLitModule._fd4_derivatives_2d(pxy, dx, dy)
+        dpxy_dx, dpxy_dy = ClosureLitModule._fd4_derivatives_2d(pxy, dx, dy)
         _, dpyy_dy = ClosureLitModule._fd4_derivatives_2d(pyy, dx, dy)
         dpxz_dx, _ = ClosureLitModule._fd4_derivatives_2d(pxz, dx, dy)
         _, dpyz_dy = ClosureLitModule._fd4_derivatives_2d(pyz, dx, dy)

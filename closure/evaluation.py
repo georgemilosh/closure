@@ -290,6 +290,11 @@ def transform_features(
                     invfunc = torch.exp
                 elif func.__name__ == "arcsinh":
                     invfunc = torch.sinh
+                else:
+                    raise ValueError(
+                        f"Unsupported feature prescaler '{func}' for channel {channel}. "
+                        "Supported: None, log, arcsinh."
+                    )
                 if verbose:
                     print(f"{invfunc = }")
                 ground_truth_scaled[:, channel] = invfunc(ground_truth_scaled[:, channel])
@@ -376,6 +381,11 @@ def transform_targets(
                 invfunc = torch.exp
             elif func.__name__ == "arcsinh":
                 invfunc = torch.sinh
+            else:
+                    raise ValueError(
+                        f"Unsupported feature prescaler '{func}' for channel {channel}. "
+                        "Supported: None, log, arcsinh."
+                    )
             if verbose:
                 print(f"{invfunc = }")
             prediction_scaled[:, channel] = invfunc(prediction_scaled[:, channel])
@@ -517,6 +527,11 @@ def pred_unnormalize(data, test_features, model, dataset, target_channels=None,
                 invfunc = torch.exp
             elif func.__name__ == "arcsinh":
                 invfunc = torch.sinh
+            else:
+                    raise ValueError(
+                        f"Unsupported feature prescaler '{func}' for channel {channel}. "
+                        "Supported: None, log, arcsinh."
+                    )
             prediction_scaled[:, channel] = invfunc(prediction_scaled[:, channel])
 
     if dataset.flatten:

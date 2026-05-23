@@ -123,7 +123,7 @@ def _find_experiment_inp_file(experiment: str) -> Path:
 
 
 def _read_b0x_nb_from_inp(inp_path: Path) -> tuple[float, float]:
-    """Read ``B0x`` and first entry of ``rhoINIT`` from an iPiC input file."""
+    """Read ``B0x`` and first entry of ``rhoINIT`` (nb) from an iPiC input file."""
     b0x_value: float | None = None
     nb_value: float | None = None
 
@@ -136,11 +136,11 @@ def _read_b0x_nb_from_inp(inp_path: Path) -> tuple[float, float]:
             b0x_value = _parse_first_float(value)
         elif key == "rhoINIT":
             rho_values = _parse_float_list(value)
-            #if len(rho_values) < 3:
-            #    raise ValueError(
-            #        f"rhoINIT in {inp_path} must contain at least 3 values to infer nb"
-            #    )
-            nb_value = rho_values[0] #rho_values[2]
+            if len(rho_values) < 1:
+                raise ValueError(
+                    f"rhoINIT in {inp_path} must contain at least 1 value to infer nb"
+                )
+            nb_value = rho_values[0]
 
     if b0x_value is None:
         raise ValueError(f"B0x not found in {inp_path}")
@@ -285,7 +285,7 @@ def code2alfven(
     When ``b0x`` or ``nb`` are missing and ``experiment`` is provided,
     values are inferred from ``*.inp``:
     - ``B0x`` line for ``b0x``
-    - third entry of ``rhoINIT`` for ``nb``
+    - first entry of ``rhoINIT`` for ``nb``
 
     ``experiment`` must be an absolute path to either the run directory
     containing an ``.inp`` file or the ``.inp`` file itself.

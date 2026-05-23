@@ -65,9 +65,27 @@ class TestNormFolderResolution:
     def test_trainer_log_dir_used_when_available(self, tmp_path):
         dm = ClosureDataModule(**_COMMON)
         trainer_log_dir = tmp_path / "lightning_logs" / "version_3"
-        dm.trainer = MagicMock(log_dir=str(trainer_log_dir))
+        # Production case: CLI auto-inferred norm_folder == default_root_dir,
+        # so the per-version trainer.log_dir takes precedence.
+        dm.trainer = MagicMock(
+            log_dir=str(trainer_log_dir),
+            default_root_dir="/base/norm",
+        )
         resolved = dm._resolve_norm_folder("/base/norm")
         assert resolved == str(trainer_log_dir.resolve())
+
+    def test_explicit_base_norm_folder_overrides_trainer_log_dir(self, tmp_path):
+        dm = ClosureDataModule(**_COMMON)
+        trainer_log_dir = tmp_path / "lightning_logs" / "version_3"
+        # User explicitly set a norm_folder distinct from default_root_dir;
+        # it must win over the trainer's per-version log_dir.
+        explicit_norm = tmp_path / "explicit_norm"
+        dm.trainer = MagicMock(
+            log_dir=str(trainer_log_dir),
+            default_root_dir=str(tmp_path / "outputs"),
+        )
+        resolved = dm._resolve_norm_folder(str(explicit_norm))
+        assert resolved == str(explicit_norm.resolve())
 
     def test_base_norm_folder_fallback_without_version_info(self):
         dm = ClosureDataModule(**_COMMON)

@@ -1614,7 +1614,18 @@ def read_files(files_path, filenames, fields_to_read, qom, dtype, extract_fields
         out2 = np.array(out2, dtype=dtype)
         if len(out2.shape) > 4:
             logger.warning(f"Output shape {out2.shape} has more than 4 dimensions, we try fixing by removing single-dimensional entries")
-            out2 = out2[...,0].squeeze()
+            # Drop the trailing z=1 dim that ``read_fieldname`` leaves behind,
+            # then squeeze any *interior* singleton dims while protecting the
+            # leading N (axis 0) and C (axis 1) axes. A bare ``.squeeze()``
+            # would collapse N=1 too, which breaks the ``transpose(0, 2, 3, 1)``
+            # step below for single-file calls (e.g. lazy per-file loading).
+            if out2.shape[-1] == 1:
+                out2 = out2[..., 0]
+            while out2.ndim > 4:
+                interior = [i for i in range(2, out2.ndim) if out2.shape[i] == 1]
+                if not interior:
+                    break
+                out2 = out2.squeeze(axis=interior[0])
             logger.warning(f"Output shape after fixing {out2.shape}")
         # Add logging before transpose
         logger.info(f"About to transpose array with shape {out2.shape}")
