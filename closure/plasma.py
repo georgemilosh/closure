@@ -28,7 +28,9 @@ __all__ = [
     "get_W",
     "get_agyrotropy",
     "get_spectral_index",
+    "find_xo_points",
     "highdiff",
+    "track_xo_points",
     "scalar_spectrum_2D",
     "scale_filtering",
     "vector_spectrum_2D",
@@ -472,13 +474,25 @@ def find_xo_points(A, x=None, y=None, grad_tol=1e-8, merge_tol=1e-3):
     for i in range(1, nx - 1):
         for j in range(1, ny - 1):
             patch = gmag[i-1:i+2, j-1:j+2]
-            if gmag[i, j] == np.min(patch):
+            # Use <= with a small relative tolerance to handle symmetric fields
+            # where two neighbours can have identical gradient magnitudes.
+            if gmag[i, j] <= np.min(patch) * (1 + 1e-10):
                 candidates.append((x[i], y[j]))
 
     roots = []
     for seed in candidates:
-        sol = root(grad, seed)
-        if not sol.success:
+        # Try hybr first (fast); fall back to lm (Levenberg-Marquardt) which is
+        # more robust when the Jacobian is ill-conditioned (e.g. near X-points
+        # whose Hessian has mixed-sign eigenvalues).
+        # Note: hybr uses xtol (step size); ftol is not a valid option for hybr.
+        sol = root(grad, seed, method="hybr", options={"xtol": grad_tol})
+        if not sol.success or np.linalg.norm(sol.fun) > grad_tol:
+            sol = root(grad, seed, method="lm")
+
+        # Accept based on actual residual, not sol.success alone, which can be
+        # False even when the optimizer has converged close enough to a critical
+        # point, and can be True when hybr converged to the wrong place.
+        if np.linalg.norm(sol.fun) > grad_tol:
             continue
 
         z = sol.x
@@ -486,10 +500,6 @@ def find_xo_points(A, x=None, y=None, grad_tol=1e-8, merge_tol=1e-3):
 
         # inside domain
         if not (x[0] <= xx <= x[-1] and y[0] <= yy <= y[-1]):
-            continue
-
-        # accept only if gradient is really small
-        if np.linalg.norm(grad(z)) > grad_tol:
             continue
 
         roots.append(z)
@@ -529,7 +539,186 @@ def find_xo_points(A, x=None, y=None, grad_tol=1e-8, merge_tol=1e-3):
             entry["type"] = "X"
             x_points.append(entry)
 
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+    # Warnings reference `unique` (the actual output), not any loop variable.
+    if not x_points:
+        _log.warning(
+            "No X-points found (unique roots: %d, candidates: %d)",
+            len(unique), len(candidates),
+        )
+    if not o_points:
+        _log.warning(
+            "No O-points found (unique roots: %d, candidates: %d)",
+            len(unique), len(candidates),
+        )
     return o_points, x_points
+
+
+def track_xo_points(
+    data: DataDict,
+    X: ArrayLike,
+    Y: ArrayLike,
+    times: ArrayLike,
+    *,
+    az_key: str = "Az",
+    az_filter: dict[str, Any] | None = None,
+    grad_tol: float = 1e-8,
+    merge_tol: float = 1e-3,
+    max_opoint_jump: float = 3.0,
+    rate_sigma_clip: float = 15.0,
+) -> dict[str, ArrayLike]:
+    """
+    Track X- and O-points in Az over time with temporal continuity.
+
+    At each snapshot the function calls ``find_xo_points`` on (optionally
+    filtered) Az and applies two stabilisation strategies:
+
+    * **Nearest-neighbour continuity** — when multiple O-points are found,
+      prefer the one geometrically closest to the last accepted O-point
+      rather than always picking the global Az minimum.
+    * **Displacement rejection** — if the selected O-point has moved more
+      than *max_opoint_jump* (in the same units as X/Y) since the last
+      accepted step, treat it as a tracking artefact: set the O-point
+      quantities to NaN for that snapshot and keep the previous accepted
+      position as the reference for the next comparison.
+
+    Reconnection rate ``d/dt(Az_O - Az_X)`` is computed after linearly
+    interpolating over NaN gaps in the flux series, then applying a
+    MAD-based sigma-clip to remove residual single-timestep artefacts.
+
+    Parameters
+    ----------
+    data : dict
+        Field-data dict as returned by ``rp.get_exp_times``.  Must contain
+        the Az field under ``az_key`` with shape ``(nx, ny, nt)``.
+    X : ndarray, shape (nx, ny) or (nx,)
+        Physical x-coordinates (Alfvén units).  2-D meshgrid arrays
+        (``indexing="ij"``) are accepted; the first column is extracted.
+    Y : ndarray, shape (nx, ny) or (ny,)
+        Physical y-coordinates.  2-D meshgrid arrays are accepted; the
+        first row is extracted.
+    times : array-like, shape (nt,)
+        Physical times corresponding to the third axis of Az.
+    az_key : str
+        Key in *data* for the Az field (default ``"Az"``).
+    az_filter : dict or None
+        Filter spec forwarded to :func:`apply_filter` before calling
+        ``find_xo_points``.  Example::
+
+            {"name": "gaussian_filter", "sigma": 4, "axes": (0, 1)}
+
+        ``None`` (default) skips filtering.
+    grad_tol : float
+        Gradient-magnitude tolerance passed to :func:`find_xo_points`.
+    merge_tol : float
+        Duplicate-root merge tolerance passed to :func:`find_xo_points`.
+    max_opoint_jump : float
+        Maximum O-point displacement between consecutive accepted steps
+        (same units as X/Y).  Larger displacements are rejected as
+        tracking artefacts.
+    rate_sigma_clip : float
+        Points in ``recon_rate`` more than *rate_sigma_clip* × MAD from
+        the median are set to NaN.  Default 15.0 catches only extreme
+        single-step spikes while preserving genuine physics.
+
+    Returns
+    -------
+    dict with keys (all 1-D arrays of length nt):
+        ``"time"``       — physical times
+        ``"xpoint_x"``   — X-point x-coordinate
+        ``"xpoint_y"``   — X-point y-coordinate
+        ``"xpoint_ix"``  — X-point nearest grid index along x
+        ``"xpoint_iy"``  — X-point nearest grid index along y
+        ``"opoint_x"``   — O-point x-coordinate (NaN where rejected/missing)
+        ``"opoint_y"``   — O-point y-coordinate
+        ``"opoint_ix"``  — O-point nearest grid index along x (NaN where rejected)
+        ``"opoint_iy"``  — O-point nearest grid index along y (NaN where rejected)
+        ``"Az_X"``       — Az at the X-point
+        ``"Az_O"``       — Az at the O-point (NaN where rejected)
+        ``"recon_flux"`` — ``Az_O - Az_X`` (NaN where O-point rejected)
+        ``"recon_rate"`` — ``d/dt recon_flux``, gap-interpolated then clipped
+    """
+    Az_field = np.asarray(data[az_key])
+    x_arr = np.asarray(X if X.ndim == 1 else X[:, 0], dtype=float)
+    y_arr = np.asarray(Y if Y.ndim == 1 else Y[0, :], dtype=float)
+    times_arr = np.asarray(times, dtype=float)
+    nt = Az_field.shape[2]
+
+    keys = [
+        "xpoint_x", "xpoint_y", "xpoint_ix", "xpoint_iy",
+        "opoint_x", "opoint_y", "opoint_ix", "opoint_iy", "Az_X", "Az_O", "recon_flux",
+    ]
+    result: dict[str, ArrayLike] = {k: np.full(nt, np.nan) for k in keys}
+
+    prev_opoint: tuple[float, float] | None = None
+
+    for t in range(nt):
+        Az_t = Az_field[..., t]
+        Az_smooth = apply_filter(Az_t, filters=az_filter) if az_filter is not None else Az_t
+
+        o_pts, x_pts = find_xo_points(
+            Az_smooth, x=x_arr, y=y_arr,
+            grad_tol=grad_tol, merge_tol=merge_tol,
+        )
+        if not x_pts or not o_pts:
+            continue
+
+        xpoint = max(x_pts, key=lambda p: p["value"])
+
+        # Prefer O-point nearest to previous location for temporal continuity.
+        if len(o_pts) == 1 or prev_opoint is None:
+            opoint = min(o_pts, key=lambda p: p["value"])
+        else:
+            opoint = min(
+                o_pts,
+                key=lambda p: np.hypot(p["x"] - prev_opoint[0], p["y"] - prev_opoint[1]),
+            )
+
+        # Reject O-point if it jumped further than max_opoint_jump from the
+        # last accepted position — keeps prev_opoint unchanged as reference.
+        opoint_ok = prev_opoint is None or (
+            np.hypot(opoint["x"] - prev_opoint[0], opoint["y"] - prev_opoint[1])
+            <= max_opoint_jump
+        )
+
+        ix, iy = xpoint["ix"], xpoint["iy"]
+        result["xpoint_x"][t]  = xpoint["x"]
+        result["xpoint_y"][t]  = xpoint["y"]
+        result["xpoint_ix"][t] = ix
+        result["xpoint_iy"][t] = iy
+        result["Az_X"][t]      = float(Az_field[ix, iy, t])
+
+        if opoint_ok:
+            result["opoint_x"][t]   = float(opoint["x"])
+            result["opoint_y"][t]   = float(opoint["y"])
+            result["opoint_ix"][t]  = opoint["ix"]
+            result["opoint_iy"][t]  = opoint["iy"]
+            result["Az_O"][t]       = float(opoint["value"])
+            result["recon_flux"][t] = result["Az_O"][t] - result["Az_X"][t]
+            prev_opoint             = (float(opoint["x"]), float(opoint["y"]))
+
+    # Reconnection rate: interpolate over NaN gaps before differentiating to
+    # avoid large spurious spikes at gap boundaries.
+    flux = result["recon_flux"].copy()
+    finite = np.isfinite(flux)
+    if finite.sum() >= 2:
+        flux_interp = np.interp(times_arr, times_arr[finite], flux[finite])
+        rate = np.gradient(flux_interp, times_arr, edge_order=2)
+        finite_rate = rate[np.isfinite(rate)]
+        if finite_rate.size > 4 and rate_sigma_clip > 0:
+            med = np.median(finite_rate)
+            mad = np.median(np.abs(finite_rate - med)) * 1.4826
+            if mad > 0:
+                rate[np.abs(rate - med) > rate_sigma_clip * mad] = np.nan
+        rate[~finite] = np.nan
+    else:
+        rate = np.full(nt, np.nan)
+
+    result["recon_rate"] = rate
+    result["time"] = times_arr
+    return result
+
 
 def do_dot(fx: ArrayLike, fy: ArrayLike, fz: ArrayLike, gx: ArrayLike, gy: ArrayLike, gz: ArrayLike) -> ArrayLike:
     """Return the dot product of two vector fields."""
