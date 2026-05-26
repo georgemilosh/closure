@@ -27,10 +27,12 @@ _logger = logging.getLogger("closure.datamodule")
 
 from closure.config import load_paths
 from closure.datasets import (
+    ChunkOrderedSampler,
     DataFrameDataset,
     FileChunkedSampler,
     LazyNPZDataFrameDataset,
     OnePatchPerFileBatchSampler,
+    PreprocessedChunkDataset,
 )
 from closure.resources import (
     aggregate_gpu_stats,
@@ -134,6 +136,23 @@ class ClosureDataModule(L.LightningDataModule):
     prefetch_factor : int or None
         Forwarded to :class:`~torch.utils.data.DataLoader`.  ``None``
         defers to torch's default (2 when ``num_workers > 0``).
+    ssd_cache_dir : str or None
+        Directory for pre-normalised chunk tensors when
+        ``loading_mode="preprocessed"``.  On Hortense, Slurm sets
+        ``$TMPDIR`` to the node-local 480 GB NVMe SSD automatically;
+        leaving this ``None`` defaults to ``$TMPDIR/closure_preprocessed``
+        at ``setup()`` time.  Because ``$TMPDIR`` is wiped between jobs,
+        preprocessing runs once per job (not once ever) — still far
+        cheaper than lazy NPZ which processes every file every epoch.
+        Pass an explicit path to override (must be on a fast local
+        filesystem, not Lustre).
+    chunk_cache_size : int
+        Chunk tensors kept resident per DataLoader worker in
+        ``"preprocessed"`` mode.  Default ``1`` (one chunk per worker).
+    preprocess_chunk_size_gb : float or None
+        RAM budget (GiB) per chunk during the preprocessing pass.
+        When ``None`` (default), auto-estimated from
+        ``/proc/meminfo`` divided by the number of training GPUs.
     """
 
     def __init__(
@@ -170,14 +189,19 @@ class ClosureDataModule(L.LightningDataModule):
         chunk_window: int = 1,
         persistent_workers: Optional[bool] = None,
         prefetch_factor: Optional[int] = None,
+        ssd_cache_dir: Optional[str] = None,
+        chunk_cache_size: int = 1,
+        preprocess_chunk_size_gb: Optional[float] = None,
     ):
         super().__init__()
         self.save_hyperparameters()
 
-        if loading_mode not in ("eager", "lazy_npz"):
+        if loading_mode not in ("eager", "lazy_npz", "preprocessed"):
             raise ValueError(
-                f"loading_mode must be 'eager' or 'lazy_npz', got {loading_mode!r}"
+                f"loading_mode must be 'eager', 'lazy_npz', or 'preprocessed', "
+                f"got {loading_mode!r}"
             )
+        # ssd_cache_dir is resolved at setup() time (after Slurm sets $TMPDIR).
 
         # Will be populated in setup()
         self.train_dataset: DataFrameDataset | None = None
@@ -338,6 +362,42 @@ class ClosureDataModule(L.LightningDataModule):
                 hp.sample_cache_size,
                 hp.chunk_window,
             )
+        elif hp.loading_mode == "preprocessed":
+            dataset_cls = PreprocessedChunkDataset
+            num_gpus = max(1, getattr(getattr(self, "trainer", None), "num_devices", 1))
+
+            # Resolve ssd_cache_dir: explicit value > $TMPDIR fallback > error.
+            ssd_cache_dir = hp.ssd_cache_dir
+            if not ssd_cache_dir:
+                tmpdir = os.environ.get("TMPDIR", "")
+                if tmpdir:
+                    ssd_cache_dir = os.path.join(tmpdir, "closure_preprocessed")
+                    _logger.info(
+                        "ssd_cache_dir not set; using $TMPDIR: %s  "
+                        "(SSD is ephemeral — preprocessing runs once per job)",
+                        ssd_cache_dir,
+                    )
+                else:
+                    ssd_cache_dir = "/tmp/closure_preprocessed"
+                    _logger.warning(
+                        "ssd_cache_dir not set and $TMPDIR is unset (interactive session?). "
+                        "Falling back to %s — on Hortense GPU nodes /tmp is the local NVMe SSD. "
+                        "In a Slurm job, $TMPDIR is set automatically and preferred.",
+                        ssd_cache_dir,
+                    )
+
+            common["ssd_cache_dir"] = ssd_cache_dir
+            common["chunk_cache_size"] = hp.chunk_cache_size
+            common["preprocess_chunk_size_gb"] = hp.preprocess_chunk_size_gb
+            common["num_gpus"] = num_gpus
+            _logger.info(
+                "Preprocessed chunked loading enabled (ssd_cache_dir=%s, "
+                "chunk_cache_size=%d, preprocess_chunk_size_gb=%s, num_gpus=%d)",
+                ssd_cache_dir,
+                hp.chunk_cache_size,
+                hp.preprocess_chunk_size_gb,
+                num_gpus,
+            )
         else:
             dataset_cls = DataFrameDataset
 
@@ -395,6 +455,9 @@ class ClosureDataModule(L.LightningDataModule):
         if hp.loading_mode == "lazy_npz":
             return self._make_lazy_train_loader()
 
+        if hp.loading_mode == "preprocessed":
+            return self._make_preprocessed_train_loader()
+
         dataset = self._maybe_subsample(self.train_dataset)
         return self._make_loader(dataset, shuffle=True)
 
@@ -440,7 +503,7 @@ class ClosureDataModule(L.LightningDataModule):
         # in lazy mode with workers, False otherwise.
         if hp.num_workers > 0:
             if hp.persistent_workers is None:
-                kwargs["persistent_workers"] = hp.loading_mode == "lazy_npz"
+                kwargs["persistent_workers"] = hp.loading_mode in ("lazy_npz", "preprocessed")
             else:
                 kwargs["persistent_workers"] = bool(hp.persistent_workers)
             if hp.prefetch_factor is not None:
@@ -512,6 +575,71 @@ class ClosureDataModule(L.LightningDataModule):
             underlying.num_files,
             underlying._pixels_per_file,
             int(hp.chunk_window),
+        )
+        return DataLoader(
+            dataset,
+            batch_size=hp.batch_size,
+            sampler=sampler,
+            num_workers=hp.num_workers,
+            **kwargs,
+        )
+
+    def _make_preprocessed_train_loader(self) -> DataLoader:
+        """Chunked-SSD training loader with :class:`ChunkOrderedSampler`.
+
+        - ``flatten=False`` (FCNN/CNN): file-level indices, chunk-ordered.
+          ``subsample_rate`` (≥ 1) becomes ``oversample`` so each file is
+          visited that many times per epoch with a different :class:`_RandomCrop`.
+        - ``flatten=True`` (MLP): pixel-level indices, chunk-ordered.
+          ``subsample_rate`` is ignored (all pixels emitted once per epoch).
+        """
+        hp = self.hparams
+        dataset = self._wrap_channels(self.train_dataset)
+        underlying = self.train_dataset
+        seed = hp.subsample_seed if hp.subsample_seed is not None else 0
+        kwargs = self._loader_extra_kwargs(shuffle=True)
+
+        if not hp.flatten:
+            oversample = max(1, int(round(float(hp.subsample_rate))))
+            sampler = ChunkOrderedSampler(
+                chunk_sizes=underlying._chunk_sizes,
+                pixels_per_file=1,
+                oversample=oversample,
+                shuffle=True,
+                seed=int(seed),
+            )
+            self._train_sampler = sampler
+            _logger.info(
+                "Preprocessed train loader: ChunkOrderedSampler FCNN "
+                "(chunks=%d, oversample=%d) → %d samples/epoch",
+                underlying._num_chunks, oversample, len(sampler),
+            )
+            return DataLoader(
+                dataset,
+                batch_size=hp.batch_size,
+                sampler=sampler,
+                num_workers=hp.num_workers,
+                **kwargs,
+            )
+
+        if float(hp.subsample_rate) != 1.0:
+            _logger.warning(
+                "subsample_rate=%s ignored in preprocessed + flatten=True mode "
+                "(one pixel is already one sample)",
+                hp.subsample_rate,
+            )
+        sampler = ChunkOrderedSampler(
+            chunk_sizes=underlying._chunk_sizes,
+            pixels_per_file=underlying._pixels_per_file,
+            oversample=1,
+            shuffle=True,
+            seed=int(seed),
+        )
+        self._train_sampler = sampler
+        _logger.info(
+            "Preprocessed train loader: ChunkOrderedSampler MLP "
+            "(chunks=%d, pixels/file=%d) → %d samples/epoch",
+            underlying._num_chunks, underlying._pixels_per_file, len(sampler),
         )
         return DataLoader(
             dataset,
