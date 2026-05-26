@@ -529,15 +529,26 @@ def find_xo_points(A, x=None, y=None, grad_tol=1e-8, merge_tol=1e-3):
             "detH": float(detH),
         }
 
-        if eig[0] > 0:
-            entry["type"] = "O-min"
-            o_points.append(entry)
-        elif eig[1] < 0:
-            entry["type"] = "O-max"
-            o_points.append(entry)
-        elif eig[0] < 0 < eig[1]:
+        # Use detH sign for robust classification (the strict eigenvalue
+        # comparisons have a silent gap when detH≈0 and one eigenvalue is
+        # numerically zero, causing valid critical points to be dropped).
+        # detH < 0  → saddle  → X-point
+        # detH > 0, trace > 0 → local min → O-min
+        # detH > 0, trace < 0 → local max → O-max
+        # detH ≈ 0 → degenerate ridge; skip (cannot classify reliably)
+        trH = float(eig[0] + eig[1])
+        if detH < 0:
             entry["type"] = "X"
             x_points.append(entry)
+        elif detH > 0 and trH > 0:
+            entry["type"] = "O-min"
+            o_points.append(entry)
+        elif detH > 0 and trH < 0:
+            entry["type"] = "O-max"
+            o_points.append(entry)
+        else:
+            _log = __import__("logging").getLogger(__name__)
+            _log.debug("Skipping degenerate critical point at (%.4f, %.4f): detH=%.3e", z[0], z[1], detH)
 
     import logging as _logging
     _log = _logging.getLogger(__name__)
@@ -661,42 +672,48 @@ def track_xo_points(
             Az_smooth, x=x_arr, y=y_arr,
             grad_tol=grad_tol, merge_tol=merge_tol,
         )
-        if not x_pts or not o_pts:
+        # Skip only if *both* are absent — if just one type is missing (common
+        # in early/late phases of long runs like ECsim) still record what we have.
+        if not x_pts and not o_pts:
             continue
 
-        xpoint = max(x_pts, key=lambda p: p["value"])
+        if x_pts:
+            xpoint = max(x_pts, key=lambda p: p["value"])
+            ix, iy = xpoint["ix"], xpoint["iy"]
+            result["xpoint_x"][t]  = xpoint["x"]
+            result["xpoint_y"][t]  = xpoint["y"]
+            result["xpoint_ix"][t] = ix
+            result["xpoint_iy"][t] = iy
+            result["Az_X"][t]      = float(Az_field[ix, iy, t])
 
-        # Prefer O-point nearest to previous location for temporal continuity.
-        if len(o_pts) == 1 or prev_opoint is None:
-            opoint = min(o_pts, key=lambda p: p["value"])
-        else:
-            opoint = min(
-                o_pts,
-                key=lambda p: np.hypot(p["x"] - prev_opoint[0], p["y"] - prev_opoint[1]),
+        if o_pts:
+            # Prefer O-point nearest to previous location for temporal continuity.
+            if len(o_pts) == 1 or prev_opoint is None:
+                opoint = min(o_pts, key=lambda p: p["value"])
+            else:
+                opoint = min(
+                    o_pts,
+                    key=lambda p: np.hypot(p["x"] - prev_opoint[0], p["y"] - prev_opoint[1]),
+                )
+
+            # Reject O-point if it jumped further than max_opoint_jump from the
+            # last accepted position — keeps prev_opoint unchanged as reference.
+            opoint_ok = prev_opoint is None or (
+                np.hypot(opoint["x"] - prev_opoint[0], opoint["y"] - prev_opoint[1])
+                <= max_opoint_jump
             )
 
-        # Reject O-point if it jumped further than max_opoint_jump from the
-        # last accepted position — keeps prev_opoint unchanged as reference.
-        opoint_ok = prev_opoint is None or (
-            np.hypot(opoint["x"] - prev_opoint[0], opoint["y"] - prev_opoint[1])
-            <= max_opoint_jump
-        )
+            if opoint_ok:
+                result["opoint_x"][t]   = float(opoint["x"])
+                result["opoint_y"][t]   = float(opoint["y"])
+                result["opoint_ix"][t]  = opoint["ix"]
+                result["opoint_iy"][t]  = opoint["iy"]
+                result["Az_O"][t]       = float(opoint["value"])
+                prev_opoint             = (float(opoint["x"]), float(opoint["y"]))
 
-        ix, iy = xpoint["ix"], xpoint["iy"]
-        result["xpoint_x"][t]  = xpoint["x"]
-        result["xpoint_y"][t]  = xpoint["y"]
-        result["xpoint_ix"][t] = ix
-        result["xpoint_iy"][t] = iy
-        result["Az_X"][t]      = float(Az_field[ix, iy, t])
-
-        if opoint_ok:
-            result["opoint_x"][t]   = float(opoint["x"])
-            result["opoint_y"][t]   = float(opoint["y"])
-            result["opoint_ix"][t]  = opoint["ix"]
-            result["opoint_iy"][t]  = opoint["iy"]
-            result["Az_O"][t]       = float(opoint["value"])
+        # recon_flux requires both points
+        if np.isfinite(result["Az_X"][t]) and np.isfinite(result["Az_O"][t]):
             result["recon_flux"][t] = result["Az_O"][t] - result["Az_X"][t]
-            prev_opoint             = (float(opoint["x"]), float(opoint["y"]))
 
     # Reconnection rate: interpolate over NaN gaps before differentiating to
     # avoid large spurious spikes at gap boundaries.
