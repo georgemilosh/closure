@@ -39,6 +39,7 @@ Description:
 """
 
 import bisect as _bisect
+import concurrent.futures as _cf
 import hashlib as _hashlib
 import inspect
 import json as _json
@@ -50,6 +51,33 @@ except ImportError:
 import os
 from collections import OrderedDict
 from typing import Any, Iterator, List, Optional, Tuple, TypeVar
+
+try:
+    from tqdm import tqdm as _tqdm
+    _has_tqdm = True
+except ImportError:
+    _has_tqdm = False
+
+
+def _progress(iterable=None, **kwargs):
+    """Wrap iterable with tqdm if available, otherwise return it unchanged.
+
+    When called with no iterable (context-manager pattern for manual updates),
+    returns a tqdm bar or a no-op context manager.
+    """
+    if iterable is None:
+        return _tqdm(**kwargs) if _has_tqdm else _NullContext()
+    return _tqdm(iterable, **kwargs) if _has_tqdm else iterable
+
+
+class _NullContext:
+    """No-op context manager used when tqdm is unavailable."""
+    def __enter__(self):
+        return self
+    def __exit__(self, *_):
+        pass
+    def update(self, n=1):
+        pass
 
 import pandas as pd
 import numpy as np
@@ -494,14 +522,14 @@ class DataFrameDataset(torch.utils.data.Dataset):
             )
         
         # Compute normalization parameters
+        # Accumulate in float64: float32 sums saturate past ~10^7 elements
+        # per channel, producing wrong mean/std on production-scale splits.
         if len(data.shape) > 2:
-            # For image data, compute statistics across batch and spatial dimensions
-            mean = np.mean(data, axis=(0, 2, 3)).astype(dtype_numpy)
-            std = np.std(data, axis=(0, 2, 3)).astype(dtype_numpy)
+            mean = np.mean(data, axis=(0, 2, 3), dtype=np.float64).astype(dtype_numpy)
+            std = np.std(data, axis=(0, 2, 3), dtype=np.float64).astype(dtype_numpy)
         else:
-            # For flattened data, compute statistics across batch dimension
-            mean = np.mean(data, axis=0).astype(dtype_numpy)
-            std = np.std(data, axis=0).astype(dtype_numpy)
+            mean = np.mean(data, axis=0, dtype=np.float64).astype(dtype_numpy)
+            std = np.std(data, axis=0, dtype=np.float64).astype(dtype_numpy)
         
         # Save parameters
         os.makedirs(self.norm_folder, exist_ok=True)
@@ -1376,6 +1404,11 @@ class PreprocessedChunkDataset(torch.utils.data.Dataset):
         Auto-estimated from ``/proc/meminfo`` / ``num_gpus`` when ``None``.
     num_gpus : int
         Number of GPUs; divides the available-RAM budget for chunk sizing.
+    preprocess_num_workers : int
+        Number of threads used to read files in parallel during the
+        preprocessing pass.  Default ``1`` (sequential).  Increasing this
+        speeds up the initial preprocessing at the cost of slightly higher
+        peak RAM (``preprocess_num_workers`` files in flight at once).
     """
 
     def __init__(
@@ -1407,6 +1440,7 @@ class PreprocessedChunkDataset(torch.utils.data.Dataset):
         chunk_cache_size: int = 1,
         preprocess_chunk_size_gb: float = None,
         num_gpus: int = 1,
+        preprocess_num_workers: int = 1,
     ):
         if feature_dtype is not None:
             features_dtype = feature_dtype
@@ -1460,6 +1494,7 @@ class PreprocessedChunkDataset(torch.utils.data.Dataset):
         self._filter_targets_raw = filter_targets
         self._preprocess_chunk_size_gb = preprocess_chunk_size_gb
         self._num_gpus = num_gpus
+        self._preprocess_num_workers = max(1, int(preprocess_num_workers))
 
         # Transform (e.g. RandomCrop) applied at __getitem__ time.
         self._setup_transforms(transform)
@@ -1682,40 +1717,54 @@ class PreprocessedChunkDataset(torch.utils.data.Dataset):
         # reuse; the sampler re-shuffles within each chunk every epoch anyway.
         file_perm = numpy.random.RandomState(0).permutation(num_files).tolist()
 
-        chunk_idx = 0
+        # Pre-compute per-chunk file-index lists.
+        chunks_file_indices: List[List[int]] = []
+        start = 0
+        while start < num_files:
+            end = min(start + fpb, num_files)
+            chunks_file_indices.append([file_perm[s] for s in range(start, end)])
+            start = end
+
+        def _read_file(file_idx):
+            feat_chw, targ_chw = normalized._load_file_chw(file_idx, normalize=True)
+            return (
+                torch.from_numpy(numpy.ascontiguousarray(feat_chw)).float(),
+                torch.from_numpy(numpy.ascontiguousarray(targ_chw)).float(),
+            )
+
         chunk_sizes: List[int] = []
-        buf_f: List[torch.Tensor] = []
-        buf_t: List[torch.Tensor] = []
+        with _progress(total=num_files, desc="preprocess", unit="file", leave=True) as pbar:
+            with _cf.ThreadPoolExecutor(max_workers=self._preprocess_num_workers) as pool:
+                for chunk_idx, file_indices in enumerate(chunks_file_indices):
+                    futures = [pool.submit(_read_file, fi) for fi in file_indices]
+                    buf_f = []
+                    buf_t = []
+                    for fut in futures:
+                        feat_t, targ_t = fut.result()
+                        buf_f.append(feat_t)
+                        buf_t.append(targ_t)
+                        pbar.update(1)
 
-        for slot in range(num_files):
-            file_idx = file_perm[slot]
-            feat_chw, targ_chw = normalized._get_file_arrays(file_idx, normalize=True)
-            buf_f.append(torch.from_numpy(numpy.ascontiguousarray(feat_chw)).float())
-            buf_t.append(torch.from_numpy(numpy.ascontiguousarray(targ_chw)).float())
-
-            if len(buf_f) == fpb or slot == num_files - 1:
-                chunk_path = os.path.join(self._chunk_dir, f"chunk_{chunk_idx:04d}.pt")
-                torch.save(
-                    {
-                        "features": torch.stack(buf_f, dim=0),
-                        "targets": torch.stack(buf_t, dim=0),
-                    },
-                    chunk_path,
-                )
-                chunk_sizes.append(len(buf_f))
-                logger.info(
-                    "Saved chunk %d (%d files) → %s",
-                    chunk_idx, len(buf_f), chunk_path,
-                )
-                _dbg_mem("preprocess_chunk_saved",
-                         f"chunk_idx={chunk_idx} files={len(buf_f)}")
-                chunk_idx += 1
-                buf_f, buf_t = [], []
+                    chunk_path = os.path.join(self._chunk_dir, f"chunk_{chunk_idx:04d}.pt")
+                    torch.save(
+                        {
+                            "features": torch.stack(buf_f, dim=0),
+                            "targets": torch.stack(buf_t, dim=0),
+                        },
+                        chunk_path,
+                    )
+                    chunk_sizes.append(len(buf_f))
+                    logger.info(
+                        "Saved chunk %d (%d files) → %s",
+                        chunk_idx, len(buf_f), chunk_path,
+                    )
+                    _dbg_mem("preprocess_chunk_saved",
+                             f"chunk_idx={chunk_idx} files={len(buf_f)}")
 
         meta = {
             "version": 1,
             "num_files": num_files,
-            "num_chunks": chunk_idx,
+            "num_chunks": len(chunk_sizes),
             "chunk_sizes": chunk_sizes,
             "H": H,
             "W": W,
@@ -1727,11 +1776,15 @@ class PreprocessedChunkDataset(torch.utils.data.Dataset):
             _json.dump(meta, fh, indent=2)
         logger.info(
             "Preprocessing complete: %d files → %d chunks in %s",
-            num_files, chunk_idx, self._chunk_dir,
+            num_files, len(chunk_sizes), self._chunk_dir,
         )
 
     def _stream_norm_stats(self, raw: "LazyNPZDataFrameDataset") -> None:
-        """Single streaming pass to compute and save per-channel mean/std."""
+        """Streaming pass to compute and save per-channel mean/std.
+
+        Uses a thread pool when ``preprocess_num_workers > 1`` so multiple
+        files are read concurrently while stats are accumulated serially.
+        """
         for data_type in ('features', 'targets'):
             if not getattr(self, f'scaler_{data_type}'):
                 continue
@@ -1745,17 +1798,37 @@ class PreprocessedChunkDataset(torch.utils.data.Dataset):
             total_sq: Optional[numpy.ndarray] = None
             count = 0
 
-            for file_idx in range(raw.num_files):
+            def _file_partial(file_idx, _dt=data_type):
                 feat, targ = raw._load_file_chw(file_idx, normalize=False)
-                data = feat if data_type == 'features' else targ
-                flat = data.reshape(data.shape[0], -1).astype(numpy.float64, copy=False)
-                if total is None:
-                    total = flat.sum(axis=1)
-                    total_sq = numpy.square(flat).sum(axis=1)
-                else:
-                    total += flat.sum(axis=1)
-                    total_sq += numpy.square(flat).sum(axis=1)
-                count += flat.shape[1]
+                arr = feat if _dt == 'features' else targ
+                flat = arr.reshape(arr.shape[0], -1).astype(numpy.float64, copy=False)
+                return flat.sum(axis=1), numpy.square(flat).sum(axis=1), flat.shape[1]
+
+            if self._preprocess_num_workers > 1:
+                with _cf.ThreadPoolExecutor(max_workers=self._preprocess_num_workers) as pool:
+                    futs = {pool.submit(_file_partial, i): i for i in range(raw.num_files)}
+                    for fut in _progress(
+                        _cf.as_completed(futs),
+                        total=raw.num_files,
+                        desc=f"norm stats ({data_type})",
+                        unit="file",
+                        leave=False,
+                    ):
+                        t, t_sq, c = fut.result()
+                        total = t if total is None else total + t
+                        total_sq = t_sq if total_sq is None else total_sq + t_sq
+                        count += c
+            else:
+                for file_idx in _progress(
+                    range(raw.num_files),
+                    desc=f"norm stats ({data_type})",
+                    unit="file",
+                    leave=False,
+                ):
+                    t, t_sq, c = _file_partial(file_idx)
+                    total = t if total is None else total + t
+                    total_sq = t_sq if total_sq is None else total_sq + t_sq
+                    count += c
 
             mean = (total / count).astype(dtype_numpy)
             variance = numpy.maximum(total_sq / count - numpy.square(total / count), 0.0)

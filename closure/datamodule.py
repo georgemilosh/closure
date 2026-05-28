@@ -153,6 +153,13 @@ class ClosureDataModule(L.LightningDataModule):
         RAM budget (GiB) per chunk during the preprocessing pass.
         When ``None`` (default), auto-estimated from
         ``/proc/meminfo`` divided by the number of training GPUs.
+    preprocess_num_workers : int
+        Number of threads used to read files in parallel during the
+        initial preprocessing pass (``loading_mode="preprocessed"`` only).
+        Default ``1``.  Increasing this speeds up the one-time SSD write
+        phase at the cost of slightly higher peak RAM during preprocessing.
+        A value of 4–8 typically saturates NFS/Lustre bandwidth without
+        excessive memory pressure.
     """
 
     def __init__(
@@ -192,6 +199,7 @@ class ClosureDataModule(L.LightningDataModule):
         ssd_cache_dir: Optional[str] = None,
         chunk_cache_size: int = 1,
         preprocess_chunk_size_gb: Optional[float] = None,
+        preprocess_num_workers: int = 1,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -389,13 +397,16 @@ class ClosureDataModule(L.LightningDataModule):
             common["ssd_cache_dir"] = ssd_cache_dir
             common["chunk_cache_size"] = hp.chunk_cache_size
             common["preprocess_chunk_size_gb"] = hp.preprocess_chunk_size_gb
+            common["preprocess_num_workers"] = hp.preprocess_num_workers
             common["num_gpus"] = num_gpus
             _logger.info(
                 "Preprocessed chunked loading enabled (ssd_cache_dir=%s, "
-                "chunk_cache_size=%d, preprocess_chunk_size_gb=%s, num_gpus=%d)",
+                "chunk_cache_size=%d, preprocess_chunk_size_gb=%s, "
+                "preprocess_num_workers=%d, num_gpus=%d)",
                 ssd_cache_dir,
                 hp.chunk_cache_size,
                 hp.preprocess_chunk_size_gb,
+                hp.preprocess_num_workers,
                 num_gpus,
             )
         else:
