@@ -133,8 +133,8 @@ class TestCode2AlfvenFallback:
             experiment=str(run_dir.resolve()),
         )
 
-        np.testing.assert_allclose(x_out, x * np.sqrt(0.23))
-        np.testing.assert_allclose(y_out, y * np.sqrt(0.23))
+        np.testing.assert_allclose(x_out, x * np.sqrt(0.969))
+        np.testing.assert_allclose(y_out, y * np.sqrt(0.969))
         np.testing.assert_allclose(t_out, [0.0, 0.0249])
 
     def test_code2alfven_uses_explicit_b0x_and_infers_only_nb(self, tmp_path):

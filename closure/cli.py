@@ -582,17 +582,19 @@ def main():
         argv = [*argv, arg]
         inferred_overrides.append(arg)
 
-    inferred_save_dir = _infer_csvlogger_save_dir_default(argv)
-    if inferred_save_dir:
-        arg = f"--trainer.logger.init_args.save_dir={inferred_save_dir}"
-        argv = [*argv, arg]
-        inferred_overrides.append(arg)
+    logger_disabled = _parse_key_from_cli(argv, "trainer.logger") in ("false", "False", "null", "None")
+    if not logger_disabled:
+        inferred_save_dir = _infer_csvlogger_save_dir_default(argv)
+        if inferred_save_dir:
+            arg = f"--trainer.logger.init_args.save_dir={inferred_save_dir}"
+            argv = [*argv, arg]
+            inferred_overrides.append(arg)
 
-    inferred_version = _infer_csvlogger_version_default(argv)
-    if inferred_version:
-        arg = f"--trainer.logger.init_args.version={inferred_version}"
-        argv = [*argv, arg]
-        inferred_overrides.append(arg)
+        inferred_version = _infer_csvlogger_version_default(argv)
+        if inferred_version:
+            arg = f"--trainer.logger.init_args.version={inferred_version}"
+            argv = [*argv, arg]
+            inferred_overrides.append(arg)
 
     _configure_python_logging(argv)
     try:
