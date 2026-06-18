@@ -470,14 +470,14 @@ def find_xo_points(A, x=None, y=None, grad_tol=1e-8, merge_tol=1e-3):
     dAy = np.gradient(A, y, axis=1)
     gmag = np.sqrt(dAx**2 + dAy**2)
 
-    candidates = []
-    for i in range(1, nx - 1):
-        for j in range(1, ny - 1):
-            patch = gmag[i-1:i+2, j-1:j+2]
-            # Use <= with a small relative tolerance to handle symmetric fields
-            # where two neighbours can have identical gradient magnitudes.
-            if gmag[i, j] <= np.min(patch) * (1 + 1e-10):
-                candidates.append((x[i], y[j]))
+    from scipy.ndimage import minimum_filter
+    local_min = minimum_filter(gmag, size=3, mode="nearest")
+    # A cell is a local minimum when its value <= the neighbourhood min
+    # (with a small relative tolerance for symmetric fields).
+    # Exclude the 1-cell border so seeds stay inside the domain.
+    interior_mask = gmag[1:-1, 1:-1] <= local_min[1:-1, 1:-1] * (1 + 1e-10)
+    ii, jj = np.nonzero(interior_mask)
+    candidates = [(x[i + 1], y[j + 1]) for i, j in zip(ii, jj)]
 
     roots = []
     for seed in candidates:

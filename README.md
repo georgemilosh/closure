@@ -177,6 +177,7 @@ python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}'); 
 # Test CLI
 closure-train --help
 closure-eval --help
+closure-diagnostics --help
 
 # Test Optuna sweep (hyperparameter optimization)
 python examples/optuna/harris_optuna_sweep.py --help
@@ -317,6 +318,54 @@ Default output layout:
 - `<run_or_version_dir>/img/channel_metrics.png`
 - `<run_or_version_dir>/img/<target>_cycle<CYCLE>_{real,predict,error}.png`
 - `<run_or_version_dir>/img/<target>_cycles<FIRST-LAST>_summary.png`
+
+### Field Diagnostics CLI
+
+`closure-diagnostics` exports notebook-style field figures and CSV diagnostics
+without copying plotting code into ad-hoc notebooks.
+
+```bash
+# Plot several fields together for one run and loaded time slice.
+closure-diagnostics fields Le2DHGEM_RunID_5_f2 \
+  --files-path /volume1/scratch/share_dir/iPiC3D-nathan \
+  --fields Az,Ey,Ez,rho_e,rho_i,Jz_e,Jz_i,Bx,By,Bz \
+  --processed --normalization alfven-sample --choose-times 0 \
+  --output diagnostics/R5_fields.png
+
+# Menura runs use the same plotting/export code after loading through read_menura.
+# Set menura_analysis_dir in paths.yaml, then choose run folders with --files-path.
+closure-diagnostics fields R0/iso_GEM_1e-2_Jze.5_r0_1024x1024 \
+  --backend menura \
+  --files-path /volume1/scratch/georgem/menura/runs/GEM/hortense/nathan5-12 \
+  --fields Az,Ey,Ez,rho_e,rho_i,Jz_e,Jx_i,Jy_i,Jz_i,Bx,By,Bz \
+  --processed --normalization alfven-sample --sample-nb-factor 4pi --choose-times 12 \
+  --choose-x 0,512 --choose-y 0,256 --menura-scale-ranges \
+  --output diagnostics/R0_iso_fields.png
+
+# Export profile cuts across several runs. --projection is the varying axis;
+# --cut-index or --cut-value chooses the fixed coordinate.
+closure-diagnostics profiles Le2DHGEM_RunID_0_f2 Le2DHGEM_RunID_5_f2 \
+  --files-path /volume1/scratch/share_dir/iPiC3D-nathan \
+  --fields P_e,P_i,rho_e,rho_i,Jz_e,Jz_i,Bx,By \
+  --projection y --cut-index 256 --choose-times 0 \
+  --processed --normalization alfven-sample \
+  --output-csv diagnostics/profiles_y_x256.csv
+
+# Export reconnection-rate diagnostics from tracked X/O points.
+# Reconnection CSVs append by default; use --csv-mode replace to start fresh.
+closure-diagnostics reconnection Le2DHGEM_RunID_5_f2 \
+  --files-path /volume1/scratch/share_dir/iPiC3D-nathan \
+  --choose-times all --normalization alfven-sample --az-sigma 4 \
+  --output-csv diagnostics/reconnection_R5.csv
+
+# Overlay exported CSVs.
+closure-diagnostics overlay diagnostics/profiles_y_x256.csv \
+  --output diagnostics/profile_overlay.png
+
+closure-diagnostics overlay diagnostics/reconnection_R5.csv \
+  --x time --y recon_rate --group-by run \
+  --output diagnostics/reconnection_overlay.png
+```
 ```
 
 ## Logging and Artifacts

@@ -35,3 +35,9 @@ class TestLoadPaths:
         assert paths["work_dir"] == "/custom"
         # data_dir default is relative, resolved against yaml directory
         assert paths["data_dir"] == os.path.normpath(os.path.join(str(tmp_path), "data"))
+
+    def test_resolves_optional_path_keys(self, tmp_path):
+        yaml_file = tmp_path / "paths.yaml"
+        yaml_file.write_text("menura_analysis_dir: ./menura/analysis\n")
+        paths = load_paths(str(yaml_file))
+        assert paths["menura_analysis_dir"] == os.path.normpath(os.path.join(str(tmp_path), "menura/analysis"))

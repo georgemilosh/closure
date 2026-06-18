@@ -1,0 +1,896 @@
+"""Notebook-style field diagnostics and CSV exports.
+
+This module provides reusable building blocks for command-line diagnostics:
+multi-field panel plots, profile cuts saved to CSV, reconnection-rate CSVs,
+and overlay plots from exported CSV files.
+"""
+
+from __future__ import annotations
+
+__all__ = [
+    "DEFAULT_FIELDS_TO_READ",
+    "FieldSpec",
+    "apply_normalization",
+    "build_profiles_dataframe",
+    "compute_common_diagnostics",
+    "discover_available_snapshots",
+    "discover_menura_iterations",
+    "export_reconnection_dataframe",
+    "get_cmap",
+    "load_experiment_data",
+    "load_menura_data",
+    "normalize_field_name",
+    "parse_field_specs",
+    "plot_csv_overlay",
+    "plot_field_panels",
+    "resolve_field_data",
+    "select_snapshot_indices",
+]
+
+import contextlib
+import importlib
+import io
+import re
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+
+from closure import plasma, read_pic as rp
+from closure.config import load_paths
+
+
+DEFAULT_FIELDS_TO_READ = {
+    "B": True,
+    "B_ext": False,
+    "divB": True,
+    "E": True,
+    "E_ext": False,
+    "rho": True,
+    "J": True,
+    "P": True,
+    "PI": False,
+    "Heat_flux": False,
+    "N": False,
+    "Qrem": False,
+}
+
+SPECIES_LABELS = {"e", "i"}
+FIELD_ALIASES = {
+    "jztot": "Jz-tot",
+    "jz-tot": "Jz-tot",
+    "jz_tot": "Jz-tot",
+    "jxtot": "Jx-tot",
+    "jx-tot": "Jx-tot",
+    "jx_tot": "Jx-tot",
+    "jytot": "Jy-tot",
+    "jy-tot": "Jy-tot",
+    "jy_tot": "Jy-tot",
+    "pid": "PiD",
+    "epx": "EPx",
+    "epy": "EPy",
+    "epz": "EPz",
+    "betapar-betaperp": "beta_par - beta_perp",
+    "beta_par-beta_perp": "beta_par - beta_perp",
+    "beta_par_minus_beta_perp": "beta_par - beta_perp",
+}
+
+
+@dataclass(frozen=True)
+class FieldSpec:
+    """A field request plus an optional species selector."""
+
+    name: str
+    species: str | None = None
+
+    @property
+    def label(self) -> str:
+        return self.name if self.species is None else f"{self.name}_{self.species}"
+
+
+def _parse_list_arg(value: str | Iterable[str]) -> list[str]:
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if len(cleaned) >= 2 and cleaned[0] in "([{" and cleaned[-1] in ")]}":
+            cleaned = cleaned[1:-1]
+        raw_values = cleaned.split(",")
+    else:
+        raw_values = list(value)
+
+    out = []
+    for item in raw_values:
+        token = str(item).strip().strip("\"'")
+        if token:
+            out.append(token)
+    return out
+
+
+def normalize_field_name(field_name: str) -> str:
+    """Normalize common notebook/CLI aliases without changing unknown names."""
+    cleaned = field_name.strip()
+    key = cleaned.lower().replace(" ", "")
+    return FIELD_ALIASES.get(key, cleaned)
+
+
+def parse_field_specs(fields: str | Iterable[str]) -> list[FieldSpec]:
+    """Parse comma-separated field names, accepting suffixes such as ``P_e``."""
+    specs = []
+    for raw_field in _parse_list_arg(fields):
+        normalized = normalize_field_name(raw_field)
+        if "_" in normalized:
+            base, maybe_species = normalized.rsplit("_", 1)
+            if maybe_species in SPECIES_LABELS:
+                specs.append(FieldSpec(base, maybe_species))
+                continue
+        specs.append(FieldSpec(normalized, None))
+    return specs
+
+
+def _sanitize_name(name: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_.-]+", "_", name).strip("_") or "diagnostic"
+
+
+def _as_axis(X: np.ndarray, Y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    x_arr = np.asarray(X)
+    y_arr = np.asarray(Y)
+    x_axis = x_arr if x_arr.ndim == 1 else x_arr[:, 0]
+    y_axis = y_arr if y_arr.ndim == 1 else y_arr[0, :]
+    return np.asarray(x_axis, dtype=float), np.asarray(y_axis, dtype=float)
+
+
+def discover_available_snapshots(files_path: str | Path, experiment: str) -> list[int]:
+    """Return sequential snapshot indices for an experiment directory."""
+    experiment_dir = Path(files_path).expanduser() / experiment
+    filenames = rp._collect_experiment_filenames(str(experiment_dir))
+    return list(range(len(filenames)))
+
+
+def discover_menura_iterations(files_path: str | Path, experiment: str) -> list[int]:
+    """Return sorted Menura iteration numbers for an experiment request."""
+    run_id, run_path = _resolve_menura_request(experiment, files_path)
+    run_root = _resolve_menura_run_root(run_id, run_path)
+    files = sorted((run_root / "products").glob("B_it*_rank_0_0.npy"))
+    iterations = []
+    for file_path in files:
+        match = re.search(r"B_it(\d+)_rank_0_0\.npy$", file_path.name)
+        if match:
+            iterations.append(int(match.group(1)))
+    return sorted(iterations)
+
+
+def select_snapshot_indices(available_indices: list[int], choose_times: str | None) -> list[int] | None:
+    """Select snapshot indices from ``all``, an int, comma list, or slice string."""
+    if choose_times is None or choose_times.lower() in {"none", "all"}:
+        return None
+
+    if ":" in choose_times:
+        parts = [part.strip() for part in choose_times.split(":")]
+        if len(parts) not in {2, 3}:
+            raise ValueError(f"Invalid choose_times slice {choose_times!r}; expected start:end[:step]")
+        start = int(parts[0]) if parts[0] else None
+        end = int(parts[1]) if parts[1] else None
+        step = int(parts[2]) if len(parts) == 3 and parts[2] else 1
+        if step == 0:
+            raise ValueError("choose_times slice step must not be zero")
+        selected = available_indices[slice(start, end, step)]
+        if not selected:
+            raise ValueError(f"choose_times={choose_times!r} selected no snapshots")
+        return selected
+
+    if "," in choose_times:
+        selected = [int(token.strip()) for token in choose_times.split(",") if token.strip()]
+    else:
+        selected = [int(choose_times)]
+
+    n = len(available_indices)
+    bad = [idx for idx in selected if idx < 0 or idx >= n]
+    if bad:
+        raise ValueError(f"Snapshot indices {bad} out of range 0..{n - 1}")
+    return selected
+
+
+def _resolve_files_path(files_path: str | Path | None) -> str:
+    if files_path is not None:
+        return str(Path(files_path).expanduser())
+    try:
+        return load_paths().get("data_dir", "./data")
+    except Exception:
+        return "./data"
+
+
+def _resolve_menura_request(experiment: str, files_path: str | Path) -> tuple[str, Path]:
+    """Resolve a Menura experiment label to ``(run_id, parent_path)``.
+
+    Examples
+    --------
+    ``experiment='iso_GEM'``, ``files_path='/.../R0'`` -> run_id ``iso_GEM``,
+    parent path ``/.../R0``.
+
+    ``experiment='R0/iso_GEM'``, ``files_path='/.../nathan5-12'`` -> run_id
+    ``iso_GEM``, parent path ``/.../nathan5-12/R0``.
+    """
+    root = Path(files_path).expanduser()
+    exp_path = Path(experiment)
+    if exp_path.is_absolute():
+        return exp_path.name, exp_path.parent
+
+    candidate = root / exp_path
+    if len(exp_path.parts) >= 2:
+        return exp_path.parts[-1], root.joinpath(*exp_path.parts[:-1])
+    if candidate.exists() and (candidate / "products").exists():
+        return candidate.name, candidate.parent
+    return experiment, root
+
+
+def _resolve_menura_run_root(run_id: str, run_path: Path) -> Path:
+    run_root = run_path / f"run_{run_id}"
+    if run_root.exists():
+        return run_root
+    run_root = run_path / run_id
+    if run_root.exists():
+        return run_root
+    return run_path
+
+
+def _menura_analysis_dir(files_path: Path, override: str | Path | None) -> Path | None:
+    if override is not None:
+        return Path(override).expanduser()
+    paths = load_paths()
+    if "menura_analysis_dir" in paths:
+        return Path(paths["menura_analysis_dir"]).expanduser()
+    for parent in [files_path, *files_path.parents]:
+        candidate = parent / "analysis"
+        if (candidate / "read_menura.py").exists():
+            return candidate
+    return None
+
+
+def _import_read_menura(files_path: Path, analysis_dir: str | Path | None = None):
+    resolved_analysis_dir = _menura_analysis_dir(files_path, analysis_dir)
+    if resolved_analysis_dir is not None:
+        analysis_path = str(resolved_analysis_dir)
+        if analysis_path not in sys.path:
+            sys.path.insert(0, analysis_path)
+    try:
+        return importlib.import_module("read_menura")
+    except ImportError as exc:
+        raise ImportError(
+            "Could not import read_menura. Set --menura-analysis-dir or "
+            "menura_analysis_dir in paths.yaml, or add Menura analysis to PYTHONPATH."
+        ) from exc
+
+
+def _normalization_sample_values(data: dict, nb_factor: float = 1.0) -> tuple[float, float]:
+    try:
+        b0x = -float(np.asarray(data["Bx"])[0, 0, 0])
+        nb = nb_factor * float(np.nanmax(np.asarray(data["rho"]["i"])[..., 0]))
+    except Exception as exc:
+        raise ValueError("alfven-sample normalization requires Bx and rho_i fields") from exc
+    return b0x, nb
+
+
+def apply_normalization(
+    data: dict,
+    X: np.ndarray,
+    Y: np.ndarray,
+    times: Iterable[float],
+    *,
+    normalization: str = "none",
+    experiment_path: str | Path | None = None,
+    b0x: float | None = None,
+    nb: float | None = None,
+    nb_factor: float = 1.0,
+) -> tuple[np.ndarray, np.ndarray, list | np.ndarray]:
+    """Apply optional field/axis/time normalization in-place."""
+    if normalization == "none":
+        return X, Y, times
+    if normalization == "alfven-infer":
+        return plasma.code2alfven(
+            data,
+            x=X,
+            y=Y,
+            times=list(times),
+            b0x=b0x,
+            nb=nb,
+            experiment=str(experiment_path) if experiment_path is not None else None,
+        )
+    if normalization == "alfven-sample":
+        if b0x is None or nb is None:
+            sample_b0x, sample_nb = _normalization_sample_values(data, nb_factor=nb_factor)
+            b0x = sample_b0x if b0x is None else b0x
+            nb = sample_nb if nb is None else nb
+        return plasma.code2alfven(data, x=X, y=Y, times=list(times), b0x=b0x, nb=nb)
+    if normalization == "alfven-explicit":
+        if b0x is None or nb is None:
+            raise ValueError("alfven-explicit normalization requires both --b0x and --nb")
+        return plasma.code2alfven(data, x=X, y=Y, times=list(times), b0x=b0x, nb=nb)
+    raise ValueError(f"Unknown normalization mode: {normalization!r}")
+
+
+def _compute_current_totals(data: dict) -> None:
+    for component in ("x", "y", "z"):
+        key = f"J{component}"
+        if key in data and isinstance(data[key], dict) and "e" in data[key] and "i" in data[key]:
+            data[f"J{component}-tot"] = data[key]["e"] + data[key]["i"]
+
+
+def _has_species_components(data: dict, field_names: Iterable[str], species: str = "e") -> bool:
+    return all(
+        name in data and isinstance(data[name], dict) and species in data[name]
+        for name in field_names
+    )
+
+
+def compute_common_diagnostics(data: dict, X: np.ndarray, Y: np.ndarray, qom: list) -> None:
+    """Compute the notebook-style derived fields when their inputs exist."""
+    x_axis, y_axis = _as_axis(X, Y)
+    _compute_current_totals(data)
+
+    if all(field in data for field in ("Bx", "By", "Bz")):
+        data["Bmagn"] = np.sqrt(data["Bx"] ** 2 + data["By"] ** 2 + data["Bz"] ** 2)
+        if "Az" not in data:
+            try:
+                plasma.get_Az(x_axis, y_axis, data)
+            except Exception:
+                pass
+
+    if all(field in data for field in ("Bx", "By", "Bz", "Ex", "Ey", "Ez", "rho", "Jx", "Jy", "Jz")):
+        try:
+            plasma.get_Ohm(data, qom, x_axis, y_axis)
+        except Exception:
+            pass
+
+    if _has_species_components(data, ("rho", "Jx", "Jy", "Jz", "Vx", "Vy", "Vz", "Pxx", "Pxy", "Pxz", "Pyy", "Pyz", "Pzz")):
+        try:
+            plasma.get_PS_2D_field(data, x_axis, y_axis)
+        except Exception:
+            pass
+        try:
+            plasma.get_agyrotropy(data)
+        except Exception:
+            pass
+        try:
+            plasma.get_J_perp(data, x_axis, y_axis)
+        except Exception:
+            pass
+
+    if "Bmagn" in data and "Ppar" in data and "Pperp" in data:
+        if isinstance(data["Ppar"], dict) and isinstance(data["Pperp"], dict) and "e" in data["Ppar"]:
+            with np.errstate(divide="ignore", invalid="ignore"):
+                data["Ppar/Pperp"] = data["Ppar"]["e"] / data["Pperp"]["e"]
+                data["(Ppar - Pperp)/B^2"] = (data["Ppar"]["e"] - data["Pperp"]["e"]) / data["Bmagn"] ** 2
+                data["beta_par"] = {
+                    spec: 8 * np.pi * data["Ppar"][spec] / data["Bmagn"] ** 2
+                    for spec in data["Ppar"]
+                    if spec in data["Pperp"]
+                }
+                data["beta_perp"] = {
+                    spec: 8 * np.pi * data["Pperp"][spec] / data["Bmagn"] ** 2
+                    for spec in data["Pperp"]
+                }
+                if "e" in data["beta_par"] and "e" in data["beta_perp"]:
+                    data["beta_par - beta_perp"] = data["beta_par"]["e"] - data["beta_perp"]["e"]
+
+    if _has_species_components(data, ("Jx", "Jy")):
+        data["Jinplane_e"] = np.sqrt(data["Jx"]["e"] ** 2 + data["Jy"]["e"] ** 2)
+
+    for component in ("x", "y", "z"):
+        e_key = f"E{component}"
+        hall_key = f"EHall{component}"
+        mhd_key = f"EMHD{component}"
+        if e_key in data and hall_key in data and mhd_key in data:
+            data[f"E{component}-EHall{component}-EMHD{component}"] = data[e_key] - data[hall_key] - data[mhd_key]
+
+
+def load_experiment_data(
+    experiment: str,
+    files_path: str | Path | None = None,
+    *,
+    backend: str = "ecsim",
+    choose_times: str | list[int] | None = None,
+    choose_species: list[str] | None = None,
+    choose_x: tuple[int, int] | None = None,
+    choose_y: tuple[int, int] | None = None,
+    processed: bool = False,
+    alfven_units: bool = False,
+    normalization: str = "none",
+    b0x: float | None = None,
+    nb: float | None = None,
+    nb_factor: float = 1.0,
+    menura_analysis_dir: str | Path | None = None,
+    menura_scale_ranges: bool = False,
+    menura_base_nx: int = 512,
+    fields_to_read: dict | None = None,
+    verbose: bool = False,
+) -> tuple[dict, np.ndarray, np.ndarray, list, list]:
+    """Load one experiment and optionally add normalization/diagnostics."""
+    if alfven_units and normalization == "none":
+        normalization = "alfven-infer"
+    if backend == "auto":
+        try:
+            resolved_files_path = _resolve_files_path(files_path)
+            discover_available_snapshots(resolved_files_path, experiment)
+            backend = "ecsim"
+        except Exception:
+            backend = "menura"
+    if backend == "menura":
+        return load_menura_data(
+            experiment,
+            files_path=files_path,
+            choose_times=choose_times,
+            choose_x=choose_x,
+            choose_y=choose_y,
+            processed=processed,
+            normalization=normalization,
+            b0x=b0x,
+            nb=nb,
+            nb_factor=nb_factor,
+            analysis_dir=menura_analysis_dir,
+            scale_ranges=menura_scale_ranges,
+            base_nx=menura_base_nx,
+            verbose=verbose,
+        )
+    if backend != "ecsim":
+        raise ValueError(f"Unknown diagnostics backend: {backend!r}")
+
+    resolved_files_path = _resolve_files_path(files_path)
+    selected_times = choose_times
+    if isinstance(choose_times, str):
+        available = discover_available_snapshots(resolved_files_path, experiment)
+        selected_times = select_snapshot_indices(available, choose_times)
+
+    read_flags = dict(DEFAULT_FIELDS_TO_READ if fields_to_read is None else fields_to_read)
+    choose_x_list = list(choose_x) if choose_x is not None else None
+    choose_y_list = list(choose_y) if choose_y is not None else None
+
+    for _ in range(len(read_flags) + 1):
+        try:
+            data, X, Y, qom, times = rp.get_exp_times(
+                [experiment],
+                resolved_files_path,
+                read_flags,
+                choose_species=choose_species or ["e", "i"],
+                choose_times=selected_times,
+                choose_x=choose_x_list,
+                choose_y=choose_y_list,
+                verbose=verbose,
+            )
+            break
+        except KeyError as exc:
+            match = re.search(r"'([^']+) is not a file in the archive'", str(exc))
+            missing_field = match.group(1) if match else None
+            if missing_field in read_flags and read_flags[missing_field]:
+                read_flags[missing_field] = False
+                if verbose:
+                    print(f"Field {missing_field!r} missing; disabling it and retrying.")
+                continue
+            raise
+    else:
+        raise RuntimeError("Failed to load data after disabling missing fields")
+
+    run_data = data[experiment]
+    _compute_current_totals(run_data)
+
+    X, Y, times = apply_normalization(
+        run_data,
+        X,
+        Y,
+        times,
+        normalization=normalization,
+        experiment_path=Path(resolved_files_path) / experiment,
+        b0x=b0x,
+        nb=nb,
+        nb_factor=nb_factor,
+    )
+
+    run_data["X"] = X
+    run_data["Y"] = Y
+    run_data["qom"] = qom
+    run_data["times"] = times
+
+    if processed:
+        compute_common_diagnostics(run_data, X, Y, qom)
+
+    return run_data, X, Y, qom, times
+
+
+def _menura_scale(run_id: str, run_path: Path, base_nx: int = 512) -> tuple[int, int]:
+    root = _resolve_menura_run_root(run_id, run_path)
+    files = sorted(root.glob("products/B_it*_rank_0_0.npy"))
+    if not files:
+        raise FileNotFoundError(f"No B field files under {root}/products")
+    nx = np.load(files[0], mmap_mode="r").shape[1] - 4
+    return max(int(round(nx / base_nx)), 1), nx
+
+
+def _scale_range(value: tuple[int, int] | None, scale: int) -> tuple[int, int] | None:
+    if value is None:
+        return None
+    return int(value[0] * scale), int(value[1] * scale)
+
+
+def _select_menura_iterations(available_iterations: list[int], choose_times: str | list[int] | None) -> list[int] | None:
+    if choose_times is None:
+        return None
+    if isinstance(choose_times, list):
+        return [available_iterations[index] for index in choose_times]
+    selected_indices = select_snapshot_indices(list(range(len(available_iterations))), choose_times)
+    if selected_indices is None:
+        return None
+    return [available_iterations[index] for index in selected_indices]
+
+
+def load_menura_data(
+    experiment: str,
+    *,
+    files_path: str | Path | None = None,
+    choose_times: str | list[int] | None = None,
+    choose_x: tuple[int, int] | None = None,
+    choose_y: tuple[int, int] | None = None,
+    processed: bool = False,
+    normalization: str = "none",
+    b0x: float | None = None,
+    nb: float | None = None,
+    nb_factor: float = 1.0,
+    analysis_dir: str | Path | None = None,
+    scale_ranges: bool = False,
+    base_nx: int = 512,
+    verbose: bool = False,
+) -> tuple[dict, np.ndarray, np.ndarray, list, list]:
+    """Load a Menura run using ``read_menura`` and return diagnostics data."""
+    resolved_files_path = Path(_resolve_files_path(files_path)).expanduser()
+    run_id, run_path = _resolve_menura_request(experiment, resolved_files_path)
+    read_menura = _import_read_menura(resolved_files_path, analysis_dir)
+    iterations = discover_menura_iterations(resolved_files_path, experiment)
+    selected_iterations = _select_menura_iterations(iterations, choose_times)
+    scale = 1
+    if scale_ranges:
+        scale, _ = _menura_scale(run_id, run_path, base_nx=base_nx)
+    choose_x_eff = _scale_range(choose_x, scale)
+    choose_y_eff = _scale_range(choose_y, scale)
+
+    kwargs = {
+        "iters2": selected_iterations,
+        "path": str(run_path),
+    }
+    if choose_x_eff is not None:
+        kwargs["ix_min"], kwargs["ix_max"] = choose_x_eff
+    if choose_y_eff is not None:
+        kwargs["iy_min"], kwargs["iy_max"] = choose_y_eff
+
+    stdout_cm = contextlib.nullcontext() if verbose else contextlib.redirect_stdout(io.StringIO())
+    with stdout_cm:
+        data, _md, _times_all, _iters, times, _beta0, _poly_ind, _x, _y, X, Y = read_menura.read_menura(
+            run_id,
+            **kwargs,
+        )
+
+    qom = [-np.inf, 1.0]
+    _compute_current_totals(data)
+    X, Y, times = apply_normalization(
+        data,
+        X,
+        Y,
+        times,
+        normalization=normalization,
+        experiment_path=run_path / run_id,
+        b0x=b0x,
+        nb=nb,
+        nb_factor=nb_factor,
+    )
+    data["X"] = X
+    data["Y"] = Y
+    data["qom"] = qom
+    data["times"] = times
+    data["timeunit"] = r" $\omega_{pi}^{-1}$"
+
+    if processed:
+        compute_common_diagnostics(data, X, Y, qom)
+    return data, X, Y, qom, times
+
+
+def resolve_field_data(data: dict, spec: FieldSpec) -> tuple[np.ndarray, str | None]:
+    """Resolve a field specification to an array and concrete species."""
+    if spec.name not in data:
+        available = ", ".join(sorted(str(key) for key in data.keys()))
+        raise KeyError(f"Field {spec.name!r} not found. Available fields: {available}")
+
+    field_obj = data[spec.name]
+    if isinstance(field_obj, dict):
+        available_species = list(field_obj.keys())
+        species = spec.species
+        if species is None:
+            if len(available_species) == 1:
+                species = available_species[0]
+            elif "e" in field_obj:
+                species = "e"
+            else:
+                raise KeyError(f"Field {spec.name!r} has species {available_species}; specify a suffix such as _e")
+        if species not in field_obj:
+            raise KeyError(f"Species {species!r} not available for {spec.name!r}. Choices: {available_species}")
+        return np.asarray(field_obj[species]), species
+
+    return np.asarray(field_obj), None
+
+
+def get_cmap(field_name: str, cmap: str = "auto") -> str:
+    """Return a notebook-like default colormap for a field."""
+    if cmap != "auto":
+        return cmap
+    positive_default_fields = {
+        "rho",
+        "Pxx",
+        "Pyy",
+        "Pzz",
+        "Ppar/Pperp",
+        "Bmagn",
+        "agyrotropy",
+        "beta_par",
+        "beta_perp",
+    }
+    return "viridis" if field_name in positive_default_fields else "seismic"
+
+
+def _field_limits(values: np.ndarray, robust_quantile: float = 0.995) -> tuple[float, float]:
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return -1.0, 1.0
+    has_pos = np.any(finite > 0)
+    has_neg = np.any(finite < 0)
+    if has_pos and has_neg:
+        vmax = float(np.quantile(np.abs(finite), robust_quantile))
+        vmax = max(vmax, 1e-12)
+        return -vmax, vmax
+    if np.nanmax(finite) <= 0:
+        vmax = float(np.quantile(np.abs(finite), robust_quantile))
+        return 0.0, max(vmax, 1e-12)
+    return 0.0, max(float(np.quantile(finite, robust_quantile)), 1e-12)
+
+
+def _panel_values(values: np.ndarray) -> np.ndarray:
+    finite = values[np.isfinite(values)]
+    if finite.size and np.nanmax(finite) <= 0:
+        return -values
+    return values
+
+
+def _panel_grid_figsize(X: np.ndarray, Y: np.ndarray, nrows: int, ncols: int) -> tuple[float, float]:
+    x_axis, y_axis = _as_axis(X, Y)
+    x_span = float(np.nanmax(x_axis) - np.nanmin(x_axis))
+    y_span = float(np.nanmax(y_axis) - np.nanmin(y_axis))
+    panel_width = 4.4
+    if x_span > 0 and y_span > 0:
+        panel_height = panel_width * y_span / x_span
+    else:
+        panel_height = 3.0
+    panel_height = min(max(panel_height, 2.1), 3.8)
+    return ((panel_width + 0.55) * ncols, (panel_height + 0.7) * nrows)
+
+
+def plot_field_panels(
+    data: dict,
+    X: np.ndarray,
+    Y: np.ndarray,
+    field_specs: list[FieldSpec],
+    *,
+    run_name: str,
+    time_index: int = 0,
+    time_value: float | None = None,
+    output: str | Path,
+    ncols: int | None = None,
+    cmap: str = "auto",
+    figsize: tuple[float, float] | None = None,
+    robust_quantile: float = 0.995,
+) -> Path:
+    """Save a grid of requested fields, similar to notebook ``plot_requested_fields``."""
+    if not field_specs:
+        raise ValueError("At least one field is required")
+    ncols_eff = ncols or int(np.ceil(np.sqrt(len(field_specs))))
+    nrows = int(np.ceil(len(field_specs) / ncols_eff))
+    figsize_eff = figsize or _panel_grid_figsize(X, Y, nrows, ncols_eff)
+    fig, axes = plt.subplots(nrows, ncols_eff, figsize=figsize_eff, squeeze=False)
+
+    for index, spec in enumerate(field_specs):
+        ax = axes.ravel()[index]
+        field_data, species = resolve_field_data(data, spec)
+        if field_data.ndim == 3:
+            values = field_data[..., time_index]
+        elif field_data.ndim == 2:
+            values = field_data
+        else:
+            raise ValueError(f"Field {spec.label!r} must be 2D or 3D, got shape {field_data.shape}")
+        values_to_plot = _panel_values(values)
+        vmin, vmax = _field_limits(values_to_plot, robust_quantile=robust_quantile)
+        im = ax.pcolormesh(X, Y, values_to_plot, vmin=vmin, vmax=vmax, cmap=get_cmap(spec.name, cmap))
+        ax.set_aspect("equal")
+        label = spec.name if species is None else f"{spec.name}_{species}"
+        title = f"{run_name}: {label}"
+        if time_value is not None:
+            title += f", t={time_value:.4g}"
+        ax.set_title(title)
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes("right", size="5%", pad=0.08)
+        fig.colorbar(im, cax=cax)
+
+    for ax in axes.ravel()[len(field_specs) :]:
+        ax.axis("off")
+
+    out_path = Path(output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout(pad=0.45, w_pad=0.85, h_pad=1.0)
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+    return out_path
+
+
+def _resolve_cut_index(axis: np.ndarray, *, cut_index: int | None, cut_value: float | None) -> int:
+    if cut_index is not None and cut_value is not None:
+        raise ValueError("Specify only one of cut_index or cut_value")
+    if cut_index is None and cut_value is None:
+        return len(axis) // 2
+    if cut_index is not None:
+        idx = int(cut_index)
+        if idx < 0:
+            idx += len(axis)
+        if idx < 0 or idx >= len(axis):
+            raise IndexError(f"cut_index {cut_index} out of range 0..{len(axis) - 1}")
+        return idx
+    return int(np.argmin(np.abs(axis - float(cut_value))))
+
+
+def build_profiles_dataframe(
+    data: dict,
+    X: np.ndarray,
+    Y: np.ndarray,
+    field_specs: list[FieldSpec],
+    *,
+    run_name: str,
+    times: Iterable[float] | None = None,
+    time_indices: Iterable[int] | None = None,
+    projection: str = "y",
+    cut_index: int | None = None,
+    cut_value: float | None = None,
+) -> pd.DataFrame:
+    """Build a long-format CSV-ready dataframe of 1D field cuts."""
+    if projection not in {"x", "y"}:
+        raise ValueError("projection must be 'x' or 'y'")
+    x_axis, y_axis = _as_axis(X, Y)
+    times_arr = np.asarray(list(times) if times is not None else [])
+    indices = list(time_indices) if time_indices is not None else [0]
+
+    rows = []
+    for spec in field_specs:
+        field_data, species = resolve_field_data(data, spec)
+        for time_index in indices:
+            if field_data.ndim == 3:
+                values_2d = field_data[..., time_index]
+            elif field_data.ndim == 2:
+                values_2d = field_data
+            else:
+                raise ValueError(f"Field {spec.label!r} must be 2D or 3D, got shape {field_data.shape}")
+
+            if projection == "y":
+                cut_axis = "x"
+                idx = _resolve_cut_index(x_axis, cut_index=cut_index, cut_value=cut_value)
+                coord = y_axis
+                values = values_2d[idx, :]
+                resolved_cut_value = x_axis[idx]
+            else:
+                cut_axis = "y"
+                idx = _resolve_cut_index(y_axis, cut_index=cut_index, cut_value=cut_value)
+                coord = x_axis
+                values = values_2d[:, idx]
+                resolved_cut_value = y_axis[idx]
+
+            time_value = float(times_arr[time_index]) if times_arr.size else np.nan
+            field_label = spec.name if species is None else f"{spec.name}_{species}"
+            for coordinate, value in zip(coord, values):
+                rows.append(
+                    {
+                        "diagnostic": "profile",
+                        "run": run_name,
+                        "field": spec.name,
+                        "species": species or "",
+                        "field_label": field_label,
+                        "time_index": int(time_index),
+                        "time": time_value,
+                        "projection": projection,
+                        "cut_axis": cut_axis,
+                        "cut_index": int(idx),
+                        "cut_value": float(resolved_cut_value),
+                        "coord": float(coordinate),
+                        "value": float(value),
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+def export_reconnection_dataframe(
+    data: dict,
+    X: np.ndarray,
+    Y: np.ndarray,
+    times: Iterable[float],
+    *,
+    run_name: str,
+    qom: list | None = None,
+    az_filter: dict | None = None,
+    grad_tol: float = 1e-8,
+    merge_tol: float = 1e-3,
+) -> pd.DataFrame:
+    """Track X/O points and return reconnection-rate diagnostics as a dataframe."""
+    if "Az" not in data:
+        x_axis, y_axis = _as_axis(X, Y)
+        plasma.get_Az(x_axis, y_axis, data)
+    if qom is not None:
+        _compute_current_totals(data)
+    result = plasma.track_xo_points(
+        data,
+        X,
+        Y,
+        np.asarray(list(times), dtype=float),
+        az_filter=az_filter,
+        grad_tol=grad_tol,
+        merge_tol=merge_tol,
+    )
+    frame = pd.DataFrame(result)
+    frame.insert(0, "time_index", np.arange(len(frame), dtype=int))
+    frame.insert(0, "run", run_name)
+    frame.insert(0, "diagnostic", "reconnection")
+    return frame
+
+
+def plot_csv_overlay(
+    csv_paths: list[str | Path],
+    *,
+    output: str | Path,
+    x: str | None = None,
+    y: str | None = None,
+    group_by: list[str] | None = None,
+    title: str | None = None,
+    dpi: int = 200,
+) -> Path:
+    """Overlay long-format profile or reconnection CSV files."""
+    frames = [pd.read_csv(path) for path in csv_paths]
+    if not frames:
+        raise ValueError("At least one CSV path is required")
+    data = pd.concat(frames, ignore_index=True)
+
+    if x is None:
+        x = "time" if "recon_rate" in data.columns and "coord" not in data.columns else "coord"
+    if y is None:
+        y = "recon_rate" if "recon_rate" in data.columns and x == "time" else "value"
+    if x not in data.columns or y not in data.columns:
+        raise KeyError(f"Requested x={x!r}, y={y!r}; available columns: {list(data.columns)}")
+
+    group_cols = group_by or [col for col in ("run", "field_label", "projection", "cut_value") if col in data.columns]
+    if not group_cols:
+        data["series"] = "series"
+        group_cols = ["series"]
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for group_key, group in data.groupby(group_cols, dropna=False):
+        if not isinstance(group_key, tuple):
+            group_key = (group_key,)
+        label = ", ".join(f"{col}={value}" for col, value in zip(group_cols, group_key))
+        group = group.sort_values(x)
+        ax.plot(group[x], group[y], label=label)
+
+    ax.set_xlabel(x)
+    ax.set_ylabel(y)
+    if title:
+        ax.set_title(title)
+    ax.grid(True, alpha=0.25)
+    ax.legend(fontsize=8)
+    out_path = Path(output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+    return out_path

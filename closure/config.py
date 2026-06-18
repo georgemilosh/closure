@@ -33,9 +33,13 @@ def load_paths(paths_file: str = "paths.yaml") -> dict[str, str]:
             loaded = yaml.safe_load(f) or {}
         defaults.update(loaded)
 
-    # Resolve relative paths against the directory containing paths_file
+    # Resolve relative paths against the directory containing paths_file.
+    # Keep unknown scalar keys (e.g. optional menura_analysis_dir) usable without
+    # requiring every path knob to be listed here explicitly.
     base_dir = os.path.dirname(os.path.abspath(paths_file))
-    for key in ("work_dir", "data_dir"):
+    for key, val in list(defaults.items()):
+        if not isinstance(val, str):
+            continue
         val = defaults.get(key, "")
         if val and not os.path.isabs(val):
             defaults[key] = os.path.normpath(os.path.join(base_dir, val))
