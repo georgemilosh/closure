@@ -1,0 +1,123 @@
+# ---------------------------------------------------------------
+# Production config: ReduceLROnPlateau (no SWA), full-resolution step100 data.
+# Designed for p=1023 full-image CNN training where high fixed LR converges in
+# ~1 epoch and then oscillates (see benchmarks_f2_serial README). A lower initial
+# LR + plateau-driven reductions give the model time to descend smoothly over many
+# epochs and settle into a stable minimum. Submit for up to 72 h; EarlyStopping +
+# best-checkpoint capture the optimum.
+# ---------------------------------------------------------------
+
+seed_everything: 42
+
+model:
+  network:
+    class_path: closure.models.FCNN
+    init_args:
+      channels: [10, 128, 128, 64, 6]
+      kernels:  [3, 3, 5, 3]
+      activations: [SiLU, SiLU, SiLU, null]
+      batch_norms: [true, true, true, false]
+      dropouts:    [0.0, 0.15, 0.15, 0.0]
+  criterion: MSELoss
+  optimizer: AdamW
+  lr: 1.0e-4                  # validated smooth at bs=16 (see below). Can raise to ~2e-4 for faster convergence given the bs=16 stability headroom (linear-scaling rule) — validate before adopting.
+  weight_decay: 3.0e-4
+  scheduler: ReduceLROnPlateau
+  scheduler_kwargs:
+    mode: min
+    factor: 0.5
+    patience: 10             # epochs of no val improvement before halving LR
+    threshold: 1.0e-3
+    threshold_mode: rel
+    cooldown: 4
+    min_lr: 1.0e-6
+    interval: epoch
+
+data:
+  data_folder: iPiC3D-nathan
+  train_samples_file: ./splits/iPiC3D-nathan5-12/Runs_7-9-10-11-12_step100.csv
+  val_samples_file: ./splits/iPiC3D-nathan5-12/RunID_0.csv
+  test_samples_file: ./splits/iPiC3D-nathan5-12/RunID_5_step100.csv
+  batch_size: 16             # max that fits p=1023 on a 40GB A100 (38.7GB; bs=24/32 OOM). 4x larger BN batch than bs=4 -> ~3x smoother val (oscillation was small-batch BatchNorm noise). bs=16 saturates the GPU (~88% util, ~9 min/epoch).
+  num_workers: 0
+  flatten: false
+  scaler_features: true
+  scaler_targets: true
+  prescaler_targets: [log, log, log, arcsinh, arcsinh, arcsinh]
+  features_dtype: float32
+  targets_dtype: float32
+  features_dtype_numpy: float32
+  targets_dtype_numpy: float32
+  patch_dim: [1023, 1023]
+  subsample_rate: 1
+  subsample_seed: 42
+  alfven_units: true
+  read_features_targets_kwargs:
+    fields_to_read:
+      B: true
+      B_ext: false
+      divB: false
+      E: true
+      E_ext: false
+      rho: true
+      J: true
+      P: true
+      PI: true
+      Heat_flux: false
+      N: false
+      Qrem: false
+    request_features:
+      - rho_e
+      - Bx
+      - By
+      - Bz
+      - Vx_e
+      - Vy_e
+      - Vz_e
+      - Ex
+      - Ey
+      - Ez
+    request_targets:
+      - Pxx_e
+      - Pyy_e
+      - Pzz_e
+      - Pxy_e
+      - Pxz_e
+      - Pyz_e
+    choose_species: ['e', null, 'e', null]
+    verbose: false
+
+trainer:
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: norm
+  max_epochs: 1000
+  accelerator: auto
+  devices: auto
+  strategy: auto
+  default_root_dir: ./models/Lightning/iPiC3D-nathan5-12/Runs_7-9-10-11-12_long_plateau_step100_val0
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: val_loss
+        patience: 100
+        mode: min
+        min_delta: 5.0e-4
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        monitor: val_loss
+        save_top_k: 1
+        save_last: true
+        mode: min
+        filename: best-{epoch}-{val_loss:.4f}
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        every_n_epochs: 100
+        save_top_k: -1
+        save_last: false
+        filename: epoch-{epoch:04d}
+        auto_insert_metric_name: false
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+      init_args:
+        logging_interval: epoch
+  logger:
+    class_path: lightning.pytorch.loggers.CSVLogger
