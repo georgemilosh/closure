@@ -205,6 +205,25 @@ class TestCode2AlfvenDataOnly:
         np.testing.assert_allclose(data["rho"]["e"], 3.0 / nb)
         np.testing.assert_allclose(data["Pxx"]["e"], 3.0 / p0)
 
+    def test_code2alfven_normalize_density_false_keeps_rho_raw(self):
+        """normalize_density=False leaves rho in code units; B/P still scaled."""
+        b0x, nb = 0.0249, 0.23
+        va = b0x / np.sqrt(nb)
+        p0 = nb * va ** 2
+        arr = np.full((2, 2, 1), 3.0)
+        data = {
+            "Bx": arr.copy(), "By": arr.copy(), "Bz": arr.copy(),
+            "rho": {"e": arr.copy()}, "Pxx": {"e": arr.copy()},
+        }
+        x_out, y_out, t_out = plasma.code2alfven(
+            data, x=np.arange(2.0), times=[1.0], b0x=b0x, nb=nb, normalize_density=False
+        )
+        np.testing.assert_allclose(data["rho"]["e"], 3.0)  # unchanged
+        np.testing.assert_allclose(data["Bx"], 3.0 / b0x)  # still normalized
+        np.testing.assert_allclose(data["Pxx"]["e"], 3.0 / p0)
+        np.testing.assert_allclose(x_out, np.arange(2.0) * np.sqrt(nb))  # length still scaled
+        np.testing.assert_allclose(t_out, [1.0 * b0x])  # time still scaled
+
 
 class TestAlfvenScales:
     def test_alfven_scales_values(self):

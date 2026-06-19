@@ -277,8 +277,13 @@ def code2alfven(
     b0x: float | None = None,
     nb: float | None = None,
     experiment: str | None = None,
+    normalize_density: bool = True,
 ) -> tuple[ArrayLike | None, ArrayLike | None, list[float] | None]:
     """Rescale code units to Alfven units.
+
+    When ``normalize_density`` is False the density field is left in code units
+    (the ``rho /= nb`` step is skipped); every other field, plus the length and
+    time axes, is still rescaled with ``nb`` as usual.
 
     The *data* dictionary is modified **in-place**.
 
@@ -367,12 +372,13 @@ def code2alfven(
         except Exception:
             pass
 
-    for field_name in ["rho"]:
-        try:
-            for spec in data[field_name].keys():
-                data[field_name][spec] = data[field_name][spec] / nb
-        except Exception:
-            pass
+    if normalize_density:
+        for field_name in ["rho"]:
+            try:
+                for spec in data[field_name].keys():
+                    data[field_name][spec] = data[field_name][spec] / nb
+            except Exception:
+                pass
 
     for field_name in ["Vx", "Vy", "Vz"]:
         try:

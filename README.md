@@ -324,48 +324,131 @@ Default output layout:
 `closure-diagnostics` exports notebook-style field figures and CSV diagnostics
 without copying plotting code into ad-hoc notebooks.
 
+Two backends, selected with `--backend`:
+
+- `ecsim` (default) — iPiC3D runs, e.g. `Le2DHGEM_RunID_0_f2`.
+- `menura` — Menura runs, e.g. `R0/iso_GEM_1e-2_Jze.5_r0_1024x1024` (set
+  `menura_analysis_dir` in `paths.yaml`).
+
+Conventions used by every example below, chosen to match `fullres.ipynb`:
+
+- **Normalization** `--normalization alfven-sample --sample-nb-factor 1` →
+  `code2alfven` with `b0x = -Bx[0,0,0]`, `nb = rho_i.max()` (what the notebook's
+  active line uses; reproduces its figures). Add `--no-density-norm` to keep
+  density in code units while still casting B and the other fields/axes/time into
+  Alfvén units. Other `--normalization` modes:
+  - `none` (default) — raw code units, no `code2alfven`. Works for both backends.
+  - `alfven-infer` — infer `b0x`/`nb` from the run's `.inp` (`B0x`, `rhoINIT[0]`),
+    matching the notebook's commented `code2alfven(..., experiment=...)` line. Works
+    for **ECsim** (e.g. `RunID_0.inp` → `b0x=0.0249`, `nb=0.969`); **menura** has no
+    such `.inp`, so it raises `FileNotFoundError` — use `alfven-sample` or
+    `alfven-explicit --b0x <v> --nb <v>` there. Note `alfven-infer` uses
+    `rhoINIT[0]` (background, 0.969) while `alfven-sample` uses `rho_i.max()`
+    (sheet, 0.23), so the two give different density normalizations.
+- **ECsim species** `--choose-species e,i,e,i`. `--choose-species` maps
+  positionally to particle populations (index *i* → `moments/species_i`; shared
+  labels are summed). The Le2DHGEM runs have **four** populations, so `e,i,e,i`
+  sums sheet + background. The default `e,i` reads only `species_0/1` and drops
+  the background, so `P_e`/`rho_e` fall to ~0 in the lobes (and the reconnection
+  normalization, which needs `rho_e` at the corner cell, breaks). Menura has 2
+  species and keeps the default `e,i`.
+- **Cropping to one current sheet** `--choose-x 0,512 --choose-y 0,256`. These
+  are *double-Harris* (Le2DH) runs: the full domain holds **two** current sheets,
+  so a y-cut crosses both (two Bx reversals / two pressure islands). The notebook
+  crops to the lower half in y to analyze a single sheet — do the same. For
+  **menura** also add `--menura-scale-ranges`, which scales these 512-cell base
+  ranges up to the run resolution; for **ECsim** they are plain index ranges.
+
 ```bash
-# Plot several fields together for one run and loaded time slice.
+# === Field panels ===========================================================
 closure-diagnostics fields Le2DHGEM_RunID_5_f2 \
   --files-path /volume1/scratch/share_dir/iPiC3D-nathan \
   --fields Az,Ey,Ez,rho_e,rho_i,Jz_e,Jz_i,Bx,By,Bz \
-  --processed --normalization alfven-sample --choose-times 0 \
+  --processed --normalization alfven-sample --sample-nb-factor 1 \
+  --choose-species e,i,e,i --choose-x 0,512 --choose-y 0,256 --choose-times 0 \
   --output diagnostics/R5_fields.png
 
-# Menura runs use the same plotting/export code after loading through read_menura.
-# Set menura_analysis_dir in paths.yaml, then choose run folders with --files-path.
-closure-diagnostics fields R0/iso_GEM_1e-2_Jze.5_r0_1024x1024 \
-  --backend menura \
+closure-diagnostics fields R0/iso_GEM_1e-2_Jze.5_r0_1024x1024 --backend menura \
   --files-path /volume1/scratch/georgem/menura/runs/GEM/hortense/nathan5-12 \
   --fields Az,Ey,Ez,rho_e,rho_i,Jz_e,Jx_i,Jy_i,Jz_i,Bx,By,Bz \
-  --processed --normalization alfven-sample --sample-nb-factor 4pi --choose-times 12 \
+  --processed --normalization alfven-sample --sample-nb-factor 1 --choose-times 12 \
   --choose-x 0,512 --choose-y 0,256 --menura-scale-ranges \
-  --output diagnostics/R0_iso_fields.png
+  --output diagnostics/R0_fields.png
 
-# Export profile cuts across several runs. --projection is the varying axis;
-# --cut-index or --cut-value chooses the fixed coordinate.
+# === Profiles (1D cuts) =====================================================
+# Mirrors profile_fns: cut along y at x = nx//2 (omit --cut-index), t = 0.
+# Pass several experiments to either backend to compare them (one `run` per
+# experiment in the CSV). `profiles` ALWAYS overwrites --output-csv (no append).
 closure-diagnostics profiles Le2DHGEM_RunID_0_f2 Le2DHGEM_RunID_5_f2 \
   --files-path /volume1/scratch/share_dir/iPiC3D-nathan \
   --fields P_e,P_i,rho_e,rho_i,Jz_e,Jz_i,Bx,By \
-  --projection y --cut-index 256 --choose-times 0 \
-  --processed --normalization alfven-sample \
-  --output-csv diagnostics/profiles_y_x256.csv
+  --projection y --choose-times 0 --processed \
+  --normalization alfven-sample --sample-nb-factor 1 --choose-species e,i,e,i \
+  --choose-x 0,512 --choose-y 0,256 \
+  --output-csv diagnostics/profiles_ecsim.csv
 
-# Export reconnection-rate diagnostics from tracked X/O points.
-# Reconnection CSVs append by default; use --csv-mode replace to start fresh.
-closure-diagnostics reconnection Le2DHGEM_RunID_5_f2 \
+# Several menura runs at once: list each Rxx/<model> experiment.
+closure-diagnostics profiles \
+  R0/iso_GEM_1e-2_Jze.5_r0_1024x1024 R5/iso_GEM_1e-2_Jze.5_r0_1024x1024 \
+  --backend menura \
+  --files-path /volume1/scratch/georgem/menura/runs/GEM/hortense/nathan5-12 \
+  --fields P_e,P_i,rho_e,rho_i,Jz_e,Jz_i,Bx,By \
+  --projection y --choose-times 0 --processed \
+  --normalization alfven-sample --sample-nb-factor 1 \
+  --choose-x 0,512 --choose-y 0,256 --menura-scale-ranges \
+  --output-csv diagnostics/profiles_menura.csv
+
+# A profiles CSV holds every field, so a bare overlay draws them all on one axes.
+# Pick one field with --field (= one notebook cell); pass several CSVs to compare
+# backends/runs (--group-by run -> one line each). --select COL=VAL filters any
+# column, e.g. --select run=Le2DHGEM_RunID_0_f2. Both accept comma lists.
+# Axis labels default to what is plotted (here y-axis "P_e", x-axis "y" from the
+# projection); override with --xlabel/--ylabel. Series use plotter.interactive
+# styling (cycling color/dash, width ramps down + alpha ramps up across series).
+closure-diagnostics overlay \
+  diagnostics/profiles_ecsim.csv diagnostics/profiles_menura.csv \
+  --field P_e --x coord --y value --group-by run \
+  --output diagnostics/profile_P_e.png
+
+# === Reconnection rate ======================================================
+# Tracks X/O points in Az and exports recon_flux/recon_rate. X/O defaults already
+# match the notebook (grad_tol 1e-6, merge_tol 1e-3); pass --az-sigma 4.
+# --recon-normalization notebook adds time_norm and
+#   recon_rate_norm = -recon_rate * sqrt(-rho_e0 * 4pi) / Bx0**2
+# (the sign flip keeps the growth phase positive so a log axis doesn't drop out).
+# `reconnection` APPENDS to --output-csv by default; use --csv-mode replace.
+closure-diagnostics reconnection Le2DHGEM_RunID_0_f2 \
   --files-path /volume1/scratch/share_dir/iPiC3D-nathan \
-  --choose-times all --normalization alfven-sample --az-sigma 4 \
-  --output-csv diagnostics/reconnection_R5.csv
+  --choose-times all --processed \
+  --normalization alfven-sample --sample-nb-factor 1 --choose-species e,i,e,i \
+  --choose-x 0,512 --choose-y 0,256 \
+  --az-sigma 4 --recon-normalization notebook --csv-mode replace \
+  --output-csv diagnostics/reconnection_ecsim.csv
 
-# Overlay exported CSVs.
-closure-diagnostics overlay diagnostics/profiles_y_x256.csv \
-  --output diagnostics/profile_overlay.png
+closure-diagnostics reconnection R0/iso_GEM_1e-2_Jze.5_r0_1024x1024 --backend menura \
+  --files-path /volume1/scratch/georgem/menura/runs/GEM/hortense/nathan5-12 \
+  --choose-times all --processed \
+  --normalization alfven-sample --sample-nb-factor 1 \
+  --choose-x 0,512 --choose-y 0,256 --menura-scale-ranges \
+  --az-sigma 4 --recon-normalization notebook --csv-mode replace \
+  --output-csv diagnostics/reconnection_menura.csv
 
-closure-diagnostics overlay diagnostics/reconnection_R5.csv \
-  --x time --y recon_rate --group-by run \
+# Overlay the NORMALIZED rate on a log axis (plot the *_norm columns, not the raw
+# recon_rate/time, which are mostly negative and vanish under --logy).
+closure-diagnostics overlay \
+  diagnostics/reconnection_ecsim.csv diagnostics/reconnection_menura.csv \
+  --x time_norm --y recon_rate_norm --group-by run --logy \
   --output diagnostics/reconnection_overlay.png
-```
+
+# === One-shot profile helpers ===============================================
+# Export the 8 profile fields and emit one PNG per field (= one notebook cell
+# each). Each script overwrites only its own dir; run both, then overlay above.
+scripts/profiles_ecsim.sh  diagnostics/profiles_ecsim    # iPiC3D Le2DHGEM_RunID_0_f2
+scripts/profiles_menura.sh diagnostics/profiles_menura   # menura R0/iso_GEM_...
+# Add experiments to overlay several runs per field. ECsim takes full names;
+# menura takes bare run folders (expanded to RUN/$MODEL, override with MODEL=...):
+#   scripts/profiles_ecsim.sh  diagnostics/cmp Le2DHGEM_RunID_0_f2 Le2DHGEM_RunID_5_f2
+#   scripts/profiles_menura.sh diagnostics/cmp R0 R5 R7
 ```
 
 ## Logging and Artifacts

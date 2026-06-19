@@ -5,6 +5,10 @@ import pandas as pd
 
 from closure.diagnostics import (
     FieldSpec,
+    _add_notebook_recon_normalization,
+    _default_overlay_xlabel,
+    _default_overlay_ylabel,
+    _overlay_style,
     apply_normalization,
     build_profiles_dataframe,
     discover_menura_iterations,
@@ -101,14 +105,90 @@ def test_plot_csv_overlay_writes_png(tmp_path):
     assert output.exists()
     assert output.stat().st_size > 0
 
+    log_output = tmp_path / "overlay_log.png"
+    log_result = plot_csv_overlay([csv_path], output=log_output, logx=True, logy=True)
+    assert log_result == log_output
+    assert log_output.exists()
+    assert log_output.stat().st_size > 0
+
+
+def test_plot_csv_overlay_select_filters_field(tmp_path):
+    csv_path = tmp_path / "profiles.csv"
+    pd.DataFrame(
+        {
+            "run": ["R0", "R0", "R0", "R0"],
+            "field_label": ["Bx", "Bx", "P_e", "P_e"],
+            "coord": [0.0, 1.0, 0.0, 1.0],
+            "value": [1.0, 2.0, 3.0, 4.0],
+        }
+    ).to_csv(csv_path, index=False)
+    output = tmp_path / "p_e.png"
+    result = plot_csv_overlay([csv_path], output=output, select={"field_label": ["P_e"]})
+    assert result == output and output.exists() and output.stat().st_size > 0
+
+    import pytest
+
+    with pytest.raises(ValueError):
+        plot_csv_overlay([csv_path], output=tmp_path / "none.png", select={"field_label": ["missing"]})
+    with pytest.raises(KeyError):
+        plot_csv_overlay([csv_path], output=tmp_path / "bad.png", select={"nope": ["x"]})
+
+
+def test_overlay_default_labels():
+    prof = pd.DataFrame({"projection": ["y", "y"], "field_label": ["P_e", "P_e"]})
+    assert _default_overlay_xlabel("coord", prof) == "y"
+    assert _default_overlay_ylabel("value", prof) == "P_e"
+    # mixed fields -> generic; reconnection columns -> friendly label
+    mixed = pd.DataFrame({"field_label": ["P_e", "Bx"]})
+    assert _default_overlay_ylabel("value", mixed) == "value"
+    assert _default_overlay_xlabel("time_norm", mixed) == "time"
+    assert _default_overlay_ylabel("recon_rate_norm", mixed) == "reconnection rate"
+
+
+def test_overlay_style_ramps_width_and_alpha():
+    first = _overlay_style(0, 3)
+    last = _overlay_style(2, 3)
+    assert first["linewidth"] > last["linewidth"]  # width ramps down
+    assert first["alpha"] < last["alpha"]  # alpha ramps up
+    assert first["color"] != last["color"]
+    # single series uses the max width / min alpha endpoints, no div-by-zero
+    solo = _overlay_style(0, 1)
+    assert solo["linewidth"] == 5.0 and solo["alpha"] == 0.35
+
+
+def test_notebook_recon_normalization_matches_cell6():
+    # After alfven-sample normalization Bx[0,0,0] == -1; use a normalized-like dict.
+    frame = pd.DataFrame({"time": [0.0, 1.0, 2.0], "recon_rate": [1.0, -2.0, 3.0]})
+    data = {
+        "Bx": np.full((2, 2, 1), -1.0),
+        "rho": {"e": np.full((2, 2, 1), -0.25)},
+    }
+    _add_notebook_recon_normalization(frame, data)
+    scale = np.sqrt(0.25 * 4.0 * np.pi) / (-1.0) ** 2
+    np.testing.assert_allclose(frame["time_norm"], [0.0, 1.0, 2.0])
+    np.testing.assert_allclose(frame["recon_rate_norm"], -np.array([1.0, -2.0, 3.0]) * scale)
+
+
+def test_notebook_recon_normalization_scales_by_b0x():
+    # Unnormalized data: time scales by |Bx0| and rate by sqrt(4*pi*rho)/Bx0**2.
+    frame = pd.DataFrame({"time": [0.0, 1.0], "recon_rate": [1.0, 1.0]})
+    data = {
+        "Bx": np.full((2, 2, 1), -2.0),
+        "rho": {"e": np.full((2, 2, 1), -1.0)},
+    }
+    _add_notebook_recon_normalization(frame, data)
+    scale = np.sqrt(1.0 * 4.0 * np.pi) / (-2.0) ** 2
+    np.testing.assert_allclose(frame["time_norm"], [0.0, 2.0])
+    np.testing.assert_allclose(frame["recon_rate_norm"], [-scale, -scale])
+
 
 def test_apply_normalization_sample_uses_notebook_values(monkeypatch):
     X, Y = _toy_grid()
     data = _toy_data()
     calls = {}
 
-    def fake_code2alfven(data_arg, x, y, times, b0x=None, nb=None, experiment=None):
-        calls.update({"b0x": b0x, "nb": nb, "experiment": experiment, "times": times})
+    def fake_code2alfven(data_arg, x, y, times, b0x=None, nb=None, experiment=None, normalize_density=True):
+        calls.update({"b0x": b0x, "nb": nb, "experiment": experiment, "times": times, "normalize_density": normalize_density})
         return x + 1, y + 1, [t + 1 for t in times]
 
     monkeypatch.setattr("closure.diagnostics.plasma.code2alfven", fake_code2alfven)

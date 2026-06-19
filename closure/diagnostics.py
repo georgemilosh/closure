@@ -285,8 +285,13 @@ def apply_normalization(
     b0x: float | None = None,
     nb: float | None = None,
     nb_factor: float = 1.0,
+    normalize_density: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, list | np.ndarray]:
-    """Apply optional field/axis/time normalization in-place."""
+    """Apply optional field/axis/time normalization in-place.
+
+    ``normalize_density=False`` keeps the density field in code units while still
+    casting every other field/axis/time into Alfven units.
+    """
     if normalization == "none":
         return X, Y, times
     if normalization == "alfven-infer":
@@ -298,17 +303,18 @@ def apply_normalization(
             b0x=b0x,
             nb=nb,
             experiment=str(experiment_path) if experiment_path is not None else None,
+            normalize_density=normalize_density,
         )
     if normalization == "alfven-sample":
         if b0x is None or nb is None:
             sample_b0x, sample_nb = _normalization_sample_values(data, nb_factor=nb_factor)
             b0x = sample_b0x if b0x is None else b0x
             nb = sample_nb if nb is None else nb
-        return plasma.code2alfven(data, x=X, y=Y, times=list(times), b0x=b0x, nb=nb)
+        return plasma.code2alfven(data, x=X, y=Y, times=list(times), b0x=b0x, nb=nb, normalize_density=normalize_density)
     if normalization == "alfven-explicit":
         if b0x is None or nb is None:
             raise ValueError("alfven-explicit normalization requires both --b0x and --nb")
-        return plasma.code2alfven(data, x=X, y=Y, times=list(times), b0x=b0x, nb=nb)
+        return plasma.code2alfven(data, x=X, y=Y, times=list(times), b0x=b0x, nb=nb, normalize_density=normalize_density)
     raise ValueError(f"Unknown normalization mode: {normalization!r}")
 
 
@@ -402,6 +408,7 @@ def load_experiment_data(
     b0x: float | None = None,
     nb: float | None = None,
     nb_factor: float = 1.0,
+    normalize_density: bool = True,
     menura_analysis_dir: str | Path | None = None,
     menura_scale_ranges: bool = False,
     menura_base_nx: int = 512,
@@ -430,6 +437,7 @@ def load_experiment_data(
             b0x=b0x,
             nb=nb,
             nb_factor=nb_factor,
+            normalize_density=normalize_density,
             analysis_dir=menura_analysis_dir,
             scale_ranges=menura_scale_ranges,
             base_nx=menura_base_nx,
@@ -486,6 +494,7 @@ def load_experiment_data(
         b0x=b0x,
         nb=nb,
         nb_factor=nb_factor,
+        normalize_density=normalize_density,
     )
 
     run_data["X"] = X
@@ -537,6 +546,7 @@ def load_menura_data(
     b0x: float | None = None,
     nb: float | None = None,
     nb_factor: float = 1.0,
+    normalize_density: bool = True,
     analysis_dir: str | Path | None = None,
     scale_ranges: bool = False,
     base_nx: int = 512,
@@ -582,6 +592,7 @@ def load_menura_data(
         b0x=b0x,
         nb=nb,
         nb_factor=nb_factor,
+        normalize_density=normalize_density,
     )
     data["X"] = X
     data["Y"] = Y
@@ -812,6 +823,35 @@ def build_profiles_dataframe(
     return pd.DataFrame(rows)
 
 
+def _add_notebook_recon_normalization(frame: pd.DataFrame, data: dict) -> None:
+    """Add notebook-style normalized reconnection columns in-place.
+
+    Reproduces the cell-6 plotting transform from ``fullres.ipynb``::
+
+        time_norm      = time * |Bx[0, 0, 0]|
+        recon_rate_norm = -recon_rate * sqrt(-rho_e[0, 0, 0] * 4*pi) / Bx[0, 0, 0]**2
+
+    The sample values ``Bx[0, 0, 0]`` and ``rho_e[0, 0, 0]`` are read from the
+    in-memory ``data`` *after* any normalization has been applied, exactly as
+    the notebook references ``d['Bx'][0, 0, 0]`` / ``d['rho']['e'][0, 0, 0]`` at
+    plot time. The sign flip makes the growth-phase rate positive (so a log axis
+    no longer dives at sign changes) and the ``sqrt(4*pi*rho)/B**2`` factor casts
+    the rate into normalized Alfven units.
+    """
+    try:
+        b0x_sample = float(np.asarray(data["Bx"])[0, 0, 0])
+        rho_e0 = float(np.asarray(data["rho"]["e"])[0, 0, 0])
+    except Exception as exc:
+        raise ValueError(
+            "recon_normalization='notebook' requires Bx and rho_e fields"
+        ) from exc
+    if b0x_sample == 0.0:
+        raise ValueError("recon_normalization='notebook' requires Bx[0,0,0] != 0")
+    scale = np.sqrt(-rho_e0 * 4.0 * np.pi) / b0x_sample**2
+    frame["time_norm"] = frame["time"] * abs(b0x_sample)
+    frame["recon_rate_norm"] = -frame["recon_rate"] * scale
+
+
 def export_reconnection_dataframe(
     data: dict,
     X: np.ndarray,
@@ -823,8 +863,19 @@ def export_reconnection_dataframe(
     az_filter: dict | None = None,
     grad_tol: float = 1e-8,
     merge_tol: float = 1e-3,
+    recon_normalization: str = "none",
 ) -> pd.DataFrame:
-    """Track X/O points and return reconnection-rate diagnostics as a dataframe."""
+    """Track X/O points and return reconnection-rate diagnostics as a dataframe.
+
+    ``recon_normalization`` controls extra normalized columns:
+
+    * ``"none"`` (default) — only the raw ``recon_rate`` / ``time`` from
+      :func:`plasma.track_xo_points`.
+    * ``"notebook"`` — additionally emit ``time_norm`` and ``recon_rate_norm``
+      matching ``fullres.ipynb`` (see :func:`_add_notebook_recon_normalization`).
+    """
+    if recon_normalization not in {"none", "notebook"}:
+        raise ValueError(f"Unknown recon_normalization mode: {recon_normalization!r}")
     if "Az" not in data:
         x_axis, y_axis = _as_axis(X, Y)
         plasma.get_Az(x_axis, y_axis, data)
@@ -840,10 +891,67 @@ def export_reconnection_dataframe(
         merge_tol=merge_tol,
     )
     frame = pd.DataFrame(result)
+    if recon_normalization == "notebook":
+        _add_notebook_recon_normalization(frame, data)
     frame.insert(0, "time_index", np.arange(len(frame), dtype=int))
     frame.insert(0, "run", run_name)
     frame.insert(0, "diagnostic", "reconnection")
     return frame
+
+
+# RunComparePlotter aesthetics (see fullres.ipynb plotter.interactive): cycling
+# colors + dash styles, with line width ramping down and alpha ramping up across
+# the overlaid series so earlier series read as thick/faint, later as thin/solid.
+_OVERLAY_COLORS = [
+    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+    "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+    "#aec7e8", "#ffbb78", "#98df8a", "#ff9896", "#c5b0d5",
+    "#c49c94", "#f7b6d2", "#c7c7c7", "#dbdb8d", "#9edae5",
+    "#393b79", "#637939", "#8c6d31", "#843c39", "#7b4173",
+]
+_OVERLAY_DASHES = ["-", "--", "-.", ":", (0, (5, 1)), (0, (3, 1, 1, 1)), (0, (1, 1))]
+
+
+def _overlay_style(
+    idx: int,
+    n: int,
+    *,
+    lw: tuple[float, float] = (5.0, 1.5),
+    alpha: tuple[float, float] = (0.35, 1.0),
+) -> dict:
+    """Per-series line style matching RunComparePlotter.style (gradient='line')."""
+    lw_max, lw_min = lw
+    alpha_min, alpha_max = alpha
+    frac = idx / max(n - 1, 1)
+    return dict(
+        color=_OVERLAY_COLORS[idx % len(_OVERLAY_COLORS)],
+        linestyle=_OVERLAY_DASHES[idx % len(_OVERLAY_DASHES)],
+        linewidth=lw_max - (lw_max - lw_min) * frac,
+        alpha=alpha_min + (alpha_max - alpha_min) * frac,
+    )
+
+
+def _default_overlay_xlabel(x: str, data: pd.DataFrame) -> str:
+    """Human-readable x label: the cut coordinate axis, or 'time'."""
+    if x == "coord" and "projection" in data.columns:
+        projections = data["projection"].dropna().unique()
+        if len(projections) == 1:
+            return str(projections[0])
+    if x in ("time", "time_norm"):
+        return "time"
+    return x
+
+
+def _default_overlay_ylabel(y: str, data: pd.DataFrame) -> str:
+    """Human-readable y label: the field being plotted, or the rate."""
+    if y == "value" and "field_label" in data.columns:
+        labels = data["field_label"].dropna().unique()
+        if len(labels) == 1:
+            return str(labels[0])
+        return "value"
+    if y in ("recon_rate", "recon_rate_norm"):
+        return "reconnection rate"
+    return y
 
 
 def plot_csv_overlay(
@@ -855,12 +963,36 @@ def plot_csv_overlay(
     group_by: list[str] | None = None,
     title: str | None = None,
     dpi: int = 200,
+    logx: bool = False,
+    logy: bool = False,
+    select: dict[str, list[str]] | None = None,
+    xlabel: str | None = None,
+    ylabel: str | None = None,
 ) -> Path:
-    """Overlay long-format profile or reconnection CSV files."""
+    """Overlay long-format profile or reconnection CSV files.
+
+    ``select`` filters rows before plotting: a mapping of column name to the
+    list of accepted (string-compared) values, e.g. ``{"field_label": ["P_e"]}``
+    to overlay only the ``P_e`` profile. This mirrors a single notebook profile
+    cell instead of dumping every field onto one axes.
+
+    ``xlabel``/``ylabel`` override the axis labels; when omitted they default to
+    what is actually plotted (the cut coordinate / field name / reconnection
+    rate) rather than the raw CSV column name.
+    """
     frames = [pd.read_csv(path) for path in csv_paths]
     if not frames:
         raise ValueError("At least one CSV path is required")
     data = pd.concat(frames, ignore_index=True)
+
+    if select:
+        for col, values in select.items():
+            if col not in data.columns:
+                raise KeyError(f"Cannot filter on {col!r}; available columns: {list(data.columns)}")
+            wanted = [str(v) for v in values]
+            data = data[data[col].astype(str).isin(wanted)]
+        if data.empty:
+            raise ValueError(f"Selection {select!r} removed all rows")
 
     if x is None:
         x = "time" if "recon_rate" in data.columns and "coord" not in data.columns else "coord"
@@ -874,16 +1006,26 @@ def plot_csv_overlay(
         data["series"] = "series"
         group_cols = ["series"]
 
+    if xlabel is None:
+        xlabel = _default_overlay_xlabel(x, data)
+    if ylabel is None:
+        ylabel = _default_overlay_ylabel(y, data)
+
     fig, ax = plt.subplots(figsize=(8, 5))
-    for group_key, group in data.groupby(group_cols, dropna=False):
+    groups = list(data.groupby(group_cols, dropna=False))
+    for idx, (group_key, group) in enumerate(groups):
         if not isinstance(group_key, tuple):
             group_key = (group_key,)
         label = ", ".join(f"{col}={value}" for col, value in zip(group_cols, group_key))
         group = group.sort_values(x)
-        ax.plot(group[x], group[y], label=label)
+        ax.plot(group[x], group[y], label=label, **_overlay_style(idx, len(groups)))
 
-    ax.set_xlabel(x)
-    ax.set_ylabel(y)
+    if logx:
+        ax.set_xscale("log")
+    if logy:
+        ax.set_yscale("log")
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
     if title:
         ax.set_title(title)
     ax.grid(True, alpha=0.25)

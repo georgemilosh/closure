@@ -95,6 +95,12 @@ def _add_load_options(parser: argparse.ArgumentParser, *, default_choose_times: 
         default=1.0,
         help="Multiplier for rho_i max in alfven-sample mode; accepts values like 1, pi, 4pi",
     )
+    parser.add_argument(
+        "--no-density-norm",
+        dest="normalize_density",
+        action="store_false",
+        help="Keep density in code units while still casting B and the other fields/axes to Alfven units",
+    )
     parser.add_argument("--alfven-units", action="store_true", help="Alias for --normalization alfven-infer")
     parser.add_argument("--verbose", action="store_true", help="Print read_pic loading details")
 
@@ -114,6 +120,7 @@ def _load_for_command(args: argparse.Namespace, experiment: str):
         b0x=args.b0x,
         nb=args.nb,
         nb_factor=args.sample_nb_factor,
+        normalize_density=args.normalize_density,
         menura_analysis_dir=args.menura_analysis_dir,
         menura_scale_ranges=args.menura_scale_ranges,
         menura_base_nx=args.menura_base_nx,
@@ -229,6 +236,7 @@ def _cmd_reconnection(args: argparse.Namespace) -> None:
             az_filter=az_filter,
             grad_tol=args.grad_tol,
             merge_tol=args.merge_tol,
+            recon_normalization=args.recon_normalization,
         )
         logger.info("Computed reconnection diagnostics for %s: %d rows", experiment, len(frame))
         frames.append(frame)
@@ -244,7 +252,28 @@ def _cmd_reconnection(args: argparse.Namespace) -> None:
     )
 
 
+def _parse_select(pairs: list[str] | None) -> dict[str, list[str]] | None:
+    """Parse repeated ``column=val[,val...]`` filters into a select mapping."""
+    if not pairs:
+        return None
+    select: dict[str, list[str]] = {}
+    for item in pairs:
+        if "=" not in item:
+            raise ValueError(f"--select expects column=value, got {item!r}")
+        col, raw = item.split("=", 1)
+        col = col.strip()
+        values = [v.strip() for v in raw.split(",") if v.strip()]
+        if not col or not values:
+            raise ValueError(f"--select expects column=value, got {item!r}")
+        select.setdefault(col, []).extend(values)
+    return select
+
+
 def _cmd_overlay(args: argparse.Namespace) -> None:
+    select = _parse_select(args.select)
+    if args.field:
+        fields = [f.strip() for f in args.field.split(",") if f.strip()]
+        select = {**(select or {}), "field_label": fields}
     path = plot_csv_overlay(
         args.csvs,
         output=args.output,
@@ -253,6 +282,11 @@ def _cmd_overlay(args: argparse.Namespace) -> None:
         group_by=args.group_by,
         title=args.title,
         dpi=args.dpi,
+        logx=args.logx,
+        logy=args.logy,
+        select=select,
+        xlabel=args.xlabel,
+        ylabel=args.ylabel,
     )
     logger.info("Saved overlay figure: %s", path)
 
@@ -284,9 +318,15 @@ def build_parser() -> argparse.ArgumentParser:
     reconnection = subparsers.add_parser("reconnection", help="Export X/O point and reconnection-rate diagnostics to CSV")
     _add_load_options(reconnection, default_choose_times="all")
     reconnection.add_argument("--output-csv", default="diagnostics/reconnection.csv", help="Output CSV path")
-    reconnection.add_argument("--az-sigma", type=float, default=None, help="Optional Gaussian sigma for Az before X/O search")
-    reconnection.add_argument("--grad-tol", type=float, default=1e-8, help="Gradient tolerance for X/O root acceptance")
+    reconnection.add_argument("--az-sigma", type=float, default=None, help="Optional Gaussian sigma for Az before X/O search (notebook uses 4)")
+    reconnection.add_argument("--grad-tol", type=float, default=1e-6, help="Gradient tolerance for X/O root acceptance (notebook default)")
     reconnection.add_argument("--merge-tol", type=float, default=1e-3, help="Duplicate X/O merge tolerance")
+    reconnection.add_argument(
+        "--recon-normalization",
+        choices=["none", "notebook"],
+        default="none",
+        help="Add normalized recon_rate_norm/time_norm columns. 'notebook' reproduces fullres.ipynb cell 6.",
+    )
     reconnection.add_argument(
         "--csv-mode",
         choices=["append", "replace"],
@@ -301,7 +341,23 @@ def build_parser() -> argparse.ArgumentParser:
     overlay.add_argument("--x", default=None, help="CSV column for x; defaults to coord or time")
     overlay.add_argument("--y", default=None, help="CSV column for y; defaults to value or recon_rate")
     overlay.add_argument("--group-by", nargs="*", default=None, help="Columns defining overlay series")
+    overlay.add_argument(
+        "--field",
+        default=None,
+        help="Plot only these field_label values (comma-separated), e.g. P_e or Bx,By. Mirrors one notebook profile cell.",
+    )
+    overlay.add_argument(
+        "--select",
+        action="append",
+        default=None,
+        metavar="COL=VAL",
+        help="Filter rows before plotting, e.g. --select run=Le2DHGEM_RunID_0_f2 (repeatable; comma-separated values allowed)",
+    )
     overlay.add_argument("--title", default=None, help="Optional plot title")
+    overlay.add_argument("--xlabel", default=None, help="Override x-axis label (default: cut coordinate or 'time')")
+    overlay.add_argument("--ylabel", default=None, help="Override y-axis label (default: field name or 'reconnection rate')")
+    overlay.add_argument("--logx", action="store_true", help="Use a logarithmic x axis")
+    overlay.add_argument("--logy", action="store_true", help="Use a logarithmic y axis")
     overlay.add_argument("--dpi", type=int, default=200, help="Saved figure DPI")
     overlay.set_defaults(func=_cmd_overlay)
 
