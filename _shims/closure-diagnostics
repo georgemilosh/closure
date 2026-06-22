@@ -1,0 +1,4 @@
+#!/bin/bash
+# Shim entry-point for closure-diagnostics.
+# Works without `pip install` – relies on PYTHONPATH set by activate_hpc.sh.
+exec python -m closure.diagnostics_cli "$@"

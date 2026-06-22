@@ -13,6 +13,8 @@ paths.yaml
 **/dev/** 
 **/envs/**
 **/img/** 
+**/configs/**
+**/scripts/**
 agent_planning_v2_agent_B.md
 agent_planning_v2_large.md
 agent_planning.md
