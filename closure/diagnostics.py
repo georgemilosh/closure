@@ -863,6 +863,7 @@ def export_reconnection_dataframe(
     az_filter: dict | None = None,
     grad_tol: float = 1e-8,
     merge_tol: float = 1e-3,
+    seed_grad_frac: float | None = None,
     recon_normalization: str = "none",
 ) -> pd.DataFrame:
     """Track X/O points and return reconnection-rate diagnostics as a dataframe.
@@ -889,6 +890,7 @@ def export_reconnection_dataframe(
         az_filter=az_filter,
         grad_tol=grad_tol,
         merge_tol=merge_tol,
+        seed_grad_frac=seed_grad_frac,
     )
     frame = pd.DataFrame(result)
     if recon_normalization == "notebook":

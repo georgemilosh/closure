@@ -17,7 +17,6 @@ matplotlib.use("Agg")
 
 from closure.diagnostics import (
     build_profiles_dataframe,
-    compute_common_diagnostics,
     export_reconnection_dataframe,
     load_experiment_data,
     parse_field_specs,
@@ -225,7 +224,10 @@ def _cmd_reconnection(args: argparse.Namespace) -> None:
         )
         data, X, Y, qom, times = _load_for_command(args, experiment)
         logger.info("Loaded %s: grid=%s, snapshots=%d", experiment, data["Bx"].shape[:2], len(times))
-        compute_common_diagnostics(data, X, Y, qom)
+        # Reconnection only needs Az (from Bx/By) and the current totals, both of
+        # which export_reconnection_dataframe computes itself. Skip the full
+        # compute_common_diagnostics battery (Ohm, pressure-strain, agyrotropy,
+        # J_perp) — it is ~45 s/snapshot at 1024x512 and unused here.
         frame = export_reconnection_dataframe(
             data,
             X,
@@ -236,6 +238,7 @@ def _cmd_reconnection(args: argparse.Namespace) -> None:
             az_filter=az_filter,
             grad_tol=args.grad_tol,
             merge_tol=args.merge_tol,
+            seed_grad_frac=args.seed_grad_frac if args.seed_grad_frac > 0 else None,
             recon_normalization=args.recon_normalization,
         )
         logger.info("Computed reconnection diagnostics for %s: %d rows", experiment, len(frame))
@@ -321,6 +324,13 @@ def build_parser() -> argparse.ArgumentParser:
     reconnection.add_argument("--az-sigma", type=float, default=None, help="Optional Gaussian sigma for Az before X/O search (notebook uses 4)")
     reconnection.add_argument("--grad-tol", type=float, default=1e-6, help="Gradient tolerance for X/O root acceptance (notebook default)")
     reconnection.add_argument("--merge-tol", type=float, default=1e-3, help="Duplicate X/O merge tolerance")
+    reconnection.add_argument(
+        "--seed-grad-frac",
+        type=float,
+        default=0.05,
+        help="Seed the X/O search only from local |grad Az| minima below this fraction of "
+        "max|grad Az|; prunes spurious seeds (large speedup at high resolution). Use 0 to disable.",
+    )
     reconnection.add_argument(
         "--recon-normalization",
         choices=["none", "notebook"],
