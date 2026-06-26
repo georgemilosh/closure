@@ -12,6 +12,7 @@ from closure.diagnostics import (
     apply_normalization,
     build_profiles_dataframe,
     discover_menura_iterations,
+    discover_menura_runs,
     parse_field_specs,
     plot_csv_overlay,
     plot_field_panels,
@@ -268,3 +269,39 @@ def test_discover_menura_iterations_uses_nested_experiment_folder(tmp_path):
         (products / f"B_it{iteration}_rank_0_0.npy").touch()
 
     assert discover_menura_iterations(tmp_path, "R0/iso_GEM") == [0, 4000, 8000]
+
+
+def _make_menura_run(run_dir):
+    products = run_dir / "products"
+    products.mkdir(parents=True)
+    for iteration in [0, 100]:
+        (products / f"B_it{iteration}_rank_0_0.npy").touch()
+
+
+def test_discover_menura_runs_expands_parent_folder(tmp_path):
+    for name in ["new_FCNN_00172", "old_MLP_00268", "new_MLP_00574"]:
+        _make_menura_run(tmp_path / "R5" / name)
+    # A non-run folder beneath R5 should be ignored.
+    (tmp_path / "R5" / "logs").mkdir()
+
+    assert discover_menura_runs(tmp_path, "R5") == [
+        "R5/new_FCNN_00172",
+        "R5/new_MLP_00574",
+        "R5/old_MLP_00268",
+    ]
+
+
+def test_discover_menura_runs_keeps_single_run_unchanged(tmp_path):
+    _make_menura_run(tmp_path / "R5" / "new_FCNN_00172")
+
+    assert discover_menura_runs(tmp_path, "R5/new_FCNN_00172") == ["R5/new_FCNN_00172"]
+
+
+def test_discover_menura_runs_handles_run_prefix_wrapper(tmp_path):
+    _make_menura_run(tmp_path / "R5" / "run_iso_GEM")
+
+    assert discover_menura_runs(tmp_path, "R5") == ["R5/iso_GEM"]
+
+
+def test_discover_menura_runs_missing_path_passthrough(tmp_path):
+    assert discover_menura_runs(tmp_path, "R5/does_not_exist") == ["R5/does_not_exist"]

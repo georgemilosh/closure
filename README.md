@@ -433,6 +433,18 @@ closure-diagnostics reconnection R0/iso_GEM_1e-2_Jze.5_r0_1024x1024 --backend me
   --az-sigma 4 --recon-normalization notebook --csv-mode replace \
   --output-csv diagnostics/reconnection_menura.csv
 
+# Recursive Menura discovery (--backend menura): if an experiment argument is a
+# PARENT folder rather than a single run, every Menura run beneath it (any folder
+# holding products/B_it*_rank_0_0.npy) is discovered and added to the CSV, one
+# `run` per discovered run (labeled relative to --files-path, e.g. R5/new_FCNN_00172).
+# A fully-specified run is used as-is. Example: pass `R5` to sweep all 60 runs of
+# a campaign in one call (use --csv-mode replace so reruns don't append duplicates):
+closure-diagnostics reconnection R5 --backend menura \
+  --files-path /dodrio/scratch/projects/2026_018/george/menura/runs/stability_campaign2 \
+  --choose-times all --az-sigma 4 --recon-normalization notebook --csv-mode replace \
+  --output-csv diagnostics/reconnection_menura.csv
+# Pass several parents to combine campaigns: ... reconnection R0 R5 R7 R12 --backend menura ...
+
 # Overlay the NORMALIZED rate on a log axis (plot the *_norm columns, not the raw
 # recon_rate/time, which are mostly negative and vanish under --logy).
 closure-diagnostics overlay \

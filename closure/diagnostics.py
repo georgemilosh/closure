@@ -15,6 +15,7 @@ __all__ = [
     "compute_common_diagnostics",
     "discover_available_snapshots",
     "discover_menura_iterations",
+    "discover_menura_runs",
     "export_reconnection_dataframe",
     "get_cmap",
     "load_experiment_data",
@@ -240,6 +241,61 @@ def _resolve_menura_run_root(run_id: str, run_path: Path) -> Path:
     if run_root.exists():
         return run_root
     return run_path
+
+
+def _is_menura_run_dir(path: Path) -> bool:
+    """Return True when ``path`` holds a Menura run (``products/B_it*`` files)."""
+    products = path / "products"
+    if not products.is_dir():
+        return False
+    return next(products.glob("B_it*_rank_0_0.npy"), None) is not None
+
+
+def _menura_label_dir(run_dir: Path) -> Path:
+    """Map a physical run folder back to its experiment-request folder.
+
+    ``_resolve_menura_run_root`` wraps a request ``<id>`` as ``run_<id>``; undo
+    that so the experiment label points at the folder the loader expects.
+    """
+    name = run_dir.name
+    if name.startswith("run_"):
+        return run_dir.parent / name[len("run_") :]
+    return run_dir
+
+
+def discover_menura_runs(files_path: str | Path, experiment: str) -> list[str]:
+    """Recursively discover Menura runs at or beneath an experiment request.
+
+    A folder is treated as a Menura run when it contains
+    ``products/B_it*_rank_0_0.npy`` files. When ``experiment`` already resolves
+    to a single run it is returned unchanged; otherwise every run found beneath
+    it is returned as an experiment label relative to ``files_path`` (so it can
+    be passed straight back to :func:`load_menura_data`).
+    """
+    root = Path(files_path).expanduser()
+    exp_path = Path(experiment)
+    base = exp_path if exp_path.is_absolute() else root / exp_path
+
+    if not base.is_dir():
+        # Let the normal loader produce a meaningful error downstream.
+        return [experiment]
+
+    for candidate in (base, base / f"run_{base.name}", base / base.name):
+        if _is_menura_run_dir(candidate):
+            return [experiment]
+
+    labels: list[str] = []
+    for products in base.rglob("products"):
+        run_dir = products.parent
+        if not _is_menura_run_dir(run_dir):
+            continue
+        label_dir = _menura_label_dir(run_dir)
+        try:
+            labels.append(str(label_dir.relative_to(root)))
+        except ValueError:
+            labels.append(str(label_dir))
+
+    return sorted(dict.fromkeys(labels)) or [experiment]
 
 
 def _menura_analysis_dir(files_path: Path, override: str | Path | None) -> Path | None:
