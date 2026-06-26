@@ -156,29 +156,55 @@ def _cmd_fields(args: argparse.Namespace) -> None:
         logger.info("Saved field panel: %s", path)
 
 
-def _cmd_profiles(args: argparse.Namespace) -> None:
+def _profiles_one_experiment(args: argparse.Namespace, experiment: str) -> pd.DataFrame:
+    """Load one experiment and return its 1D-profile frame.
+
+    Module-level (picklable) so it can be dispatched to a process pool for
+    experiment-level parallelism; mirrors :func:`_reconnection_one_experiment`.
+    """
     specs = parse_field_specs(args.fields)
-    frames = []
-    for experiment in args.experiments:
-        data, X, Y, qom, times = _load_for_command(args, experiment)
-        if args.time_indices is None:
-            time_indices = list(range(len(times)))
-        else:
-            time_indices = [int(part.strip()) for part in args.time_indices.split(",") if part.strip()]
-        frames.append(
-            build_profiles_dataframe(
-                data,
-                X,
-                Y,
-                specs,
-                run_name=experiment,
-                times=times,
-                time_indices=time_indices,
-                projection=args.projection,
-                cut_index=args.cut_index,
-                cut_value=args.cut_value,
-            )
+    data, X, Y, qom, times = _load_for_command(args, experiment)
+    if args.time_indices is None:
+        time_indices = list(range(len(times)))
+    else:
+        time_indices = [int(part.strip()) for part in args.time_indices.split(",") if part.strip()]
+    return build_profiles_dataframe(
+        data,
+        X,
+        Y,
+        specs,
+        run_name=experiment,
+        times=times,
+        time_indices=time_indices,
+        projection=args.projection,
+        cut_index=args.cut_index,
+        cut_value=args.cut_value,
+    )
+
+
+def _cmd_profiles(args: argparse.Namespace) -> None:
+    experiments = list(args.experiments)
+    exp_workers = min(max(int(args.experiment_workers), 1), len(experiments))
+
+    if exp_workers > 1:
+        import concurrent.futures as _cf
+
+        logger.info(
+            "Running %d experiments across %d worker process(es)",
+            len(experiments), exp_workers,
         )
+        results: dict[str, pd.DataFrame] = {}
+        with _cf.ProcessPoolExecutor(max_workers=exp_workers) as pool:
+            futures = {
+                pool.submit(_profiles_one_experiment, args, exp): exp
+                for exp in experiments
+            }
+            for fut in _cf.as_completed(futures):
+                results[futures[fut]] = fut.result()
+        frames = [results[exp] for exp in experiments]
+    else:
+        frames = [_profiles_one_experiment(args, exp) for exp in experiments]
+
     output = Path(args.output_csv)
     output.parent.mkdir(parents=True, exist_ok=True)
     pd.concat(frames, ignore_index=True).to_csv(output, index=False)
@@ -209,40 +235,77 @@ def _write_csv(frame: pd.DataFrame, output: Path, *, mode: str) -> tuple[str, in
     return "appended", max(existing_rows, 0), len(frame)
 
 
-def _cmd_reconnection(args: argparse.Namespace) -> None:
-    frames = []
+def _reconnection_one_experiment(args: argparse.Namespace, experiment: str) -> pd.DataFrame:
+    """Load one experiment and return its reconnection diagnostics frame.
+
+    Module-level (not a closure) so it is picklable and can be dispatched to a
+    :class:`concurrent.futures.ProcessPoolExecutor` for experiment-level
+    parallelism.  Each experiment is fully independent — its own load, X/O
+    search, and dataframe — so this is the unit that overlaps the sequential
+    per-run loading that dominates wall time.
+    """
     az_filter = None
     if args.az_sigma is not None:
         az_filter = {"name": "gaussian_filter", "sigma": args.az_sigma, "axes": (0, 1)}
-    for experiment in args.experiments:
+    logger.info(
+        "Loading %s with backend=%s, choose_times=%s, normalization=%s",
+        experiment,
+        args.backend,
+        args.choose_times,
+        args.normalization,
+    )
+    data, X, Y, qom, times = _load_for_command(args, experiment)
+    logger.info("Loaded %s: grid=%s, snapshots=%d", experiment, data["Bx"].shape[:2], len(times))
+    # Reconnection only needs Az (from Bx/By) and the current totals, both of
+    # which export_reconnection_dataframe computes itself. Skip the full
+    # compute_common_diagnostics battery (Ohm, pressure-strain, agyrotropy,
+    # J_perp) — it is ~45 s/snapshot at 1024x512 and unused here.
+    frame = export_reconnection_dataframe(
+        data,
+        X,
+        Y,
+        times,
+        run_name=experiment,
+        qom=qom,
+        az_filter=az_filter,
+        grad_tol=args.grad_tol,
+        merge_tol=args.merge_tol,
+        seed_grad_frac=args.seed_grad_frac if args.seed_grad_frac > 0 else None,
+        recon_normalization=args.recon_normalization,
+        n_workers=args.num_workers,
+    )
+    logger.info("Computed reconnection diagnostics for %s: %d rows", experiment, len(frame))
+    return frame
+
+
+def _cmd_reconnection(args: argparse.Namespace) -> None:
+    experiments = list(args.experiments)
+    exp_workers = min(max(int(args.experiment_workers), 1), len(experiments))
+
+    if exp_workers > 1:
+        # Run whole experiments concurrently to overlap their sequential loads
+        # (the wall-time bottleneck once the per-snapshot search is parallel).
+        # results dict preserves CLI order regardless of completion order.
+        import concurrent.futures as _cf
+
         logger.info(
-            "Loading %s with backend=%s, choose_times=%s, normalization=%s",
-            experiment,
-            args.backend,
-            args.choose_times,
-            args.normalization,
+            "Running %d experiments across %d worker process(es) "
+            "(per-experiment X/O workers: %d)",
+            len(experiments), exp_workers, args.num_workers,
         )
-        data, X, Y, qom, times = _load_for_command(args, experiment)
-        logger.info("Loaded %s: grid=%s, snapshots=%d", experiment, data["Bx"].shape[:2], len(times))
-        # Reconnection only needs Az (from Bx/By) and the current totals, both of
-        # which export_reconnection_dataframe computes itself. Skip the full
-        # compute_common_diagnostics battery (Ohm, pressure-strain, agyrotropy,
-        # J_perp) — it is ~45 s/snapshot at 1024x512 and unused here.
-        frame = export_reconnection_dataframe(
-            data,
-            X,
-            Y,
-            times,
-            run_name=experiment,
-            qom=qom,
-            az_filter=az_filter,
-            grad_tol=args.grad_tol,
-            merge_tol=args.merge_tol,
-            seed_grad_frac=args.seed_grad_frac if args.seed_grad_frac > 0 else None,
-            recon_normalization=args.recon_normalization,
-        )
-        logger.info("Computed reconnection diagnostics for %s: %d rows", experiment, len(frame))
-        frames.append(frame)
+        results: dict[str, pd.DataFrame] = {}
+        with _cf.ProcessPoolExecutor(max_workers=exp_workers) as pool:
+            futures = {
+                pool.submit(_reconnection_one_experiment, args, exp): exp
+                for exp in experiments
+            }
+            for fut in _cf.as_completed(futures):
+                exp = futures[fut]
+                results[exp] = fut.result()
+        frames = [results[exp] for exp in experiments]
+    else:
+        frames = [_reconnection_one_experiment(args, exp) for exp in experiments]
+
     output = Path(args.output_csv)
     combined = pd.concat(frames, ignore_index=True)
     action, previous_rows, new_rows = _write_csv(combined, output, mode=args.csv_mode)
@@ -316,6 +379,14 @@ def build_parser() -> argparse.ArgumentParser:
     profiles.add_argument("--cut-value", type=float, default=None, help="Fixed-axis coordinate nearest to this value")
     profiles.add_argument("--time-indices", default=None, help="Loaded time indices to export, comma-separated; default all loaded")
     profiles.add_argument("--output-csv", default="diagnostics/profiles.csv", help="Output CSV path")
+    profiles.add_argument(
+        "--experiment-workers",
+        type=int,
+        default=1,
+        help="Worker processes for running multiple experiments concurrently "
+        "(default: 1, serial). Overlaps per-run data loading. Capped at the "
+        "number of experiments given.",
+    )
     profiles.set_defaults(func=_cmd_profiles)
 
     reconnection = subparsers.add_parser("reconnection", help="Export X/O point and reconnection-rate diagnostics to CSV")
@@ -342,6 +413,23 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["append", "replace"],
         default="append",
         help="Whether to append to or replace --output-csv (default: append)",
+    )
+    reconnection.add_argument(
+        "--num-workers",
+        type=int,
+        default=1,
+        help="Worker processes for the per-snapshot X/O search; splits time steps "
+        "across CPUs (default: 1, serial). Continuity logic stays sequential, so "
+        "results are identical regardless of worker count.",
+    )
+    reconnection.add_argument(
+        "--experiment-workers",
+        type=int,
+        default=1,
+        help="Worker processes for running multiple experiments concurrently "
+        "(default: 1, serial). Overlaps per-run data loading, which dominates wall "
+        "time once --num-workers is set. Total processes ~= experiment-workers x "
+        "num-workers, so keep their product within the available CPU count.",
     )
     reconnection.set_defaults(func=_cmd_reconnection)
 

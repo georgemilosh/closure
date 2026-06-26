@@ -359,19 +359,21 @@ Conventions used by every example below, chosen to match `fullres.ipynb`:
   **menura** also add `--menura-scale-ranges`, which scales these 512-cell base
   ranges up to the run resolution; for **ECsim** they are plain index ranges.
 
+In the exercises below you may use `--normalization alfven-sample --sample-nb-factor 1` for ECsim or use `--normalization alfven-explicit`, while for menura it can be avoided all together assuming that it was run with $B0_x = 1$
+
 ```bash
 # === Field panels ===========================================================
 closure-diagnostics fields Le2DHGEM_RunID_5_f2 \
   --files-path /volume1/scratch/share_dir/iPiC3D-nathan \
   --fields Az,Ey,Ez,rho_e,rho_i,Jz_e,Jz_i,Bx,By,Bz \
-  --processed --normalization alfven-sample --sample-nb-factor 1 \
+  --processed --normalization alfven-infer --sample-nb-factor 1 \
   --choose-species e,i,e,i --choose-x 0,512 --choose-y 0,256 --choose-times 0 \
   --output diagnostics/R5_fields.png
 
 closure-diagnostics fields R0/iso_GEM_1e-2_Jze.5_r0_1024x1024 --backend menura \
   --files-path /volume1/scratch/georgem/menura/runs/GEM/hortense/nathan5-12 \
   --fields Az,Ey,Ez,rho_e,rho_i,Jz_e,Jx_i,Jy_i,Jz_i,Bx,By,Bz \
-  --processed --normalization alfven-sample --sample-nb-factor 1 --choose-times 12 \
+  --processed --choose-times 12 \
   --choose-x 0,512 --choose-y 0,256 --menura-scale-ranges \
   --output diagnostics/R0_fields.png
 
@@ -383,7 +385,7 @@ closure-diagnostics profiles Le2DHGEM_RunID_0_f2 Le2DHGEM_RunID_5_f2 \
   --files-path /volume1/scratch/share_dir/iPiC3D-nathan \
   --fields P_e,P_i,rho_e,rho_i,Jz_e,Jz_i,Bx,By \
   --projection y --choose-times 0 --processed \
-  --normalization alfven-sample --sample-nb-factor 1 --choose-species e,i,e,i \
+  --normalization alfven-infer --sample-nb-factor 1 --choose-species e,i,e,i \
   --choose-x 0,512 --choose-y 0,256 \
   --output-csv diagnostics/profiles_ecsim.csv
 
@@ -394,7 +396,6 @@ closure-diagnostics profiles \
   --files-path /volume1/scratch/georgem/menura/runs/GEM/hortense/nathan5-12 \
   --fields P_e,P_i,rho_e,rho_i,Jz_e,Jz_i,Bx,By \
   --projection y --choose-times 0 --processed \
-  --normalization alfven-sample --sample-nb-factor 1 \
   --choose-x 0,512 --choose-y 0,256 --menura-scale-ranges \
   --output-csv diagnostics/profiles_menura.csv
 
@@ -420,7 +421,7 @@ closure-diagnostics overlay \
 closure-diagnostics reconnection Le2DHGEM_RunID_0_f2 \
   --files-path /volume1/scratch/share_dir/iPiC3D-nathan \
   --choose-times all --processed \
-  --normalization alfven-sample --sample-nb-factor 1 --choose-species e,i,e,i \
+  --normalization alfven-infer --sample-nb-factor 1 --choose-species e,i,e,i \
   --choose-x 0,512 --choose-y 0,256 \
   --az-sigma 4 --recon-normalization notebook --csv-mode replace \
   --output-csv diagnostics/reconnection_ecsim.csv
@@ -428,7 +429,6 @@ closure-diagnostics reconnection Le2DHGEM_RunID_0_f2 \
 closure-diagnostics reconnection R0/iso_GEM_1e-2_Jze.5_r0_1024x1024 --backend menura \
   --files-path /volume1/scratch/georgem/menura/runs/GEM/hortense/nathan5-12 \
   --choose-times all --processed \
-  --normalization alfven-sample --sample-nb-factor 1 \
   --choose-x 0,512 --choose-y 0,256 --menura-scale-ranges \
   --az-sigma 4 --recon-normalization notebook --csv-mode replace \
   --output-csv diagnostics/reconnection_menura.csv

@@ -585,6 +585,25 @@ def find_xo_points(A, x=None, y=None, grad_tol=1e-8, merge_tol=1e-3, seed_grad_f
     return o_points, x_points
 
 
+def _xo_points_for_slice(args):
+    """Detect X/O points for a single snapshot (module-level => picklable).
+
+    Worker for the parallel snapshot pass in :func:`track_xo_points`.  It is a
+    free function (not a closure/lambda) so it can be dispatched to a
+    :class:`concurrent.futures.ProcessPoolExecutor`; the per-seed root solve in
+    :func:`find_xo_points` is pure Python/scipy and GIL-bound, so processes —
+    not threads — are what actually spread it across CPUs.  Optional Az
+    filtering runs here too, so the smoothing is parallelised as well and only
+    the raw 2-D slice has to be shipped to the worker.
+    """
+    Az_t, x_arr, y_arr, az_filter, grad_tol, merge_tol, seed_grad_frac = args
+    Az_smooth = apply_filter(Az_t, filters=az_filter) if az_filter is not None else Az_t
+    return find_xo_points(
+        Az_smooth, x=x_arr, y=y_arr,
+        grad_tol=grad_tol, merge_tol=merge_tol, seed_grad_frac=seed_grad_frac,
+    )
+
+
 def track_xo_points(
     data: DataDict,
     X: ArrayLike,
@@ -598,6 +617,7 @@ def track_xo_points(
     seed_grad_frac: float | None = None,
     max_opoint_jump: float = 3.0,
     rate_sigma_clip: float = 15.0,
+    n_workers: int = 1,
 ) -> dict[str, ArrayLike]:
     """
     Track X- and O-points in Az over time with temporal continuity.
@@ -656,6 +676,12 @@ def track_xo_points(
         Points in ``recon_rate`` more than *rate_sigma_clip* × MAD from
         the median are set to NaN.  Default 15.0 catches only extreme
         single-step spikes while preserving genuine physics.
+    n_workers : int
+        Number of worker processes used for the per-snapshot X/O detection
+        pass.  ``1`` (default) runs serially.  Values ``> 1`` distribute the
+        independent snapshots across CPUs via a process pool; the temporal
+        continuity logic afterwards stays sequential, so results are identical
+        regardless of worker count.
 
     Returns
     -------
@@ -688,14 +714,27 @@ def track_xo_points(
 
     prev_opoint: tuple[float, float] | None = None
 
-    for t in range(nt):
-        Az_t = Az_field[..., t]
-        Az_smooth = apply_filter(Az_t, filters=az_filter) if az_filter is not None else Az_t
+    # Phase 1 — per-snapshot X/O detection.  Each snapshot is independent and
+    # CPU-bound (a scipy root solve per candidate seed), so it parallelises
+    # cleanly across processes.  The temporal continuity / rejection logic that
+    # depends on prev_opoint stays in the serial Phase 2 below, which keeps the
+    # output identical to the single-worker path.
+    slice_args = [
+        (Az_field[..., t], x_arr, y_arr, az_filter, grad_tol, merge_tol, seed_grad_frac)
+        for t in range(nt)
+    ]
+    if n_workers and int(n_workers) > 1 and nt > 1:
+        import concurrent.futures as _cf
 
-        o_pts, x_pts = find_xo_points(
-            Az_smooth, x=x_arr, y=y_arr,
-            grad_tol=grad_tol, merge_tol=merge_tol, seed_grad_frac=seed_grad_frac,
-        )
+        max_workers = min(int(n_workers), nt)
+        with _cf.ProcessPoolExecutor(max_workers=max_workers) as pool:
+            xo_per_t = list(pool.map(_xo_points_for_slice, slice_args))
+    else:
+        xo_per_t = [_xo_points_for_slice(a) for a in slice_args]
+
+    # Phase 2 — temporal continuity (sequential: depends on prev_opoint).
+    for t in range(nt):
+        o_pts, x_pts = xo_per_t[t]
         # Skip only if *both* are absent — if just one type is missing (common
         # in early/late phases of long runs like ECsim) still record what we have.
         if not x_pts and not o_pts:

@@ -188,6 +188,11 @@ def select_snapshot_indices(available_indices: list[int], choose_times: str | No
         selected = [int(choose_times)]
 
     n = len(available_indices)
+    if n == 0:
+        raise ValueError(
+            f"choose_times={choose_times!r} requested but no snapshots are available "
+            f"(0 found). Check the data path and run name."
+        )
     bad = [idx for idx in selected if idx < 0 or idx >= n]
     if bad:
         raise ValueError(f"Snapshot indices {bad} out of range 0..{n - 1}")
@@ -557,6 +562,14 @@ def load_menura_data(
     run_id, run_path = _resolve_menura_request(experiment, resolved_files_path)
     read_menura = _import_read_menura(resolved_files_path, analysis_dir)
     iterations = discover_menura_iterations(resolved_files_path, experiment)
+    if not iterations:
+        run_root = _resolve_menura_run_root(run_id, run_path)
+        raise FileNotFoundError(
+            f"No Menura snapshots found for experiment {experiment!r}: "
+            f"no 'B_it*_rank_0_0.npy' files under {run_root / 'products'}. "
+            f"Check --files-path ({resolved_files_path}) and the run name "
+            f"(resolved run_id={run_id!r}, run_path={run_path})."
+        )
     selected_iterations = _select_menura_iterations(iterations, choose_times)
     scale = 1
     if scale_ranges:
@@ -865,6 +878,7 @@ def export_reconnection_dataframe(
     merge_tol: float = 1e-3,
     seed_grad_frac: float | None = None,
     recon_normalization: str = "none",
+    n_workers: int = 1,
 ) -> pd.DataFrame:
     """Track X/O points and return reconnection-rate diagnostics as a dataframe.
 
@@ -891,6 +905,7 @@ def export_reconnection_dataframe(
         grad_tol=grad_tol,
         merge_tol=merge_tol,
         seed_grad_frac=seed_grad_frac,
+        n_workers=n_workers,
     )
     frame = pd.DataFrame(result)
     if recon_normalization == "notebook":
