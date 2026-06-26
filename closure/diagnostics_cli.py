@@ -65,7 +65,12 @@ def _parse_factor(value: str) -> float:
 
 
 def _add_load_options(parser: argparse.ArgumentParser, *, default_choose_times: str) -> None:
-    parser.add_argument("experiments", nargs="+", help="Experiment names under --files-path")
+    parser.add_argument(
+        "experiments",
+        nargs="*",
+        help="Experiment names under --files-path. If omitted, every run folder "
+        "containing output data beneath --files-path is auto-discovered.",
+    )
     parser.add_argument("--backend", choices=["ecsim", "menura", "auto"], default="ecsim", help="Data loader backend")
     parser.add_argument("--files-path", default=None, help="Root directory containing experiment folders or Menura run folders")
     parser.add_argument("--menura-analysis-dir", default=None, help="Directory containing read_menura.py")
@@ -462,10 +467,48 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _discover_all_experiments(files_path: str | None, backend: str) -> list[str]:
+    """Find every run folder with output data under ``files_path``.
+
+    Backend-aware: Menura runs are detected by their ``products/B_it*`` files,
+    ECsim/iPiC3D runs by their field files. ``auto`` tries Menura first and
+    falls back to the generic PIC scan.
+    """
+    if backend in ("menura", "auto") and files_path is not None:
+        from closure.diagnostics import discover_menura_runs
+
+        # Anchor the recursive search at files_path itself ("." relative to it).
+        runs = [r for r in discover_menura_runs(files_path, ".") if r not in (".", "")]
+        if runs or backend == "menura":
+            return runs
+    from closure.experiments import discover_experiments
+
+    return discover_experiments(files_path)
+
+
+def _resolve_experiments(args: argparse.Namespace) -> list[str]:
+    """Return the experiments to process, auto-discovering when none are given."""
+    if getattr(args, "experiments", None):
+        return list(args.experiments)
+    discovered = _discover_all_experiments(args.files_path, getattr(args, "backend", "ecsim"))
+    if not discovered:
+        raise SystemExit(
+            "No experiments specified and no run folders with output data were "
+            f"found under --files-path={args.files_path!r} (backend={getattr(args, 'backend', 'ecsim')})."
+        )
+    logger.info(
+        "No experiments given; discovered %d run(s) under %s: %s",
+        len(discovered), args.files_path, ", ".join(discovered),
+    )
+    return discovered
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
     _configure_logging(getattr(args, "verbose", False))
+    if hasattr(args, "experiments"):
+        args.experiments = _resolve_experiments(args)
     args.func(args)
 
 

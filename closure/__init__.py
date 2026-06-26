@@ -33,6 +33,7 @@ from closure.dispersion import (
 )
 from closure.plasma import get_Ohm, get_PS_2D_field, get_Az, get_J_perp
 from closure.read_pic import get_exp_times, read_data_ipic3d, build_XY
+from closure.experiments import discover_experiments, resolve_experiments
 
 __version__ = "0.2.0"
 
@@ -74,5 +75,7 @@ __all__ = [
     "get_exp_times",
     "read_data_ipic3d",
     "build_XY",
+    "discover_experiments",
+    "resolve_experiments",
     "__version__",
 ]

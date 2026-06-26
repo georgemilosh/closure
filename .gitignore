@@ -15,6 +15,7 @@ paths.yaml
 **/img/** 
 **/configs/**
 **/scripts/**
+**/diagnostics/**
 agent_planning_v2_agent_B.md
 agent_planning_v2_large.md
 agent_planning.md
