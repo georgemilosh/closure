@@ -135,6 +135,28 @@ def test_plot_csv_overlay_select_filters_field(tmp_path):
         plot_csv_overlay([csv_path], output=tmp_path / "bad.png", select={"nope": ["x"]})
 
 
+def test_plot_csv_overlay_select_patterns_filters_runs(tmp_path):
+    csv_path = tmp_path / "profiles.csv"
+    pd.DataFrame(
+        {
+            "run": ["R0_f2", "R0_f2", "R1_f2", "R1_f2", "R0_f4", "R0_f4"],
+            "field_label": ["Bx"] * 6,
+            "coord": [0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+            "value": [1.0, 2.0, 1.5, 2.5, 3.0, 4.0],
+        }
+    ).to_csv(csv_path, index=False)
+    output = tmp_path / "f2.png"
+    result = plot_csv_overlay([csv_path], output=output, select_patterns={"run": ["*_f2"]})
+    assert result == output and output.exists() and output.stat().st_size > 0
+
+    import pytest
+
+    with pytest.raises(ValueError):
+        plot_csv_overlay([csv_path], output=tmp_path / "none.png", select_patterns={"run": ["nomatch*"]})
+    with pytest.raises(KeyError):
+        plot_csv_overlay([csv_path], output=tmp_path / "bad.png", select_patterns={"nope": ["*"]})
+
+
 def test_overlay_default_labels():
     prof = pd.DataFrame({"projection": ["y", "y"], "field_label": ["P_e", "P_e"]})
     assert _default_overlay_xlabel("coord", prof) == "y"
@@ -207,6 +229,38 @@ def test_apply_normalization_sample_uses_notebook_values(monkeypatch):
     np.testing.assert_allclose(Xn, X + 1)
     np.testing.assert_allclose(Yn, Y + 1)
     assert tn == [1.0, 1.5]
+
+
+def test_cli_overlay_run_and_pattern_build_selections(monkeypatch):
+    from closure import diagnostics_cli
+
+    captured = {}
+
+    def fake_overlay(csvs, **kwargs):
+        captured["csvs"] = csvs
+        captured.update(kwargs)
+        return "overlay.png"
+
+    monkeypatch.setattr(diagnostics_cli, "plot_csv_overlay", fake_overlay)
+
+    args = diagnostics_cli.build_parser().parse_args(
+        [
+            "overlay",
+            "diagnostics/profiles.csv",
+            "--run",
+            "R0_f2, R1_f2",
+            "--field",
+            "Bx",
+            "--run-pattern",
+            "R*_f4",
+            "--select-pattern",
+            "field_label=B*",
+        ]
+    )
+    args.func(args)
+
+    assert captured["select"] == {"field_label": ["Bx"], "run": ["R0_f2", "R1_f2"]}
+    assert captured["select_patterns"] == {"run": ["R*_f4"], "field_label": ["B*"]}
 
 
 def test_cli_accepts_menura_backend_and_normalization_options():

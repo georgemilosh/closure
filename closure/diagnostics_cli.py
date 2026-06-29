@@ -345,6 +345,13 @@ def _cmd_overlay(args: argparse.Namespace) -> None:
     if args.field:
         fields = [f.strip() for f in args.field.split(",") if f.strip()]
         select = {**(select or {}), "field_label": fields}
+    if args.run:
+        runs = [r.strip() for r in args.run.split(",") if r.strip()]
+        select = {**(select or {}), "run": runs}
+    select_patterns = _parse_select(args.select_pattern)
+    if args.run_pattern:
+        patterns = [p.strip() for p in args.run_pattern.split(",") if p.strip()]
+        select_patterns = {**(select_patterns or {}), "run": patterns}
     path = plot_csv_overlay(
         args.csvs,
         output=args.output,
@@ -356,6 +363,7 @@ def _cmd_overlay(args: argparse.Namespace) -> None:
         logx=args.logx,
         logy=args.logy,
         select=select,
+        select_patterns=select_patterns,
         xlabel=args.xlabel,
         ylabel=args.ylabel,
     )
@@ -450,11 +458,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Plot only these field_label values (comma-separated), e.g. P_e or Bx,By. Mirrors one notebook profile cell.",
     )
     overlay.add_argument(
+        "--run",
+        default=None,
+        help="Plot only these runs by exact name (comma-separated), e.g. "
+        "Le2DHGEM_RunID_0_f2,Le2DHGEM_RunID_1_f2. Mirrors --field but for the run column; "
+        "use --run-pattern for glob matching.",
+    )
+    overlay.add_argument(
         "--select",
         action="append",
         default=None,
         metavar="COL=VAL",
         help="Filter rows before plotting, e.g. --select run=Le2DHGEM_RunID_0_f2 (repeatable; comma-separated values allowed)",
+    )
+    overlay.add_argument(
+        "--run-pattern",
+        default=None,
+        help="Plot only runs whose 'run' value matches these shell-glob patterns "
+        "(comma-separated), e.g. 'Le2DHGEM_RunID_*_f2'. Mirrors --field but for the run column.",
+    )
+    overlay.add_argument(
+        "--select-pattern",
+        action="append",
+        default=None,
+        metavar="COL=GLOB",
+        help="Filter rows by shell-glob pattern before plotting, e.g. --select-pattern run='*_f2' "
+        "(repeatable; comma-separated patterns allowed). Generalizes --run-pattern to any column.",
     )
     overlay.add_argument("--title", default=None, help="Optional plot title")
     overlay.add_argument("--xlabel", default=None, help="Override x-axis label (default: cut coordinate or 'time')")

@@ -29,6 +29,7 @@ __all__ = [
 ]
 
 import contextlib
+import fnmatch
 import importlib
 import io
 import re
@@ -1039,6 +1040,7 @@ def plot_csv_overlay(
     logx: bool = False,
     logy: bool = False,
     select: dict[str, list[str]] | None = None,
+    select_patterns: dict[str, list[str]] | None = None,
     xlabel: str | None = None,
     ylabel: str | None = None,
 ) -> Path:
@@ -1048,6 +1050,13 @@ def plot_csv_overlay(
     list of accepted (string-compared) values, e.g. ``{"field_label": ["P_e"]}``
     to overlay only the ``P_e`` profile. This mirrors a single notebook profile
     cell instead of dumping every field onto one axes.
+
+    ``select_patterns`` filters the same way but matches each (string-compared)
+    column value against shell-style glob patterns, e.g.
+    ``{"run": ["Le2DHGEM_RunID_*_f2"]}`` to overlay a whole family of runs
+    without listing each one. A row is kept when its value matches *any* pattern
+    for that column; ``select`` and ``select_patterns`` are combined (AND across
+    columns).
 
     ``xlabel``/``ylabel`` override the axis labels; when omitted they default to
     what is actually plotted (the cut coordinate / field name / reconnection
@@ -1064,8 +1073,19 @@ def plot_csv_overlay(
                 raise KeyError(f"Cannot filter on {col!r}; available columns: {list(data.columns)}")
             wanted = [str(v) for v in values]
             data = data[data[col].astype(str).isin(wanted)]
-        if data.empty:
-            raise ValueError(f"Selection {select!r} removed all rows")
+
+    if select_patterns:
+        for col, patterns in select_patterns.items():
+            if col not in data.columns:
+                raise KeyError(f"Cannot filter on {col!r}; available columns: {list(data.columns)}")
+            col_str = data[col].astype(str)
+            mask = pd.Series(False, index=data.index)
+            for pattern in patterns:
+                mask |= col_str.map(lambda value, pat=str(pattern): fnmatch.fnmatch(value, pat))
+            data = data[mask]
+
+    if (select or select_patterns) and data.empty:
+        raise ValueError(f"Selection (select={select!r}, patterns={select_patterns!r}) removed all rows")
 
     if x is None:
         x = "time" if "recon_rate" in data.columns and "coord" not in data.columns else "coord"
