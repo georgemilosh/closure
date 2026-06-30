@@ -452,6 +452,24 @@ closure-diagnostics overlay \
   --x time_norm --y recon_rate_norm --group-by run --logy \
   --output diagnostics/reconnection_overlay.png
 
+# --- Picking which runs to overlay -----------------------------------------
+# A CSV may hold many runs (the `run` column); overlay these flags trim it to
+# the curves you want. All compare against the string in `run`:
+#   --run NAME[,NAME...]          exact run names (does NOT match siblings, e.g.
+#                                 MLP/1e-2/noJnoE_P_baseline excludes ..._EGUe2)
+#   --run-pattern GLOB[,GLOB...]  shell-glob match, e.g. 'FCNN/1e-2*/noJnoE_*'
+#   --select run=NAME             generic exact filter (repeatable; any column)
+#   --select-pattern run=GLOB     generic glob filter (repeatable; any column)
+# Names are path-like (FCNN/1e-2/...) but the run column carries NO campaign
+# prefix: the R5/R7/... folder only lives in the CSV path, so select R5 by
+# pointing at its CSV and pick the model inside it by run name. Quote names
+# (slashes/dots are literal; split is on commas only). Example overlaying three
+# specific baselines from one campaign CSV:
+closure-diagnostics overlay diagnostics/reconnection_menura_f2.csv \
+  --run "FCNN/1e-2_Jze.5_r0/noJnoE_P_baseline,FCNN/1e-2/noJnoE_P_baseline,MLP/1e-2/noJnoE_P_baseline" \
+  --x time_norm --y recon_rate_norm --group-by run --logy \
+  --output diagnostics/baselines_overlay.png
+
 # === One-shot profile helpers ===============================================
 # Export the 8 profile fields and emit one PNG per field (= one notebook cell
 # each). Each script overwrites only its own dir; run both, then overlay above.

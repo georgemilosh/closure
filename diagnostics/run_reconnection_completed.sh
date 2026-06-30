@@ -5,6 +5,15 @@
 # One output CSV per tree: the 512 (nathan5-12_f2) and 1024 (nathan5-12) MLP runs
 # share the same experiment string (R5/MLP/1e-2/noJnoE_P_baseline, ...), so writing
 # them to a single CSV would collide on run_name. Keep them separate.
+#
+# Usage:
+#   ./run_reconnection_completed.sh              # runs both nathan5-12 and nathan5-12_f2
+#   ./run_reconnection_completed.sh nathan5-12   # runs only nathan5-12
+#   ./run_reconnection_completed.sh nathan5-12_f2  # runs only nathan5-12_f2
+#
+# Example output:
+#   diagnostics/reconnection_nathan5-12.csv      # 1024 MLP runs analysis
+#   diagnostics/reconnection_nathan5-12_f2.csv   # 512 MLP runs analysis
 set -euo pipefail
 cd "$(dirname "$0")/.."          # -> closure repo root (where diagnostics/ lives)
 

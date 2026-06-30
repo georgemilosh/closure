@@ -280,12 +280,24 @@ class MLP(torch.nn.Module):
         Forward pass of the MLP.
 
         Args:
-            x (torch.Tensor): The input tensor.
+            x (torch.Tensor): The input tensor. Either pixel-wise ``[N, C]``
+                (the ``flatten=true`` data path) or an image batch
+                ``[B, C, H, W]`` (the ``flatten=false`` path). For image
+                batches the MLP is applied per-pixel and the spatial layout is
+                restored, so the output is ``[B, C_out, H, W]`` and remains
+                compatible with spatially-aware losses (e.g. the physics gradP
+                term, which requires 4D tensors).
 
         Returns:
-            torch.Tensor: The output tensor.
+            torch.Tensor: The output tensor, ``[N, C_out]`` for pixel-wise input
+                or ``[B, C_out, H, W]`` for image input.
 
         """
+        if x.ndim == 4:
+            b, c, h, w = x.shape
+            pixels = x.permute(0, 2, 3, 1).reshape(-1, c)
+            out = self.linear_relu_stack(pixels)
+            return out.reshape(b, h, w, -1).permute(0, 3, 1, 2).contiguous()
         x = self.flatten(x)
         out = self.linear_relu_stack(x)
         return out

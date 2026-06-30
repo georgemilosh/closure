@@ -85,3 +85,21 @@ class TestMLP:
         x = torch.randn(4, 10)
         out = model(x)
         assert out.shape == (4, 5)
+
+    def test_forward_image_shape(self):
+        # Image batch [B, C, H, W] -> per-pixel MLP -> [B, C_out, H, W]
+        # (the flatten=false path that lets the physics gradP loss apply).
+        model = MLP(feature_dims=[10, 32, 5])
+        x = torch.randn(2, 10, 8, 8)
+        out = model(x)
+        assert out.shape == (2, 5, 8, 8)
+
+    def test_image_matches_pixelwise(self):
+        # Applying the MLP to an image must equal applying it pixel-by-pixel.
+        torch.manual_seed(0)
+        model = MLP(feature_dims=[10, 32, 5], activations=["ReLU", None]).eval()
+        x = torch.randn(2, 10, 4, 4)
+        img_out = model(x)
+        flat_in = x.permute(0, 2, 3, 1).reshape(-1, 10)
+        flat_out = model(flat_in).reshape(2, 4, 4, 5).permute(0, 3, 1, 2)
+        assert torch.allclose(img_out, flat_out, atol=1e-6)
