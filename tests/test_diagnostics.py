@@ -157,6 +157,93 @@ def test_plot_csv_overlay_select_patterns_filters_runs(tmp_path):
         plot_csv_overlay([csv_path], output=tmp_path / "bad.png", select_patterns={"nope": ["*"]})
 
 
+def test_plot_csv_overlay_csv_select_patterns_scopes_per_file(tmp_path):
+    import pytest
+
+    menura = tmp_path / "reconnection_menura.csv"
+    pd.DataFrame(
+        {
+            "run": ["iso_r0", "iso_r0", "iso_r1e-2", "iso_r1e-2"],
+            "time": [0.0, 1.0, 0.0, 1.0],
+            "recon_rate": [1.0, 2.0, 3.0, 4.0],
+        }
+    ).to_csv(menura, index=False)
+    ecsim = tmp_path / "reconnection_ecsim.csv"
+    pd.DataFrame(
+        {
+            "run": ["Le2DHGEM_RunID_5_f2", "Le2DHGEM_RunID_5_f2"],
+            "time": [0.0, 1.0],
+            "recon_rate": [5.0, 6.0],
+        }
+    ).to_csv(ecsim, index=False)
+
+    # '*r0*' scoped to the menura CSV only -> menura filtered to iso_r0, ecsim kept whole.
+    # Spy on pd.concat to capture the exact rows that reach the plot.
+    from closure import diagnostics
+
+    captured_frame = {}
+    real_concat = diagnostics.pd.concat
+
+    def spy_concat(objs, *a, **k):
+        combined = real_concat(objs, *a, **k)
+        captured_frame["data"] = combined
+        return combined
+
+    diagnostics.pd.concat = spy_concat
+    try:
+        out = plot_csv_overlay(
+            [menura, ecsim],
+            output=tmp_path / "overlay.png",
+            x="time",
+            y="recon_rate",
+            csv_select_patterns={"reconnection_menura.csv": {"run": ["*r0*"]}},
+        )
+    finally:
+        diagnostics.pd.concat = real_concat
+    assert out.exists() and out.stat().st_size > 0
+    kept = set(captured_frame["data"]["run"].unique())
+    assert kept == {"iso_r0", "Le2DHGEM_RunID_5_f2"}  # ecsim reference survives, iso_r1e-2 dropped
+
+    # A reference that names no given CSV is an error (typo protection).
+    with pytest.raises(ValueError):
+        plot_csv_overlay(
+            [menura, ecsim],
+            output=tmp_path / "bad.png",
+            x="time",
+            y="recon_rate",
+            csv_select_patterns={"nope.csv": {"run": ["*"]}},
+        )
+
+
+def test_cli_overlay_csv_run_pattern_builds_scoped_selection(monkeypatch):
+    from closure import diagnostics_cli
+
+    captured = {}
+
+    def fake_overlay(csvs, **kwargs):
+        captured["csvs"] = csvs
+        captured.update(kwargs)
+        return "overlay.png"
+
+    monkeypatch.setattr(diagnostics_cli, "plot_csv_overlay", fake_overlay)
+
+    args = diagnostics_cli.build_parser().parse_args(
+        [
+            "overlay",
+            "diagnostics/reconnection_menura.csv",
+            "diagnostics/reconnection_ecsim.csv",
+            "--csv-run-pattern",
+            "reconnection_menura.csv",
+            "*r0*, *r1e-4*",
+        ]
+    )
+    args.func(args)
+
+    assert captured["csv_select_patterns"] == {
+        "reconnection_menura.csv": {"run": ["*r0*", "*r1e-4*"]}
+    }
+
+
 def test_overlay_default_labels():
     prof = pd.DataFrame({"projection": ["y", "y"], "field_label": ["P_e", "P_e"]})
     assert _default_overlay_xlabel("coord", prof) == "y"
@@ -287,6 +374,57 @@ def test_cli_accepts_menura_backend_and_normalization_options():
     assert args.normalization == "alfven-sample"
     assert args.sample_nb_factor == 4 * np.pi
     assert args.menura_scale_ranges is True
+
+
+def test_cmd_reconnection_isolates_failing_experiment(tmp_path, monkeypatch):
+    from closure import diagnostics_cli
+
+    output = tmp_path / "reconnection.csv"
+
+    def fake_one(_args, exp):
+        if exp == "R7/bad_run":
+            raise ValueError("Shape of array too small to calculate a numerical gradient")
+        return pd.DataFrame({"run": [exp], "time": [0.0], "recon_rate": [1.0]})
+
+    monkeypatch.setattr(diagnostics_cli, "_reconnection_one_experiment", fake_one)
+
+    args = diagnostics_cli.build_parser().parse_args(
+        [
+            "reconnection",
+            "R7/bad_run",
+            "R7/good_run",
+            "--backend",
+            "menura",
+            "--output-csv",
+            str(output),
+            "--csv-mode",
+            "replace",
+        ]
+    )
+    # Serial path (experiment_workers defaults to 1): the bad run is skipped, not fatal.
+    args.func(args)
+    written = pd.read_csv(output)
+    assert list(written["run"]) == ["R7/good_run"]
+
+
+def test_cmd_reconnection_raises_when_all_experiments_fail(tmp_path, monkeypatch):
+    import pytest
+
+    from closure import diagnostics_cli
+
+    output = tmp_path / "reconnection.csv"
+
+    def fake_all_fail(_args, exp):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(diagnostics_cli, "_reconnection_one_experiment", fake_all_fail)
+
+    args = diagnostics_cli.build_parser().parse_args(
+        ["reconnection", "R7/a", "R7/b", "--output-csv", str(output)]
+    )
+    with pytest.raises(SystemExit):
+        args.func(args)
+    assert not output.exists()
 
 
 def test_write_csv_appends_without_repeating_header(tmp_path):

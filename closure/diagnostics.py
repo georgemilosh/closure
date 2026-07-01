@@ -32,6 +32,7 @@ import contextlib
 import fnmatch
 import importlib
 import io
+import logging
 import re
 import sys
 from dataclasses import dataclass
@@ -45,6 +46,8 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from closure import plasma, read_pic as rp
 from closure.config import load_paths
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_FIELDS_TO_READ = {
@@ -1028,6 +1031,48 @@ def _default_overlay_ylabel(y: str, data: pd.DataFrame) -> str:
     return y
 
 
+def _csv_ref_matches(ref: str, path: str | Path) -> bool:
+    """Whether a per-CSV reference names ``path``.
+
+    A reference matches by exact path, by basename equality (either side), by
+    path suffix, or as a shell glob against the full path or basename. This lets
+    ``--csv-run-pattern reconnection_menura.csv ...`` target a file given by its
+    full relative path without retyping it.
+    """
+    ref = str(ref)
+    p = str(path)
+    name = Path(p).name
+    if ref in (p, name) or Path(ref).name == name:
+        return True
+    if p.endswith(ref):
+        return True
+    return fnmatch.fnmatch(p, ref) or fnmatch.fnmatch(name, ref)
+
+
+def _apply_overlay_selection(
+    frame: pd.DataFrame,
+    select: dict[str, list[str]] | None,
+    select_patterns: dict[str, list[str]] | None,
+) -> pd.DataFrame:
+    """Filter one CSV frame by exact-value ``select`` and glob ``select_patterns``."""
+    if select:
+        for col, values in select.items():
+            if col not in frame.columns:
+                raise KeyError(f"Cannot filter on {col!r}; available columns: {list(frame.columns)}")
+            wanted = [str(v) for v in values]
+            frame = frame[frame[col].astype(str).isin(wanted)]
+    if select_patterns:
+        for col, patterns in select_patterns.items():
+            if col not in frame.columns:
+                raise KeyError(f"Cannot filter on {col!r}; available columns: {list(frame.columns)}")
+            col_str = frame[col].astype(str)
+            mask = pd.Series(False, index=frame.index)
+            for pattern in patterns:
+                mask |= col_str.map(lambda value, pat=str(pattern): fnmatch.fnmatch(value, pat))
+            frame = frame[mask]
+    return frame
+
+
 def plot_csv_overlay(
     csv_paths: list[str | Path],
     *,
@@ -1041,6 +1086,7 @@ def plot_csv_overlay(
     logy: bool = False,
     select: dict[str, list[str]] | None = None,
     select_patterns: dict[str, list[str]] | None = None,
+    csv_select_patterns: dict[str, dict[str, list[str]]] | None = None,
     xlabel: str | None = None,
     ylabel: str | None = None,
 ) -> Path:
@@ -1058,34 +1104,54 @@ def plot_csv_overlay(
     for that column; ``select`` and ``select_patterns`` are combined (AND across
     columns).
 
+    ``csv_select_patterns`` scopes glob filtering to individual CSVs: a mapping
+    of a CSV reference (exact path, basename, path suffix, or glob) to a
+    ``{column: patterns}`` mapping applied only to rows read from the matching
+    CSV(s). Per-CSV patterns override ``select_patterns`` for that column, so a
+    CSV with no rule is left unfiltered (e.g. keep the ECsim reference while
+    ``run='*r0*'`` filters only the Menura CSV). Every reference must match at
+    least one given CSV.
+
     ``xlabel``/``ylabel`` override the axis labels; when omitted they default to
     what is actually plotted (the cut coordinate / field name / reconnection
     rate) rather than the raw CSV column name.
     """
-    frames = [pd.read_csv(path) for path in csv_paths]
-    if not frames:
+    if not csv_paths:
         raise ValueError("At least one CSV path is required")
+
+    matched_refs: set[str] = set()
+    frames = []
+    for path in csv_paths:
+        frame = pd.read_csv(path)
+        frame_patterns = dict(select_patterns) if select_patterns else {}
+        has_csv_rule = False
+        if csv_select_patterns:
+            for ref, cols in csv_select_patterns.items():
+                if _csv_ref_matches(ref, path):
+                    matched_refs.add(ref)
+                    has_csv_rule = True
+                    for col, patterns in cols.items():
+                        frame_patterns[col] = list(patterns)
+        frame = _apply_overlay_selection(frame, select, frame_patterns or None)
+        if has_csv_rule and frame.empty:
+            logger.warning("Per-CSV pattern for %s matched no rows in that file", path)
+        frames.append(frame)
+
+    if csv_select_patterns:
+        unmatched = set(csv_select_patterns) - matched_refs
+        if unmatched:
+            raise ValueError(
+                f"csv_select_patterns references {sorted(unmatched)!r} matched none of the "
+                f"CSVs {[str(p) for p in csv_paths]!r}"
+            )
+
     data = pd.concat(frames, ignore_index=True)
 
-    if select:
-        for col, values in select.items():
-            if col not in data.columns:
-                raise KeyError(f"Cannot filter on {col!r}; available columns: {list(data.columns)}")
-            wanted = [str(v) for v in values]
-            data = data[data[col].astype(str).isin(wanted)]
-
-    if select_patterns:
-        for col, patterns in select_patterns.items():
-            if col not in data.columns:
-                raise KeyError(f"Cannot filter on {col!r}; available columns: {list(data.columns)}")
-            col_str = data[col].astype(str)
-            mask = pd.Series(False, index=data.index)
-            for pattern in patterns:
-                mask |= col_str.map(lambda value, pat=str(pattern): fnmatch.fnmatch(value, pat))
-            data = data[mask]
-
-    if (select or select_patterns) and data.empty:
-        raise ValueError(f"Selection (select={select!r}, patterns={select_patterns!r}) removed all rows")
+    if (select or select_patterns or csv_select_patterns) and data.empty:
+        raise ValueError(
+            f"Selection (select={select!r}, patterns={select_patterns!r}, "
+            f"csv_patterns={csv_select_patterns!r}) removed all rows"
+        )
 
     if x is None:
         x = "time" if "recon_rate" in data.columns and "coord" not in data.columns else "coord"

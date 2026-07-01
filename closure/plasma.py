@@ -784,7 +784,9 @@ def track_xo_points(
     finite = np.isfinite(flux)
     if finite.sum() >= 2:
         flux_interp = np.interp(times_arr, times_arr[finite], flux[finite])
-        rate = np.gradient(flux_interp, times_arr, edge_order=2)
+        # edge_order=2 needs >=3 samples; fall back to 1 for short (2-snapshot) runs.
+        edge_order = 2 if times_arr.size >= 3 else 1
+        rate = np.gradient(flux_interp, times_arr, edge_order=edge_order)
         finite_rate = rate[np.isfinite(rate)]
         if finite_rate.size > 4 and rate_sigma_clip > 0:
             med = np.median(finite_rate)

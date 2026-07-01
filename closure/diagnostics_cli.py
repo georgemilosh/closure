@@ -306,10 +306,21 @@ def _cmd_reconnection(args: argparse.Namespace) -> None:
             }
             for fut in _cf.as_completed(futures):
                 exp = futures[fut]
-                results[exp] = fut.result()
-        frames = [results[exp] for exp in experiments]
+                try:
+                    results[exp] = fut.result()
+                except Exception:  # noqa: BLE001 - isolate one bad run from the batch
+                    logger.warning("Skipping %s: reconnection diagnostics failed", exp, exc_info=True)
+        frames = [results[exp] for exp in experiments if exp in results]
     else:
-        frames = [_reconnection_one_experiment(args, exp) for exp in experiments]
+        frames = []
+        for exp in experiments:
+            try:
+                frames.append(_reconnection_one_experiment(args, exp))
+            except Exception:  # noqa: BLE001 - isolate one bad run from the batch
+                logger.warning("Skipping %s: reconnection diagnostics failed", exp, exc_info=True)
+
+    if not frames:
+        raise SystemExit("Reconnection diagnostics failed for every experiment; no CSV written.")
 
     output = Path(args.output_csv)
     combined = pd.concat(frames, ignore_index=True)
@@ -352,6 +363,14 @@ def _cmd_overlay(args: argparse.Namespace) -> None:
     if args.run_pattern:
         patterns = [p.strip() for p in args.run_pattern.split(",") if p.strip()]
         select_patterns = {**(select_patterns or {}), "run": patterns}
+    csv_select_patterns: dict[str, dict[str, list[str]]] | None = None
+    if args.csv_run_pattern:
+        csv_select_patterns = {}
+        for csv_ref, raw in args.csv_run_pattern:
+            patterns = [p.strip() for p in raw.split(",") if p.strip()]
+            if not patterns:
+                raise ValueError(f"--csv-run-pattern expects CSV GLOB, got empty glob for {csv_ref!r}")
+            csv_select_patterns.setdefault(csv_ref, {}).setdefault("run", []).extend(patterns)
     path = plot_csv_overlay(
         args.csvs,
         output=args.output,
@@ -364,6 +383,7 @@ def _cmd_overlay(args: argparse.Namespace) -> None:
         logy=args.logy,
         select=select,
         select_patterns=select_patterns,
+        csv_select_patterns=csv_select_patterns,
         xlabel=args.xlabel,
         ylabel=args.ylabel,
     )
@@ -484,6 +504,17 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="COL=GLOB",
         help="Filter rows by shell-glob pattern before plotting, e.g. --select-pattern run='*_f2' "
         "(repeatable; comma-separated patterns allowed). Generalizes --run-pattern to any column.",
+    )
+    overlay.add_argument(
+        "--csv-run-pattern",
+        action="append",
+        nargs=2,
+        default=None,
+        metavar=("CSV", "GLOB"),
+        help="Apply a 'run' glob only to rows from a specific CSV (matched by path, basename, "
+        "or suffix), e.g. --csv-run-pattern reconnection_menura.csv '*r0*'. Repeatable; "
+        "comma-separated globs allowed. Overrides --run-pattern for that CSV, so CSVs without a "
+        "rule stay unfiltered (keeps e.g. the ECsim reference while filtering only Menura runs).",
     )
     overlay.add_argument("--title", default=None, help="Optional plot title")
     overlay.add_argument("--xlabel", default=None, help="Override x-axis label (default: cut coordinate or 'time')")

@@ -234,3 +234,42 @@ class TestAlfvenScales:
         np.testing.assert_allclose(scales["p0"], 0.23 * scales["va"] ** 2)
         np.testing.assert_allclose(scales["e0"], scales["va"] * 0.0249)
         np.testing.assert_allclose(scales["j0"], 0.23 * scales["va"])
+
+
+def _island_az_data(nt: int, *, n: int = 96):
+    """A (nx, ny, nt) Az stack with one interior O-point and interior X-points.
+
+    ``cos(x)cos(y)`` over [0, 2*pi] yields a magnetic island whose flux grows
+    linearly with the snapshot, so track_xo_points has a finite recon_flux at
+    every time.
+    """
+    x = np.linspace(0.0, 2 * np.pi, n)
+    y = np.linspace(0.0, 2 * np.pi, n)
+    xx, yy = np.meshgrid(x, y, indexing="ij")
+    az2d = np.cos(xx) * np.cos(yy)
+    scales = 1.0 + 0.05 * np.arange(nt)
+    az = np.stack([az2d * s for s in scales], axis=-1)
+    times = np.arange(nt, dtype=float)
+    return {"Az": az}, xx, yy, times
+
+
+class TestTrackXOPointsRate:
+    def test_two_snapshots_do_not_crash_gradient(self):
+        # Regression: edge_order=2 needs >=3 samples; a 2-snapshot run used to
+        # raise "Shape of array too small to calculate a numerical gradient".
+        data, xx, yy, times = _island_az_data(nt=2)
+        res = plasma.track_xo_points(data, xx, yy, times, grad_tol=1e-6)
+        assert np.all(np.isfinite(res["recon_flux"]))
+        # flux grows 5% per step over dt=1 -> constant rate ~0.05 via edge_order=1.
+        np.testing.assert_allclose(res["recon_rate"], np.full(2, res["recon_rate"][0]))
+        assert res["recon_rate"][0] > 0
+
+    def test_three_snapshots_use_second_order_edges(self):
+        data, xx, yy, times = _island_az_data(nt=3)
+        res = plasma.track_xo_points(data, xx, yy, times, grad_tol=1e-6)
+        assert np.all(np.isfinite(res["recon_rate"]))
+
+    def test_single_snapshot_returns_nan_rate(self):
+        data, xx, yy, times = _island_az_data(nt=1)
+        res = plasma.track_xo_points(data, xx, yy, times, grad_tol=1e-6)
+        assert np.all(np.isnan(res["recon_rate"]))
