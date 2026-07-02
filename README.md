@@ -470,6 +470,41 @@ closure-diagnostics overlay diagnostics/reconnection_menura_f2.csv \
   --x time_norm --y recon_rate_norm --group-by run --logy \
   --output diagnostics/baselines_overlay.png
 
+# === Band-resolved spectral scalars =========================================
+# Splits the omnidirectional E-field (or B-field, --field B) power spectrum of
+# each snapshot into three wavenumber bands and exports one row per time step:
+#   recon_frac  k <  0.15*k_ny   coherent large-scale (reconnection) field
+#   wave_frac   0.15 <= k/k_ny < 0.80   finite-wavelength waves (not Nyquist)
+#   grid_frac   k >= 0.80*k_ny   grid-scale / checkerboard noise
+# plus absolute band powers, wave_over_recon (wave-vs-reconnection contrast),
+# and kbar (spectral centroid, a single spectral-health index). Band edges are
+# set as fractions of the Nyquist wavenumber (--f-lo/--f-hi) so the fractions
+# are comparable across resolutions; the CSV also records them in physical k
+# (k_lo/k_hi/k_ny) so you can check the bands cover the same physical scales.
+# Same load options, auto-discovery, and --csv-mode append/replace semantics as
+# `reconnection`. No --num-workers: the spectra are computed in one vectorized
+# FFT over all snapshots, so only --experiment-workers (parallel runs) applies.
+closure-diagnostics bands Le2DHGEM_RunID_0_f2 \
+  --files-path /volume1/scratch/share_dir/iPiC3D-nathan \
+  --choose-times all --choose-species e,i,e,i \
+  --choose-x 0,512 --choose-y 0,256 --csv-mode replace \
+  --output-csv diagnostics/bands_ecsim.csv
+
+# Recursive Menura discovery works exactly like `reconnection`: pass a parent
+# folder (e.g. R5) to sweep every run beneath it in one call.
+closure-diagnostics bands R5 R7 --backend menura \
+  --files-path /volume1/scratch/georgem/menura/runs/GEM/hortense/nathan5-12_f2 \
+  --choose-times all --csv-mode replace --experiment-workers 4 \
+  --output-csv diagnostics/bands_menura.csv
+
+# Overlay band scalars vs time. wave_frac (or wave_over_recon, on --logy) is the
+# wave detector: flat-low in clean reconnection runs, elevated when finite-
+# wavelength wave activity develops. grid_frac rising flags grid-scale noise
+# growth *before* a blowup; kbar combines everything into one monotone index.
+closure-diagnostics overlay diagnostics/bands_menura.csv \
+  --x time --y wave_frac --group-by run \
+  --output diagnostics/bands_wave_overlay.png
+
 # === One-shot profile helpers ===============================================
 # Export the 8 profile fields and emit one PNG per field (= one notebook cell
 # each). Each script overwrites only its own dir; run both, then overlay above.

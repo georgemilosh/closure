@@ -17,6 +17,7 @@ matplotlib.use("Agg")
 
 from closure.diagnostics import (
     build_profiles_dataframe,
+    export_bands_dataframe,
     export_reconnection_dataframe,
     load_experiment_data,
     parse_field_specs,
@@ -334,6 +335,82 @@ def _cmd_reconnection(args: argparse.Namespace) -> None:
     )
 
 
+def _bands_one_experiment(args: argparse.Namespace, experiment: str) -> pd.DataFrame:
+    """Load one experiment and return its band-resolved spectral frame.
+
+    Module-level (picklable) so it can be dispatched to a process pool for
+    experiment-level parallelism; mirrors :func:`_reconnection_one_experiment`.
+    """
+    logger.info(
+        "Loading %s with backend=%s, choose_times=%s, normalization=%s",
+        experiment,
+        args.backend,
+        args.choose_times,
+        args.normalization,
+    )
+    data, X, Y, qom, times = _load_for_command(args, experiment)
+    logger.info("Loaded %s: grid=%s, snapshots=%d", experiment, data["Bx"].shape[:2], len(times))
+    frame = export_bands_dataframe(
+        data,
+        X,
+        Y,
+        times,
+        run_name=experiment,
+        field=args.field,
+        f_lo=args.f_lo,
+        f_hi=args.f_hi,
+    )
+    logger.info("Computed band diagnostics for %s: %d rows", experiment, len(frame))
+    return frame
+
+
+def _cmd_bands(args: argparse.Namespace) -> None:
+    experiments = list(args.experiments)
+    exp_workers = min(max(int(args.experiment_workers), 1), len(experiments))
+
+    if exp_workers > 1:
+        import concurrent.futures as _cf
+
+        logger.info(
+            "Running %d experiments across %d worker process(es)",
+            len(experiments), exp_workers,
+        )
+        results: dict[str, pd.DataFrame] = {}
+        with _cf.ProcessPoolExecutor(max_workers=exp_workers) as pool:
+            futures = {
+                pool.submit(_bands_one_experiment, args, exp): exp
+                for exp in experiments
+            }
+            for fut in _cf.as_completed(futures):
+                exp = futures[fut]
+                try:
+                    results[exp] = fut.result()
+                except Exception:  # noqa: BLE001 - isolate one bad run from the batch
+                    logger.warning("Skipping %s: band diagnostics failed", exp, exc_info=True)
+        frames = [results[exp] for exp in experiments if exp in results]
+    else:
+        frames = []
+        for exp in experiments:
+            try:
+                frames.append(_bands_one_experiment(args, exp))
+            except Exception:  # noqa: BLE001 - isolate one bad run from the batch
+                logger.warning("Skipping %s: band diagnostics failed", exp, exc_info=True)
+
+    if not frames:
+        raise SystemExit("Band diagnostics failed for every experiment; no CSV written.")
+
+    output = Path(args.output_csv)
+    combined = pd.concat(frames, ignore_index=True)
+    action, previous_rows, new_rows = _write_csv(combined, output, mode=args.csv_mode)
+    logger.info(
+        "%s bands CSV: %s (%d new rows, %d previous rows)",
+        action.capitalize(),
+        output,
+        new_rows,
+        previous_rows,
+    )
+
+
 def _parse_select(pairs: list[str] | None) -> dict[str, list[str]] | None:
     """Parse repeated ``column=val[,val...]`` filters into a select mapping."""
     if not pairs:
@@ -466,7 +543,41 @@ def build_parser() -> argparse.ArgumentParser:
     )
     reconnection.set_defaults(func=_cmd_reconnection)
 
-    overlay = subparsers.add_parser("overlay", help="Overlay profile or reconnection CSV files")
+    bands = subparsers.add_parser(
+        "bands",
+        help="Export band-resolved spectral scalars (recon/wave/grid vs time) to CSV",
+    )
+    _add_load_options(bands, default_choose_times="all")
+    bands.add_argument("--output-csv", default="diagnostics/bands.csv", help="Output CSV path")
+    bands.add_argument("--field", choices=["E", "B"], default="E", help="Vector field to analyze (default: E)")
+    bands.add_argument(
+        "--f-lo",
+        type=float,
+        default=0.15,
+        help="recon/wave band edge as a fraction of the Nyquist wavenumber (default: 0.15)",
+    )
+    bands.add_argument(
+        "--f-hi",
+        type=float,
+        default=0.80,
+        help="wave/grid band edge as a fraction of the Nyquist wavenumber (default: 0.80)",
+    )
+    bands.add_argument(
+        "--csv-mode",
+        choices=["append", "replace"],
+        default="append",
+        help="Whether to append to or replace --output-csv (default: append)",
+    )
+    bands.add_argument(
+        "--experiment-workers",
+        type=int,
+        default=1,
+        help="Worker processes for running multiple experiments concurrently "
+        "(default: 1, serial). Overlaps per-run data loading.",
+    )
+    bands.set_defaults(func=_cmd_bands)
+
+    overlay = subparsers.add_parser("overlay", help="Overlay profile, reconnection, or bands CSV files")
     overlay.add_argument("csvs", nargs="+", help="CSV files produced by profiles or reconnection")
     overlay.add_argument("--output", default="diagnostics/overlay.png", help="Output figure path")
     overlay.add_argument("--x", default=None, help="CSV column for x; defaults to coord or time")

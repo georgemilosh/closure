@@ -149,6 +149,38 @@ def _read_b0x_nb_from_inp(inp_path: Path) -> tuple[float, float]:
     return b0x_value, nb_value
 
 
+def _radial_bin_spectrum(
+    spec_2d: np.ndarray,
+    kx: np.ndarray,
+    ky: np.ndarray,
+    lx: float,
+    ly: float,
+    nxc: int,
+) -> np.ndarray:
+    """Bin a 2D power spectrum into isotropic shells by integer mode number.
+
+    Vectorized replacement for the former per-(kx, ky) Python loop, which
+    dominated the spectrum runtime (~0.5M interpreter iterations at 1024^2).
+    Same arithmetic: shell index = round(|(lx*kx, ly*ky)| / 2pi), shells above
+    nxc // 2 discarded. np.rint matches Python round() (half-to-even), and one
+    bincount per snapshot keeps the accumulation in C.
+    """
+    index = np.rint(
+        np.sqrt(
+            (lx * kx[:, None] / (2 * np.pi)) ** 2 + (ly * ky[None, :] / (2 * np.pi)) ** 2
+        )
+    ).astype(np.intp)
+    keep = index <= (nxc // 2)
+    flat_index = index[keep]
+    spec_flat = spec_2d[keep]  # (n_kept_modes, nt)
+
+    nbins = nxc // 2 + 1
+    spec_1d = np.empty((nbins, spec_flat.shape[-1]))
+    for it in range(spec_flat.shape[-1]):
+        spec_1d[:, it] = np.bincount(flat_index, weights=spec_flat[:, it], minlength=nbins)
+    return spec_1d
+
+
 def scalar_spectrum_2D(field: ArrayLike, x: ArrayLike, y: ArrayLike) -> tuple[ArrayLike, ArrayLike]:
     """Compute a scalar 2D isotropic spectrum from time-dependent data."""
     lx = x[-1] - x[0]
@@ -157,18 +189,16 @@ def scalar_spectrum_2D(field: ArrayLike, x: ArrayLike, y: ArrayLike) -> tuple[Ar
     nyc = len(y)
     t = np.arange(field.shape[-1])
 
-    field_ft = np.fft.rfft2(field[0:-1, 0:-1, :], axes=(0, 1))
+    # scipy.fft multithreads across the snapshot batch (np.fft is single-threaded)
+    from scipy import fft as _sfft
+
+    field_ft = _sfft.rfft2(field[0:-1, 0:-1, :], axes=(0, 1), workers=-1)
     spec_2d = (abs(field_ft) ** 2) / ((nxc * nyc) ** 2)
     spec_2d[:, 1:-1, :] *= 2
     kx = np.fft.fftfreq(nxc - 1, x[1] - x[0]) * 2 * np.pi
     ky = np.fft.rfftfreq(nyc - 1, y[1] - y[0]) * 2 * np.pi
 
-    spec_1d = np.zeros((nxc // 2 + 1, len(t)))
-    for iy in range(len(ky)):
-        for ix in range(len(kx)):
-            index = round(np.sqrt((lx * kx[ix] / (2 * np.pi)) ** 2 + (ly * ky[iy] / (2 * np.pi)) ** 2))
-            if index <= (nxc // 2):
-                spec_1d[index, :] += spec_2d[ix, iy, :]
+    spec_1d = _radial_bin_spectrum(spec_2d, kx, ky, lx, ly, nxc)
 
     return ky, spec_1d[:-1]
 
@@ -198,21 +228,19 @@ def vector_spectrum_2D(
     nxc = len(x)
     nyc = len(y)
 
-    field_x_ft = np.fft.rfft2(field_x[0:-1, 0:-1, :], axes=(0, 1))
-    field_y_ft = np.fft.rfft2(field_y[0:-1, 0:-1, :], axes=(0, 1))
-    field_z_ft = np.fft.rfft2(field_z[0:-1, 0:-1, :], axes=(0, 1))
+    # scipy.fft multithreads across the snapshot batch (np.fft is single-threaded)
+    from scipy import fft as _sfft
+
+    field_x_ft = _sfft.rfft2(field_x[0:-1, 0:-1, :], axes=(0, 1), workers=-1)
+    field_y_ft = _sfft.rfft2(field_y[0:-1, 0:-1, :], axes=(0, 1), workers=-1)
+    field_z_ft = _sfft.rfft2(field_z[0:-1, 0:-1, :], axes=(0, 1), workers=-1)
 
     spec_2d = (abs(field_x_ft) ** 2 + abs(field_y_ft) ** 2 + abs(field_z_ft) ** 2) / ((nxc * nyc) ** 2)
     spec_2d[:, 1:-1, :] *= 2
     kx = np.fft.fftfreq(nxc - 1, x_axis[1] - x_axis[0]) * 2 * np.pi
     ky = np.fft.rfftfreq(nyc - 1, y_axis[1] - y_axis[0]) * 2 * np.pi
 
-    spec_1d = np.zeros((nxc // 2 + 1, len(t)))
-    for iy in range(len(ky)):
-        for ix in range(len(kx)):
-            index = round(np.sqrt((lx * kx[ix] / (2 * np.pi)) ** 2 + (ly * ky[iy] / (2 * np.pi)) ** 2))
-            if index <= (nxc // 2):
-                spec_1d[index, :] += spec_2d[ix, iy, :]
+    spec_1d = _radial_bin_spectrum(spec_2d, kx, ky, lx, ly, nxc)
 
     return ky, spec_1d
 

@@ -16,6 +16,7 @@ __all__ = [
     "discover_available_snapshots",
     "discover_menura_iterations",
     "discover_menura_runs",
+    "export_bands_dataframe",
     "export_reconnection_dataframe",
     "get_cmap",
     "load_experiment_data",
@@ -973,6 +974,80 @@ def export_reconnection_dataframe(
     frame.insert(0, "time_index", np.arange(len(frame), dtype=int))
     frame.insert(0, "run", run_name)
     frame.insert(0, "diagnostic", "reconnection")
+    return frame
+
+
+def export_bands_dataframe(
+    data: dict,
+    X: np.ndarray,
+    Y: np.ndarray,
+    times: Iterable[float],
+    *,
+    run_name: str,
+    field: str = "E",
+    f_lo: float = 0.15,
+    f_hi: float = 0.80,
+) -> pd.DataFrame:
+    """Band-resolved spectral scalars per snapshot as a dataframe.
+
+    Splits the omnidirectional vector power spectrum of ``field`` (``E`` or
+    ``B``) into three wavenumber bands, with edges given as fractions of the
+    Nyquist wavenumber so the scalars are comparable across resolutions:
+
+    * ``recon`` — ``k <  f_lo * k_ny``: coherent large-scale (reconnection) field
+    * ``wave``  — ``f_lo * k_ny <= k < f_hi * k_ny``: finite-wavelength waves
+    * ``grid``  — ``k >= f_hi * k_ny``: grid-scale / checkerboard noise
+
+    Emits one row per snapshot mirroring :func:`export_reconnection_dataframe`
+    (``diagnostic``/``run``/``time_index``/``time`` first), with per-band power
+    fractions and absolute powers, the wave-to-reconnection contrast ratio, and
+    the spectral centroid ``kbar`` as a single combined health index.
+    """
+    if not 0.0 < f_lo < f_hi <= 1.0:
+        raise ValueError(f"Band edges must satisfy 0 < f_lo < f_hi <= 1; got {f_lo}, {f_hi}")
+    try:
+        fx, fy, fz = data[f"{field}x"], data[f"{field}y"], data[f"{field}z"]
+    except KeyError as exc:
+        raise ValueError(f"bands diagnostic requires {field}x/{field}y/{field}z fields") from exc
+
+    k, spec = plasma.vector_spectrum_2D(fx, fy, fz, X, Y)
+    # vector_spectrum_2D bins radially by integer mode number while returning the
+    # rfft ky axis, so the lengths can disagree off-square grids; trim to common.
+    n = min(len(k), spec.shape[0])
+    k, spec = np.asarray(k[:n], dtype=float), np.asarray(spec[:n], dtype=float)
+
+    k_ny = k[-1]
+    lo = k < f_lo * k_ny
+    hi = k >= f_hi * k_ny
+    mid = ~lo & ~hi
+
+    total = spec.sum(axis=0)
+    safe_total = np.where(total > 0, total, np.nan)
+    recon_power = spec[lo].sum(axis=0)
+    wave_power = spec[mid].sum(axis=0)
+    grid_power = spec[hi].sum(axis=0)
+
+    frame = pd.DataFrame(
+        {
+            "time": np.asarray(list(times), dtype=float),
+            "recon_frac": recon_power / safe_total,
+            "wave_frac": wave_power / safe_total,
+            "grid_frac": grid_power / safe_total,
+            "recon_power": recon_power,
+            "wave_power": wave_power,
+            "grid_power": grid_power,
+            "total_power": total,
+            "wave_over_recon": wave_power / np.where(recon_power > 0, recon_power, np.nan),
+            "kbar": (k[:, None] * spec).sum(axis=0) / safe_total,
+            "field": field,
+            "k_lo": f_lo * k_ny,
+            "k_hi": f_hi * k_ny,
+            "k_ny": k_ny,
+        }
+    )
+    frame.insert(0, "time_index", np.arange(len(frame), dtype=int))
+    frame.insert(0, "run", run_name)
+    frame.insert(0, "diagnostic", "bands")
     return frame
 
 
