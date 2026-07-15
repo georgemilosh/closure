@@ -225,8 +225,11 @@ def vector_spectrum_2D(
         raise ValueError("X and Y must be 1D or 2D arrays")
 
     t = np.arange(field_x.shape[-1])
-    nxc = len(x)
-    nyc = len(y)
+    # Use the axis lengths, not len() of the (possibly 2D) mesh: len(Y) on a
+    # meshgrid of shape (nx, ny) is nx, which silently works on square grids
+    # but breaks the rfft axis size on cropped/non-square domains.
+    nxc = len(x_axis)
+    nyc = len(y_axis)
 
     # scipy.fft multithreads across the snapshot batch (np.fft is single-threaded)
     from scipy import fft as _sfft

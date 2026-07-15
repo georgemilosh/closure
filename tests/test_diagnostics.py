@@ -6,6 +6,7 @@ import pandas as pd
 from closure.diagnostics import (
     FieldSpec,
     _add_notebook_recon_normalization,
+    _csv_source_labels,
     _default_overlay_xlabel,
     _default_overlay_ylabel,
     _overlay_style,
@@ -213,6 +214,86 @@ def test_plot_csv_overlay_csv_select_patterns_scopes_per_file(tmp_path):
             y="recon_rate",
             csv_select_patterns={"nope.csv": {"run": ["*"]}},
         )
+
+
+def test_csv_source_labels_uses_parent_dir_name_and_falls_back_on_collision(tmp_path):
+    r0 = tmp_path / "R0" / "profiles_menura.csv"
+    r5 = tmp_path / "R5" / "profiles_menura.csv"
+    r0.parent.mkdir()
+    r5.parent.mkdir()
+    assert _csv_source_labels([r0, r5]) == ["R0", "R5"]
+
+    # Same parent dir name under different subtrees -> labels would collide,
+    # so fall back to the full resolved path for every entry.
+    other_r0 = tmp_path / "other" / "R0" / "profiles_menura.csv"
+    other_r0.parent.mkdir(parents=True)
+    labels = _csv_source_labels([r0, other_r0])
+    assert labels == [str(r0.resolve()), str(other_r0.resolve())]
+
+
+def test_plot_csv_overlay_separates_same_run_name_across_two_csvs(tmp_path):
+    """Two batches that each ran a run of the same name must not get merged
+    into one scrambled line - see _csv_source_labels' docstring."""
+    r0_dir = tmp_path / "R0"
+    r5_dir = tmp_path / "R5"
+    r0_dir.mkdir()
+    r5_dir.mkdir()
+    columns = {
+        "run": ["iso_GEM_1e-2_Jze.5_r0"] * 2,
+        "field_label": ["P_e"] * 2,
+        "projection": ["y"] * 2,
+        "cut_value": [9.921875] * 2,
+        "coord": [0.0, 1.0],
+    }
+    pd.DataFrame({**columns, "value": [1.0, 2.0]}).to_csv(r0_dir / "profiles_menura.csv", index=False)
+    pd.DataFrame({**columns, "value": [10.0, 20.0]}).to_csv(r5_dir / "profiles_menura.csv", index=False)
+
+    import matplotlib.axes
+
+    from closure import diagnostics
+
+    captured = {}
+    real_concat = diagnostics.pd.concat
+
+    def spy_concat(objs, *a, **k):
+        combined = real_concat(objs, *a, **k)
+        captured["data"] = combined
+        return combined
+
+    def _plot_and_capture_labels(**kwargs) -> list[str]:
+        labels: list[str] = []
+        real_plot = matplotlib.axes.Axes.plot
+
+        def spy_plot(self, *args, **plot_kwargs):
+            labels.append(plot_kwargs.get("label"))
+            return real_plot(self, *args, **plot_kwargs)
+
+        diagnostics.pd.concat = spy_concat
+        matplotlib.axes.Axes.plot = spy_plot
+        try:
+            plot_csv_overlay(
+                [r0_dir / "profiles_menura.csv", r5_dir / "profiles_menura.csv"],
+                **kwargs,
+            )
+        finally:
+            diagnostics.pd.concat = real_concat
+            matplotlib.axes.Axes.plot = real_plot
+        return labels
+
+    labels = _plot_and_capture_labels(output=tmp_path / "overlay.png")
+    assert captured["data"]["csv_source"].tolist() == ["R0", "R0", "R5", "R5"]
+    # Two distinct series (one ax.plot call each) despite run/field_label/
+    # projection/cut_value being identical across the two files.
+    assert len(labels) == 2
+    assert any("csv_source=R0" in label for label in labels)
+    assert any("csv_source=R5" in label for label in labels)
+
+    # csv_source is folded in even on top of an explicit group_by, since a
+    # merged line-plot across two files is never a sensible result.
+    labels = _plot_and_capture_labels(output=tmp_path / "overlay2.png", group_by=["run"])
+    assert len(labels) == 2
+    assert any("csv_source=R0" in label for label in labels)
+    assert any("csv_source=R5" in label for label in labels)
 
 
 def test_cli_overlay_csv_run_pattern_builds_scoped_selection(monkeypatch):

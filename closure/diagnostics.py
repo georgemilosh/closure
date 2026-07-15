@@ -1124,6 +1124,28 @@ def _csv_ref_matches(ref: str, path: str | Path) -> bool:
     return fnmatch.fnmatch(p, ref) or fnmatch.fnmatch(name, ref)
 
 
+def _csv_source_labels(paths: list[str | Path]) -> list[str]:
+    """One label per CSV path, distinguishing rows when other grouping
+    columns collide across files.
+
+    Two different CSVs can easily share a ``run`` (and ``field_label`` /
+    ``projection`` / ``cut_value``) value - e.g. two batches that each ran a
+    run named ``iso_GEM_1e-2_Jze.5_r0``. Without something to tell those rows
+    apart, the default overlay grouping merges them into a single series and
+    ``ax.plot`` connects points from both files sorted purely by x, producing
+    a scrambled zig-zag line instead of two overlaid curves - silently, with
+    no error. Defaults to the parent directory name, which matches this
+    project's ``diagnostics/<batch>/<file>.csv`` layout (e.g. "R0", "R5");
+    falls back to the full resolved path if that isn't unique across the
+    given files.
+    """
+    resolved = [Path(p).resolve() for p in paths]
+    labels = [p.parent.name for p in resolved]
+    if len(set(labels)) != len(labels):
+        labels = [str(p) for p in resolved]
+    return labels
+
+
 def _apply_overlay_selection(
     frame: pd.DataFrame,
     select: dict[str, list[str]] | None,
@@ -1190,14 +1212,27 @@ def plot_csv_overlay(
     ``xlabel``/``ylabel`` override the axis labels; when omitted they default to
     what is actually plotted (the cut coordinate / field name / reconnection
     rate) rather than the raw CSV column name.
+
+    Every row is tagged with a ``csv_source`` column (the parent directory
+    name of its CSV, or the full path if that's not unique across the given
+    files - see ``_csv_source_labels``). It's usable like any other column in
+    ``select``/``select_patterns``/``--group-by``, and is folded into the
+    grouping automatically whenever it's needed - including when ``group_by``
+    was given explicitly: if two CSVs share an identical group key (e.g. the
+    same run name reused across two batches), grouping by that key alone
+    would connect both files' points into one zig-zagging line, which is
+    never a sensible result, so ``csv_source`` is added to tell them apart
+    regardless of how ``group_by`` was chosen.
     """
     if not csv_paths:
         raise ValueError("At least one CSV path is required")
 
     matched_refs: set[str] = set()
     frames = []
-    for path in csv_paths:
+    for path, csv_label in zip(csv_paths, _csv_source_labels(csv_paths)):
         frame = pd.read_csv(path)
+        if "csv_source" not in frame.columns:
+            frame["csv_source"] = csv_label
         frame_patterns = dict(select_patterns) if select_patterns else {}
         has_csv_rule = False
         if csv_select_patterns:
@@ -1239,6 +1274,15 @@ def plot_csv_overlay(
     if not group_cols:
         data["series"] = "series"
         group_cols = ["series"]
+    elif "csv_source" not in group_cols and data["csv_source"].nunique() > 1:
+        # Applies even when group_by was passed explicitly: two CSVs sharing
+        # a group key here means their points would be connected into one
+        # zig-zagging line by ax.plot below, which is never a sensible
+        # result - there's no legitimate reason to want two files' series
+        # spliced together, so this isn't something to opt out of.
+        collisions = data.groupby(group_cols, dropna=False)["csv_source"].nunique()
+        if (collisions > 1).any():
+            group_cols = group_cols + ["csv_source"]
 
     if xlabel is None:
         xlabel = _default_overlay_xlabel(x, data)

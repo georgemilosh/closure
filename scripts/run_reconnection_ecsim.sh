@@ -8,7 +8,7 @@ for run_dir in "$files_path"/*_f2/; do
   if [ -d "$run_dir" ]; then
     run_name=${run_dir#"$files_path"/}
     run_name=${run_name%/}
-
+``
     # Le2DHGEM_RunID_<n>_f2  ->  R<n>   (e.g. R0)
     label=R$(echo "$run_name" | sed -E 's/^.*RunID_([0-9]+).*$/\1/')
     out_dir="$diagnostics_root/$label"

@@ -582,7 +582,16 @@ def build_parser() -> argparse.ArgumentParser:
     overlay.add_argument("--output", default="diagnostics/overlay.png", help="Output figure path")
     overlay.add_argument("--x", default=None, help="CSV column for x; defaults to coord or time")
     overlay.add_argument("--y", default=None, help="CSV column for y; defaults to value or recon_rate")
-    overlay.add_argument("--group-by", nargs="*", default=None, help="Columns defining overlay series")
+    overlay.add_argument(
+        "--group-by",
+        nargs="*",
+        default=None,
+        help="Columns defining overlay series. Defaults to run/field_label/projection/cut_value "
+        "(whichever are present). csv_source (each CSV's parent directory name, or full path if "
+        "that collides) is auto-added - even on top of an explicit --group-by - whenever two CSVs "
+        "would otherwise share an identical group key and get merged into one zig-zagging line; "
+        "there's no flag to opt out of this since that merge is never a sensible result.",
+    )
     overlay.add_argument(
         "--field",
         default=None,
