@@ -548,7 +548,6 @@ def load_experiment_data(
         raise RuntimeError("Failed to load data after disabling missing fields")
 
     run_data = data[experiment]
-    _compute_current_totals(run_data)
 
     X, Y, times = apply_normalization(
         run_data,
@@ -562,6 +561,10 @@ def load_experiment_data(
         nb_factor=nb_factor,
         normalize_density=normalize_density,
     )
+    # AFTER apply_normalization: the totals are derived keys the normalization
+    # pass does not know about, so computing them first left J*-tot in code
+    # units (e.g. 1/b0x ~ 40x too small under alfven-infer).
+    _compute_current_totals(run_data)
 
     run_data["X"] = X
     run_data["Y"] = Y
@@ -655,7 +658,6 @@ def load_menura_data(
         )
 
     qom = [-np.inf, 1.0]
-    _compute_current_totals(data)
     X, Y, times = apply_normalization(
         data,
         X,
@@ -673,6 +675,10 @@ def load_menura_data(
     data["qom"] = qom
     data["times"] = times
     data["timeunit"] = r" $\omega_{pi}^{-1}$"
+    # AFTER apply_normalization, for the same reason as in
+    # load_experiment_data: J*-tot are derived keys the normalization pass
+    # does not rescale.
+    _compute_current_totals(data)
 
     if processed:
         compute_common_diagnostics(data, X, Y, qom)
