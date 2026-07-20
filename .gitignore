@@ -32,6 +32,12 @@ examples/**
 !examples/tutorials/
 !examples/tutorials/**
 
+# Scripts (only selected files are tracked)
+!scripts/jet_metric.py
+!scripts/fields_at_recon_thresholds.py
+!scripts/bands_ez.py
+
+
 # Environment ymls (not needed in repo)
 gputorch.yml
 torch.yml
