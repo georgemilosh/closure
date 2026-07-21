@@ -261,7 +261,16 @@ def _reconnection_one_experiment(args: argparse.Namespace, experiment: str) -> p
         args.normalization,
     )
     data, X, Y, qom, times = _load_for_command(args, experiment)
-    logger.info("Loaded %s: grid=%s, snapshots=%d", experiment, data["Bx"].shape[:2], len(times))
+    from closure import resources
+
+    logger.info(
+        "Loaded %s: grid=%s, snapshots=%d | RAM now=%.2f GiB, job peak=%.2f GiB",
+        experiment,
+        data["Bx"].shape[:2],
+        len(times),
+        resources.process_tree_ram_gb(),
+        resources.cgroup_memory_peak_gb() or float("nan"),
+    )
     # Reconnection only needs Az (from Bx/By) and the current totals, both of
     # which export_reconnection_dataframe computes itself. Skip the full
     # compute_common_diagnostics battery (Ohm, pressure-strain, agyrotropy,
@@ -284,6 +293,63 @@ def _reconnection_one_experiment(args: argparse.Namespace, experiment: str) -> p
     return frame
 
 
+def _run_experiments_pooled(worker_fn, args, experiments, exp_workers, label):
+    """Run ``worker_fn(args, exp)`` per experiment across a process pool.
+
+    Returns the resulting frames in CLI order, skipping experiments whose
+    worker raised an ordinary exception.  A ``BrokenProcessPool`` is treated
+    specially: it means a worker was killed with no Python-level exception,
+    which is the signature of an out-of-memory (OOM) kill by the kernel or
+    Slurm rather than a bug in the diagnostics.  Because a broken pool poisons
+    every remaining future, this is reported once — with the peak RAM charged
+    to the job — instead of as N identical per-experiment "failed" warnings.
+    """
+    import concurrent.futures as _cf
+    from concurrent.futures.process import BrokenProcessPool
+
+    from closure import resources
+
+    logger.info(
+        "Running %d experiments across %d worker process(es)",
+        len(experiments), exp_workers,
+    )
+    results: dict[str, pd.DataFrame] = {}
+    broken = False
+    with _cf.ProcessPoolExecutor(max_workers=exp_workers) as pool:
+        futures = {pool.submit(worker_fn, args, exp): exp for exp in experiments}
+        for fut in _cf.as_completed(futures):
+            exp = futures[fut]
+            try:
+                results[exp] = fut.result()
+            except BrokenProcessPool:
+                broken = True
+                break
+            except Exception:  # noqa: BLE001 - isolate one bad run from the batch
+                logger.warning("Skipping %s: %s diagnostics failed", exp, label, exc_info=True)
+
+    if broken:
+        peak = resources.cgroup_memory_peak_gb()
+        peak_str = f"{peak:.2f} GiB" if peak is not None else "unknown"
+        done = [e for e in experiments if e in results]
+        pending = [e for e in experiments if e not in results]
+        logger.error(
+            "A worker process was KILLED (BrokenProcessPool) while running %d "
+            "experiment(s) across %d worker process(es). No Python exception was "
+            "raised, so this is almost certainly an out-of-memory (OOM) kill by "
+            "the kernel/Slurm, not a bug in the diagnostics. Each worker loads one "
+            "full run into RAM concurrently, so %d workers hold ~%d runs at once. "
+            "Peak RAM charged to this job so far: %s. "
+            "Completed before the kill: %s. Not run (pool poisoned): %s. "
+            "Mitigation: rerun with --experiment-workers 1 (or 2), or confirm the "
+            "OOM with `dmesg -T | grep -i oom` or `sacct -j $SLURM_JOB_ID "
+            "-o JobID,State,MaxRSS,ReqMem`.",
+            len(experiments), exp_workers, exp_workers, exp_workers, peak_str,
+            done or "(none)", pending or "(none)",
+        )
+
+    return [results[exp] for exp in experiments if exp in results]
+
+
 def _cmd_reconnection(args: argparse.Namespace) -> None:
     experiments = list(args.experiments)
     exp_workers = min(max(int(args.experiment_workers), 1), len(experiments))
@@ -291,27 +357,9 @@ def _cmd_reconnection(args: argparse.Namespace) -> None:
     if exp_workers > 1:
         # Run whole experiments concurrently to overlap their sequential loads
         # (the wall-time bottleneck once the per-snapshot search is parallel).
-        # results dict preserves CLI order regardless of completion order.
-        import concurrent.futures as _cf
-
-        logger.info(
-            "Running %d experiments across %d worker process(es) "
-            "(per-experiment X/O workers: %d)",
-            len(experiments), exp_workers, args.num_workers,
+        frames = _run_experiments_pooled(
+            _reconnection_one_experiment, args, experiments, exp_workers, "reconnection"
         )
-        results: dict[str, pd.DataFrame] = {}
-        with _cf.ProcessPoolExecutor(max_workers=exp_workers) as pool:
-            futures = {
-                pool.submit(_reconnection_one_experiment, args, exp): exp
-                for exp in experiments
-            }
-            for fut in _cf.as_completed(futures):
-                exp = futures[fut]
-                try:
-                    results[exp] = fut.result()
-                except Exception:  # noqa: BLE001 - isolate one bad run from the batch
-                    logger.warning("Skipping %s: reconnection diagnostics failed", exp, exc_info=True)
-        frames = [results[exp] for exp in experiments if exp in results]
     else:
         frames = []
         for exp in experiments:
@@ -349,7 +397,16 @@ def _bands_one_experiment(args: argparse.Namespace, experiment: str) -> pd.DataF
         args.normalization,
     )
     data, X, Y, qom, times = _load_for_command(args, experiment)
-    logger.info("Loaded %s: grid=%s, snapshots=%d", experiment, data["Bx"].shape[:2], len(times))
+    from closure import resources
+
+    logger.info(
+        "Loaded %s: grid=%s, snapshots=%d | RAM now=%.2f GiB, job peak=%.2f GiB",
+        experiment,
+        data["Bx"].shape[:2],
+        len(times),
+        resources.process_tree_ram_gb(),
+        resources.cgroup_memory_peak_gb() or float("nan"),
+    )
     frame = export_bands_dataframe(
         data,
         X,
@@ -369,25 +426,9 @@ def _cmd_bands(args: argparse.Namespace) -> None:
     exp_workers = min(max(int(args.experiment_workers), 1), len(experiments))
 
     if exp_workers > 1:
-        import concurrent.futures as _cf
-
-        logger.info(
-            "Running %d experiments across %d worker process(es)",
-            len(experiments), exp_workers,
+        frames = _run_experiments_pooled(
+            _bands_one_experiment, args, experiments, exp_workers, "band"
         )
-        results: dict[str, pd.DataFrame] = {}
-        with _cf.ProcessPoolExecutor(max_workers=exp_workers) as pool:
-            futures = {
-                pool.submit(_bands_one_experiment, args, exp): exp
-                for exp in experiments
-            }
-            for fut in _cf.as_completed(futures):
-                exp = futures[fut]
-                try:
-                    results[exp] = fut.result()
-                except Exception:  # noqa: BLE001 - isolate one bad run from the batch
-                    logger.warning("Skipping %s: band diagnostics failed", exp, exc_info=True)
-        frames = [results[exp] for exp in experiments if exp in results]
     else:
         frames = []
         for exp in experiments:

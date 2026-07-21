@@ -484,14 +484,20 @@ closure-diagnostics overlay diagnostics/reconnection_menura_f2.csv \
 # Same load options, auto-discovery, and --csv-mode append/replace semantics as
 # `reconnection`. No --num-workers: the spectra are computed in one vectorized
 # FFT over all snapshots, so only --experiment-workers (parallel runs) applies.
+# For ECsim, pass --normalization alfven-infer (as in `reconnection`): it puts
+# the `time` axis and the k_lo/k_hi/k_ny/kbar wavenumbers into Alfven units.
+# WITHOUT it, ECsim `time` stays in raw code units (~40x larger) — the power
+# fractions are unaffected (dimensionless ratios), but the time/k axes are not.
+# Menura is already normalized, so it needs no --normalization (see below).
 closure-diagnostics bands Le2DHGEM_RunID_0_f2 \
   --files-path /volume1/scratch/share_dir/iPiC3D-nathan \
   --choose-times all --choose-species e,i,e,i \
-  --choose-x 0,512 --choose-y 0,256 --csv-mode replace \
+  --choose-x 0,512 --choose-y 0,256 --normalization alfven-infer --csv-mode replace \
   --output-csv diagnostics/bands_ecsim.csv
 
 # Recursive Menura discovery works exactly like `reconnection`: pass a parent
-# folder (e.g. R5) to sweep every run beneath it in one call.
+# folder (e.g. R5) to sweep every run beneath it in one call. No --normalization:
+# menura times/wavenumbers are already in physical (Alfven) units.
 closure-diagnostics bands R5 R7 --backend menura \
   --files-path /volume1/scratch/georgem/menura/runs/GEM/hortense/nathan5-12_f2 \
   --choose-times all --csv-mode replace --experiment-workers 4 \
@@ -515,6 +521,39 @@ scripts/profiles_menura.sh diagnostics/profiles_menura   # menura R0/iso_GEM_...
 #   scripts/profiles_ecsim.sh  diagnostics/cmp Le2DHGEM_RunID_0_f2 Le2DHGEM_RunID_5_f2
 #   scripts/profiles_menura.sh diagnostics/cmp R0 R5 R7
 ```
+
+#### `bands` CSV columns
+
+Each row is one snapshot of one run. The band diagnostic takes the omnidirectional
+(radially binned) vector power spectrum of the chosen field — `P(k) = |Fx|² + |Fy|² + |Fz|²`
+for `F ∈ {E, B}` — and splits it into three wavenumber bands whose edges are set as
+fractions of the Nyquist wavenumber `k_ny` (`--f-lo`, `--f-hi`), so the *fractions* are
+directly comparable across grid resolutions. Columns, in file order:
+
+| Column | Meaning |
+| --- | --- |
+| `diagnostic` | Constant `"bands"` — tags the row type so band rows can share a CSV/schema with other diagnostics. |
+| `run` | Run label. For a discovered Menura run it is the path relative to `--files-path` (e.g. `R5/FCNN/1e-2/noJnoE_P_baseline`). |
+| `time_index` | 0-based snapshot index (row order within a run). |
+| `time` | Physical simulation time of the snapshot (loader time units; Alfvén-normalized if a `--normalization` was applied). |
+| `recon_frac` | Fraction of total power in the low-k **reconnection** band (`k < f_lo·k_ny`): `recon_power / total_power`, in [0, 1]. Coherent large-scale field. |
+| `wave_frac` | Fraction in the mid-k **wave** band (`f_lo·k_ny ≤ k < f_hi·k_ny`): finite-wavelength wave activity. |
+| `grid_frac` | Fraction in the high-k **grid** band (`k ≥ f_hi·k_ny`): grid-scale / checkerboard noise. The three fractions sum to 1 (when `total_power > 0`). |
+| `recon_power` | Absolute summed power in the reconnection band (field units², arbitrary unless normalized). |
+| `wave_power` | Absolute summed power in the wave band. |
+| `grid_power` | Absolute summed power in the grid band. |
+| `total_power` | Summed power over all `k`; the three band powers add up to this. |
+| `wave_over_recon` | `wave_power / recon_power` — dimensionless wave-vs-reconnection contrast (unbounded; useful on a log axis). `NaN` if `recon_power == 0`. |
+| `kbar` | Spectral centroid `Σ(k·P) / ΣP` — the power-weighted mean wavenumber. A single spectral-health index: rises as energy shifts to smaller scales (waves → grid noise). |
+| `field` | Which vector field was analyzed, `"E"` or `"B"` (from `--field`). |
+| `k_lo` | Physical wavenumber of the recon/wave band edge, `= f_lo · k_ny`. |
+| `k_hi` | Physical wavenumber of the wave/grid band edge, `= f_hi · k_ny`. |
+| `k_ny` | Nyquist wavenumber of the loaded grid (largest resolved `k`). Recorded so you can confirm two runs' bands cover the same physical scales, not just the same fractions. |
+
+When `total_power` is 0 for a snapshot, the fraction columns and `kbar` are `NaN`
+(division guarded), rather than 0 or `inf`. The first four columns
+(`diagnostic`/`run`/`time_index`/`time`) mirror the `reconnection` CSV, so the two can
+be loaded and filtered the same way.
 
 ## Logging and Artifacts
 
