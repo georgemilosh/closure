@@ -36,7 +36,8 @@ examples/**
 !scripts/jet_metric.py
 !scripts/fields_at_recon_thresholds.py
 !scripts/bands_ez.py
-
+!scripts/bands_ez_ecsim.sh
+!scripts/bands_ez_folder.sh
 
 # Environment ymls (not needed in repo)
 gputorch.yml
