@@ -1,49 +1,35 @@
 #!/usr/bin/env python
-"""PRELIMINARY jet-significance metric for the lower-sheet X point.
+"""Outflow-rectangle diagnostic for the lower-sheet reconnection X point.
 
-Quantifies the "jet-like" localized intensification of the out-of-plane
-current at the reconnection X point relative to the rest of the current
-sheet, so the qualitative feature seen in Jz_e maps gets one unbiased number
-per snapshot.
+Characterises the jet-like current intensification attached to the X point
+with one geometric object and one scalar:
 
-Method (per run, per threshold time):
+* the OUTFLOW RECTANGLE (dotted orange): thin, centred on the X point, angle
+  and length optimized jointly so it tracks the intensified current band
+  (see outflow_rectangle);
+* the RATIO `jz_ratio`: mean |Jz-tot| inside the rectangle over mean
+  |Jz-tot| in the rest of the separatrix interior (the region between the
+  separatrix branches and the rectangle, bounded in x by the domain edges).
+  "How much stronger is the outflow current than the rest of the sheet it
+  lives in" - both samples adapt to the run's own geometry.
 
-1. Threshold time = first field dump where recon_rate_norm reaches the given
-   fraction of the run's own peak (same convention as
-   fields_at_recon_thresholds.py); the X-point position comes from the same
-   reconnection CSV row (tracker output; empirically always the LOWER sheet
-   in these campaigns - a y-band guard enforces it anyway).
-2. Ridge profile: J(i) = max over a narrow y-band around the X point of
-   |Jz_e|, one value per x column -> the 1D along-sheet current profile.
-3. Metrics condensed from the profile:
-     jet_z         robust z-score: (peak near X - median of the rest) /
-                   (1.4826 * MAD of the rest). "Significance vs the rest of
-                   the sheet"; noise raises the MAD, so it self-normalizes.
-     jet_contrast  peak / median(rest) - scale-free amplitude ratio.
-     jet_fwhm      width (d_i) of the contiguous region around the peak
-                   above half prominence - separates a collimated jet from
-                   a single hot pixel.
-     participation (sum J)^2 / (N sum J^2) - window-free concentration
-                   index of the whole profile (1 = uniform sheet).
-   The only tunables are physical lengths (y-band half-width, near-X
-   window), fixed in d_i across runs and resolutions.
-4. Histograms: the distribution of J/median(J) over the sheet, with the
-   near-X peak marked; the corresponding ECsim reference run
-   (Le2DHGEM_RunID_<n>_f2 for regime R<n>) is overlaid on every panel, so
-   "does this closure's sheet look like the kinetic reference" is a direct
-   visual comparison in the same normalized units.
+Per run and per threshold time (first field dump where recon_rate_norm
+reaches the requested fraction of that run's own peak):
 
-Known preliminary simplifications (documented, to revisit):
-  * the profile segment is the full --choose-x range, not the O-point-
-    bracketed cell of the X point;
-  * X points are re-picked per snapshot by the tracker (no temporal
-    continuity), so time series of jet_z may hop between multiple X points
-    of the sheet.
+1. X/O anchors come from the reconnection CSV row - the same pair whose
+   Az_O - Az_X defines recon_rate_norm (--local-xo re-derives them from
+   unsmoothed Az instead; A/B-tested identical for jet-bearing runs).
+2. The separatrix is the Az level set across which median |Jz| jumps most
+   sharply (find_separatrix; white contour on the maps).
+3. The outflow rectangle is fitted and jz_ratio computed.
+
+Supporting views per case: the x = const Jz cuts at the near-X window edges
+(outflow crossings) and the ridge histogram against the corresponding ECsim
+kinetic reference (Le2DHGEM_RunID_<n>_f2 for regime R<n>).
 
 Example:
 
-    python scripts/jet_metric.py                       # R0/new defaults
-    python scripts/jet_metric.py --regime R7 --code old --fracs 0.75,0.9
+    python scripts/jet_metric.py --regime R12 --code new --fracs 0.75,0.9
 """
 
 from __future__ import annotations
@@ -197,11 +183,16 @@ def build_parser():
     parser.add_argument("--rect-angle-range-deg", type=float, default=35.0,
                         help="Angle scan range (+-deg from the x axis) for the "
                         "outflow orientation")
-    parser.add_argument("--outflow-gap-di", type=float, default=0.3,
+    parser.add_argument("--outflow-gap-di", type=float, default=0.75,
                         help="Maximum sub-threshold stretch (d_i) the growing "
                         "rectangle may bridge (the outflow often dims right at the "
                         "X point or between detached lobes); the final length is "
                         "also EXTENDED by this amount to cover the fade-out")
+    parser.add_argument("--plateau-pct", type=float, default=25.0,
+                        help="Percentile of the per-segment means along the strip "
+                        "used as the sheet-plateau baseline for the stop threshold "
+                        "(low enough that a long outflow cannot contaminate it; "
+                        "the median failed exactly there)")
     parser.add_argument("--outflow-stop-frac", type=float, default=0.5,
                         help="Growth stops when the newly added end segments' mean "
                         "|Jz| falls below this fraction of the seed-core mean - the "
@@ -311,36 +302,12 @@ def ridge_and_metrics(vals, x_axis, y_axis, ix_local, iy_local, *,
     while hi < len(J) - 1 and np.isfinite(J[hi + 1]) and J[hi + 1] > half:
         hi += 1
 
-    # PRIMARY metric: intensification through the vertical cutouts at the two
-    # outflow crossings (x_X +- near-window), each +-edge_box wide in x. The
-    # pooled sample is the separatrix aperture when available (fixed band+pad
-    # otherwise); p99 = jet core, p50 = the same cutouts' own median.
+    # Aperture y-extent within the near-X window (cut-panel shading and the
+    # fallback drawing extents).
     nw = int(round(near_window_di / dx))
-    ew = max(1, int(round(edge_box_halfwidth_di / dx)))
     pad_cells = max(0, int(round(box_pad_di / dy)))
     fb_lo = max(0, band.start - pad_cells)
     fb_hi = min(vals.shape[1], band.stop + pad_cells)
-    boxes, pool_parts, heights = [], [], []
-    for centre in (ix_local - nw, ix_local + nw):
-        bx_lo, bx_hi = max(0, centre - ew), min(vals.shape[0], centre + ew + 1)
-        if bx_hi <= bx_lo:
-            continue
-        if inside_mask is not None:
-            sub = inside_mask[bx_lo:bx_hi]
-            rows = np.flatnonzero(sub.any(axis=0))
-            if rows.size == 0:
-                continue
-            boxes.append((bx_lo, bx_hi, int(rows.min()), int(rows.max()) + 1))
-            pool_parts.append(A[bx_lo:bx_hi][sub])
-            heights.append(float(sub.sum(axis=1).mean()) * dy)
-        else:
-            boxes.append((bx_lo, bx_hi, fb_lo, fb_hi))
-            pool_parts.append(A[bx_lo:bx_hi, fb_lo:fb_hi].ravel())
-            heights.append((fb_hi - fb_lo) * dy)
-    pool = np.concatenate(pool_parts) if pool_parts else np.array([np.nan])
-    p99, p50 = np.nanpercentile(pool, 99), np.nanpercentile(pool, 50)
-
-    # Aperture y-extent within the near-X window (orange box + cut shading).
     if inside_mask is not None:
         nb_lo, nb_hi = max(0, ix_local - nw), min(vals.shape[0], ix_local + nw + 1)
         rows = np.flatnonzero(inside_mask[nb_lo:nb_hi].any(axis=0))
@@ -348,12 +315,21 @@ def ridge_and_metrics(vals, x_axis, y_axis, ix_local, iy_local, *,
     else:
         box_y = (fb_lo, fb_hi)
 
+    # p99/p50 of |field| within the GREEN BAND as it is actually PLOTTED:
+    # the two x = const cut profiles (at x_X +- near-window, the blue/orange
+    # verticals on the map), y restricted to the aperture extent. Pooling
+    # the band rows over the full x range instead would drag p50 down with
+    # the dim far-field stretches of those rows and inflate the ratio far
+    # beyond the variation visible in the cut panel.
+    ic_l = int(np.clip(ix_local - nw, 0, vals.shape[0] - 1))
+    ic_r = int(np.clip(ix_local + nw, 0, vals.shape[0] - 1))
+    band_sample = A[[ic_l, ic_r], box_y[0]:box_y[1]]
+    b99, b50 = np.nanpercentile(band_sample, 99), np.nanpercentile(band_sample, 50)
+
     valid = np.isfinite(J)
     metrics = dict(
-        jet_intens=float(p99 / p50) if p50 > 0 else np.inf,
-        jet_p99=float(p99), jet_p50=float(p50),
-        aperture_h_di=float(np.mean(heights)) if heights else np.nan,
-        boxes=boxes, box_y=box_y,
+        band_p99p50=float(b99 / b50) if b50 > 0 else np.inf,
+        box_y=box_y,
         jet_z=(peak - bg) / mad if mad > 0 else np.inf,
         jet_contrast=peak / bg if bg > 0 else np.inf,
         jet_fwhm=(hi - lo + 1) * dx,
@@ -441,7 +417,8 @@ def find_separatrix(data, vals, x_axis, y_axis, ixl, iyl, *,
 def outflow_rectangle(vals, x_axis, y_axis, ixl, iyl, *,
                       halfthick_di=0.15, init_halflen_di=0.5,
                       angle_range_deg=35.0, angle_step_deg=1.0,
-                      grow_step_di=0.1, stop_frac=0.5, gap_di=0.3):
+                      grow_step_di=0.1, stop_frac=0.5, gap_di=0.75,
+                      plateau_pct=25.0):
     """Thin rotated rectangle characterising the magnetized outflow.
 
     Centred on the X point. Angle and length are optimized JOINTLY: for
@@ -459,8 +436,8 @@ def outflow_rectangle(vals, x_axis, y_axis, ixl, iyl, *,
     rectangle covers the fade-out rather than clipping at the last bright
     segment.
 
-    Returns dict(angle_deg, halflen_di, outflow_len_di, max_J, mean_core,
-    baseline, corners) or None when degenerate.
+    Returns dict(angle_deg, halflen_di, outflow_len_di, mean_core, baseline,
+    mask (2D bool, the rectangle interior), corners) or None when degenerate.
     """
     A = np.abs(np.asarray(vals))
     x0, y0 = float(x_axis[ixl]), float(y_axis[iyl])
@@ -486,11 +463,26 @@ def outflow_rectangle(vals, x_axis, y_axis, ixl, iyl, *,
             continue
         seed_mean = float(A[seed].mean())
         frames.append((float(th), u, v, thick, seed_mean))
-        if seed_mean > core_ref:
-            core_ref = seed_mean
-            baseline_ref = float(np.median(A[thick & (np.abs(u) <= max_L)]))
+        core_ref = max(core_ref, seed_mean)
     if not frames:
         return None
+    # Baseline = the SHEET PLATEAU, estimated as a low percentile of the
+    # per-segment means along the best-core strip. The jet is intensification
+    # above the rest of the SHEET (not above the near-zero lobe, which lets
+    # ordinary sheet current pass and runs every rectangle to the crop edge),
+    # but a strip MEDIAN gets contaminated whenever the outflow itself is
+    # long, truncating exactly the best cases - a p25 stays on the plateau
+    # for outflows covering up to ~75% of the strip.
+    th0, u0, v0, thick0, _ = max(frames, key=lambda f: f[4])
+    edges = np.arange(init_halflen_di, max_L, grow_step_di)
+    seg_means = []
+    for lo_e in edges:
+        seg = thick0 & (np.abs(u0) > lo_e) & (np.abs(u0) <= lo_e + grow_step_di)
+        if seg.sum() >= 2:
+            seg_means.append(float(A[seg].mean()))
+    if len(seg_means) < 4:
+        return None
+    baseline_ref = float(np.percentile(seg_means, plateau_pct))
     threshold = baseline_ref + stop_frac * max(core_ref - baseline_ref, 0.0)
 
     # Pass 2 - grow every angle against that same threshold; the outflow
@@ -524,23 +516,8 @@ def outflow_rectangle(vals, x_axis, y_axis, ixl, iyl, *,
     corners = [ctr + su * Lf * e1 + sv * halfthick_di * e2
                for su, sv in ((-1, -1), (-1, 1), (1, 1), (1, -1))]
     return dict(angle_deg=float(th), halflen_di=float(Lf),
-                outflow_len_di=2 * float(Lf), max_J=float(A[final].max()),
-                mean_core=core_mean, baseline=baseline,
-                corners=np.array(corners))
-
-def aperture_height_over_rect(sep, rect, x_axis, y_axis):
-    """Mean inside-separatrix height (d_i) over the outflow rectangle's
-    x-footprint: the sheet thickness along the measured outflow. Replaces the
-    legacy definition anchored on the retired p99/p50 edge boxes."""
-    cols = ((x_axis >= rect["corners"][:, 0].min())
-            & (x_axis <= rect["corners"][:, 0].max()))
-    if not cols.any():
-        return np.nan
-    dy = float(y_axis[1] - y_axis[0])
-    heights = sep["inside"][cols].sum(axis=1) * dy
-    heights = heights[heights > 0]
-    return float(heights.mean()) if heights.size else np.nan
-
+                outflow_len_di=2 * float(Lf), mean_core=core_mean,
+                baseline=baseline, mask=final, corners=np.array(corners))
 
 def load_case(experiment, files_path, ti, args, **loader_kwargs):
     """One cropped dump; returns (vals_2d, x_axis, y_axis, label, data).
@@ -587,6 +564,31 @@ def load_case(experiment, files_path, ti, args, **loader_kwargs):
     return np.asarray(vals, dtype=float), x_axis, y_axis, label, data
 
 
+class CaseError(Exception):
+    """A case (run x threshold) that cannot be built - reported, not fatal."""
+
+
+def blank_case(label, reason):
+    """Placeholder tuple for a case that failed to build.
+
+    A failed case KEEPS its slot instead of being dropped: panels are filled
+    column-major from the fixed (ECsim, models) x fracs list and nrows follows
+    len(cases), so dropping one case renumbers every panel after it and
+    reshapes the whole grid. The same model would then sit in a different
+    position in each run's figure, which defeats run-by-run comparison.
+    """
+    return (f"{label}\n[no panel: {reason}]",) + (None,) * 9
+
+
+def is_blank(case):
+    return case[1] is None                       # J is None only for placeholders
+
+
+def failure_reason(exc):
+    """CaseError carries its own message; anything else shows its type too."""
+    return str(exc) if isinstance(exc, CaseError) else f"{type(exc).__name__}: {exc}"
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
     R = args.regime
@@ -604,131 +606,206 @@ def main(argv=None):
         ec_run = f"Le2DHGEM_RunID_{n}_f2"
         ec_recon = pd.read_csv(f"{args.ecsim_diagnostics}/{R}/reconnection_ecsim.csv")
         for frac in args.fracs:
-            sub_df = ec_recon[ec_recon["run"] == ec_run]
-            th = threshold_index(sub_df, frac, args.rate_column)
-            xp = xpoint_at(sub_df, th[0]) if th else None
-            if th is None or xp is None:
-                print(f"ECsim {ec_run}: no usable threshold/X point, skipping reference")
-                continue
-            vals, x_axis, y_axis, flabel, dcase = load_case(
-                ec_run, args.ecsim_files_path, th[0], args,
-                backend="ecsim", choose_species=["e", "i", "e", "i"],
-                normalization="alfven-infer",
-            )
-            ixl, iyl = xp[0] - args.choose_x[0], xp[1] - args.choose_y[0]
-            o_mark = None
-            if args.local_xo:
-                xp_l, op_l = find_global_xo(dcase, x_axis, y_axis)
-                if xp_l is not None:
-                    ixl, iyl = int(xp_l["ix"]), int(xp_l["iy"])
-                if op_l is not None:
-                    o_mark = (int(op_l["ix"]), int(op_l["iy"]))
-            else:  # default: the tracker's own rate-defining O point, crop-converted
-                op_csv = xpoint_at(sub_df, th[0], prefix="opoint")
-                if op_csv is not None:
-                    o_mark = (op_csv[0] - args.choose_x[0], op_csv[1] - args.choose_y[0])
-                    if not (0 <= o_mark[0] < vals.shape[0]):
-                        o_mark = None
-            sep = None if args.no_separatrix else find_separatrix(
-                dcase, vals, x_axis, y_axis, ixl, iyl)
-            J, near, m = ridge_and_metrics(
-                vals, x_axis, y_axis, ixl, iyl,
-                band_halfwidth_di=args.band_halfwidth_di,
-                near_window_di=args.near_window_di,
-                bg_window_di=args.bg_window_di,
-                edge_box_halfwidth_di=args.edge_box_halfwidth_di,
-                box_pad_di=args.box_pad_di,
-                inside_mask=None if sep is None else sep["inside"],
-            )
-            rect = outflow_rectangle(
-                vals, x_axis, y_axis, ixl, iyl,
-                halfthick_di=args.rect_halfthick_di,
-                init_halflen_di=args.rect_init_halflen_di,
-                angle_range_deg=args.rect_angle_range_deg,
-                stop_frac=args.outflow_stop_frac,
-                gap_di=args.outflow_gap_di)
-            if sep is not None and rect is not None:
-                m["aperture_h_di"] = aperture_height_over_rect(sep, rect, x_axis, y_axis)
-            cases.append((f"ECsim {ec_run}\n{flabel}, t={th[1]:.3g} ({int(frac*100)}%)",
-                          J, near, m, vals, (x_axis, y_axis), (ixl, iyl), o_mark, sep, rect))
-            if ecsim_J_norm is None:
-                ecsim_J_norm = J / m["background"]
+            pct = int(frac * 100)
+            try:
+                sub_df = ec_recon[ec_recon["run"] == ec_run]
+                th = threshold_index(sub_df, frac, args.rate_column)
+                xp = xpoint_at(sub_df, th[0]) if th else None
+                if th is None or xp is None:
+                    raise CaseError("no usable threshold/X point")
+                vals, x_axis, y_axis, flabel, dcase = load_case(
+                    ec_run, args.ecsim_files_path, th[0], args,
+                    backend="ecsim", choose_species=["e", "i", "e", "i"],
+                    normalization="alfven-infer",
+                )
+                ixl, iyl = xp[0] - args.choose_x[0], xp[1] - args.choose_y[0]
+                o_mark = None
+                if args.local_xo:
+                    xp_l, op_l = find_global_xo(dcase, x_axis, y_axis)
+                    if xp_l is not None:
+                        ixl, iyl = int(xp_l["ix"]), int(xp_l["iy"])
+                    if op_l is not None:
+                        o_mark = (int(op_l["ix"]), int(op_l["iy"]))
+                else:  # default: the tracker's own rate-defining O point, crop-converted
+                    op_csv = xpoint_at(sub_df, th[0], prefix="opoint")
+                    if op_csv is not None:
+                        o_mark = (op_csv[0] - args.choose_x[0], op_csv[1] - args.choose_y[0])
+                        if not (0 <= o_mark[0] < vals.shape[0]):
+                            o_mark = None
+                sep = None if args.no_separatrix else find_separatrix(
+                    dcase, vals, x_axis, y_axis, ixl, iyl)
+                J, near, m = ridge_and_metrics(
+                    vals, x_axis, y_axis, ixl, iyl,
+                    band_halfwidth_di=args.band_halfwidth_di,
+                    near_window_di=args.near_window_di,
+                    bg_window_di=args.bg_window_di,
+                    edge_box_halfwidth_di=args.edge_box_halfwidth_di,
+                    box_pad_di=args.box_pad_di,
+                    inside_mask=None if sep is None else sep["inside"],
+                )
+                rect = outflow_rectangle(
+                    vals, x_axis, y_axis, ixl, iyl,
+                    halfthick_di=args.rect_halfthick_di,
+                    init_halflen_di=args.rect_init_halflen_di,
+                    angle_range_deg=args.rect_angle_range_deg,
+                    stop_frac=args.outflow_stop_frac,
+                    gap_di=args.outflow_gap_di,
+                    plateau_pct=args.plateau_pct)
+                # PRIMARY metric: mean |Jz| inside the rectangle over mean |Jz|
+                # in the rest of the separatrix interior (between separatrix and
+                # rectangle, bounded in x by the domain edges).
+                if rect is not None:
+                    rect["jz_ratio"] = np.nan
+                    if sep is not None:
+                        A_case = np.abs(vals)
+                        sheet = sep["inside"] & ~rect["mask"]
+                        if rect["mask"].any() and sheet.any():
+                            rect["jz_ratio"] = float(A_case[rect["mask"]].mean()
+                                                     / A_case[sheet].mean())
+                cases.append((f"ECsim {ec_run}\n{flabel}, t={th[1]:.3g} ({pct}%)",
+                              J, near, m, vals, (x_axis, y_axis), (ixl, iyl), o_mark, sep, rect))
+                if ecsim_J_norm is None:
+                    ecsim_J_norm = J / m["background"]
+            except Exception as exc:   # keep the slot; report on stdout
+                reason = failure_reason(exc)
+                print(f"ECsim {ec_run} ({pct}%): {reason}")
+                cases.append(blank_case(f"ECsim {ec_run}", f"{pct}%: {reason}"))
 
     for model in args.models:
         run = f"{args.code}_{model}"
         sub_df = recon[recon["run"] == run]
         for frac in args.fracs:
-            th = threshold_index(sub_df, frac, args.rate_column)
-            xp = xpoint_at(sub_df, th[0]) if th else None
-            if th is None or xp is None:
-                print(f"{run}: no usable threshold/X point at {frac}")
-                continue
-            vals, x_axis, y_axis, flabel, dcase = load_case(
-                run, f"{RUNS_BASE}/{args.campaign}/{R}", th[0], args,
-                backend="menura", choose_species=["e", "i"],
-                normalization="none",
-            )
-            ixl, iyl = xp[0] - args.choose_x[0], xp[1] - args.choose_y[0]
-            if not (0 <= ixl < vals.shape[0] and 0 <= iyl < vals.shape[1]):
-                print(f"{run}: X point ({xp}) outside the crop, skipping")
-                continue
-            o_mark = None
-            if args.local_xo:
-                xp_l, op_l = find_global_xo(dcase, x_axis, y_axis)
-                if xp_l is not None:
-                    ixl, iyl = int(xp_l["ix"]), int(xp_l["iy"])
-                if op_l is not None:
-                    o_mark = (int(op_l["ix"]), int(op_l["iy"]))
-            else:  # default: the tracker's own rate-defining O point, crop-converted
-                op_csv = xpoint_at(sub_df, th[0], prefix="opoint")
-                if op_csv is not None:
-                    o_mark = (op_csv[0] - args.choose_x[0], op_csv[1] - args.choose_y[0])
-                    if not (0 <= o_mark[0] < vals.shape[0]):
-                        o_mark = None
-            sep = None if args.no_separatrix else find_separatrix(
-                dcase, vals, x_axis, y_axis, ixl, iyl)
-            J, near, m = ridge_and_metrics(
-                vals, x_axis, y_axis, ixl, iyl,
-                band_halfwidth_di=args.band_halfwidth_di,
-                near_window_di=args.near_window_di,
-                bg_window_di=args.bg_window_di,
-                edge_box_halfwidth_di=args.edge_box_halfwidth_di,
-                box_pad_di=args.box_pad_di,
-                inside_mask=None if sep is None else sep["inside"],
-            )
-            rect = outflow_rectangle(
-                vals, x_axis, y_axis, ixl, iyl,
-                halfthick_di=args.rect_halfthick_di,
-                init_halflen_di=args.rect_init_halflen_di,
-                angle_range_deg=args.rect_angle_range_deg,
-                stop_frac=args.outflow_stop_frac,
-                gap_di=args.outflow_gap_di)
-            if sep is not None and rect is not None:
-                m["aperture_h_di"] = aperture_height_over_rect(sep, rect, x_axis, y_axis)
-            cases.append((f"{run}\n{flabel}, t={th[1]:.3g} ({int(frac*100)}%)",
-                          J, near, m, vals, (x_axis, y_axis), (ixl, iyl), o_mark, sep, rect))
+            pct = int(frac * 100)
+            try:
+                th = threshold_index(sub_df, frac, args.rate_column)
+                xp = xpoint_at(sub_df, th[0]) if th else None
+                if th is None or xp is None:
+                    raise CaseError("no usable threshold/X point")
+                vals, x_axis, y_axis, flabel, dcase = load_case(
+                    run, f"{RUNS_BASE}/{args.campaign}/{R}", th[0], args,
+                    backend="menura", choose_species=["e", "i"],
+                    normalization="none",
+                )
+                ixl, iyl = xp[0] - args.choose_x[0], xp[1] - args.choose_y[0]
+                if not (0 <= ixl < vals.shape[0] and 0 <= iyl < vals.shape[1]):
+                    raise CaseError(f"X point {xp} outside the crop")
+                o_mark = None
+                if args.local_xo:
+                    xp_l, op_l = find_global_xo(dcase, x_axis, y_axis)
+                    if xp_l is not None:
+                        ixl, iyl = int(xp_l["ix"]), int(xp_l["iy"])
+                    if op_l is not None:
+                        o_mark = (int(op_l["ix"]), int(op_l["iy"]))
+                else:  # default: the tracker's own rate-defining O point, crop-converted
+                    op_csv = xpoint_at(sub_df, th[0], prefix="opoint")
+                    if op_csv is not None:
+                        o_mark = (op_csv[0] - args.choose_x[0], op_csv[1] - args.choose_y[0])
+                        if not (0 <= o_mark[0] < vals.shape[0]):
+                            o_mark = None
+                sep = None if args.no_separatrix else find_separatrix(
+                    dcase, vals, x_axis, y_axis, ixl, iyl)
+                J, near, m = ridge_and_metrics(
+                    vals, x_axis, y_axis, ixl, iyl,
+                    band_halfwidth_di=args.band_halfwidth_di,
+                    near_window_di=args.near_window_di,
+                    bg_window_di=args.bg_window_di,
+                    edge_box_halfwidth_di=args.edge_box_halfwidth_di,
+                    box_pad_di=args.box_pad_di,
+                    inside_mask=None if sep is None else sep["inside"],
+                )
+                rect = outflow_rectangle(
+                    vals, x_axis, y_axis, ixl, iyl,
+                    halfthick_di=args.rect_halfthick_di,
+                    init_halflen_di=args.rect_init_halflen_di,
+                    angle_range_deg=args.rect_angle_range_deg,
+                    stop_frac=args.outflow_stop_frac,
+                    gap_di=args.outflow_gap_di,
+                    plateau_pct=args.plateau_pct)
+                # PRIMARY metric: mean |Jz| inside the rectangle over mean |Jz|
+                # in the rest of the separatrix interior (between separatrix and
+                # rectangle, bounded in x by the domain edges).
+                if rect is not None:
+                    rect["jz_ratio"] = np.nan
+                    if sep is not None:
+                        A_case = np.abs(vals)
+                        sheet = sep["inside"] & ~rect["mask"]
+                        if rect["mask"].any() and sheet.any():
+                            rect["jz_ratio"] = float(A_case[rect["mask"]].mean()
+                                                     / A_case[sheet].mean())
+                cases.append((f"{run}\n{flabel}, t={th[1]:.3g} ({pct}%)",
+                              J, near, m, vals, (x_axis, y_axis), (ixl, iyl), o_mark, sep, rect))
+            except Exception as exc:   # keep the slot; report on stdout
+                reason = failure_reason(exc)
+                print(f"{run} ({pct}%): {reason}")
+                cases.append(blank_case(run, f"{pct}%: {reason}"))
 
-    if not cases:
+    if all(is_blank(c) for c in cases):
         raise SystemExit("No cases could be built")
 
     # ---- metrics table ----
-    print(f"\n{'case':<42} {'max|Jz|':>8} {'angle':>7} {'L_out_di':>9} {'ap_h_di':>8}")
-    for label, J, near, m, *rest_fields in cases:
+    print(f"\n{'case':<42} {'jz_ratio':>8} {'p99/p50':>8} {'angle':>7} {'L_out_di':>9}")
+    for case in cases:
+        flat = case[0].replace("\n", " ")
+        if is_blank(case):   # reason after the columns, so the table stays aligned
+            run_lbl, _, why = case[0].partition("\n")
+            print(f"{run_lbl:<42} {'-':>8} {'-':>8} {'-':>7} {'-':>9}  {why}")
+            continue
+        label, J, near, m, *rest_fields = case
         rect_c = rest_fields[-1]
-        flat = label.replace("\n", " ")
         if rect_c is None:
-            print(f"{flat:<42} {'-':>8} {'-':>7} {'-':>9} {m['aperture_h_di']:>8.2f}")
+            print(f"{flat:<42} {'-':>8} {m['band_p99p50']:>8.2f} {'-':>7} {'-':>9}")
         else:
-            print(f"{flat:<42} {rect_c['max_J']:>8.3f} {rect_c['angle_deg']:>+6.1f}° "
-                  f"{rect_c['outflow_len_di']:>9.2f} {m['aperture_h_di']:>8.2f}")
+            print(f"{flat:<42} {rect_c['jz_ratio']:>8.2f} {m['band_p99p50']:>8.2f} "
+                  f"{rect_c['angle_deg']:>+6.1f}° {rect_c['outflow_len_di']:>9.2f}")
 
-    # ---- figure: one row per case = [field map | ridge profile | histogram] ----
-    nrows = len(cases)
-    fig, axes = plt.subplots(nrows, 3, figsize=(16, 2.6 * nrows), squeeze=False,
-                             gridspec_kw=dict(width_ratios=[1.6, 1.2, 1.0],
-                                              wspace=0.25, hspace=0.55))
-    for r, (label, J, near, m, vals, (x_axis, y_axis), (ixl, iyl), o_mark, sep, rect) in enumerate(cases):
-        ax = axes[r][0]
+    # ---- figure: 3 cases per row, each case = [field map | cut profile],
+    # i.e. a 6-column grid (histograms dropped). Row height is set from the
+    # map's own data aspect so the aspect='equal' maps fill their cells with
+    # no vertical whitespace.
+    per_row = 3
+    ncases = len(cases)
+    nrows = int(np.ceil(ncases / per_row))
+    width_ratios = [1.6, 1.2] * per_row
+    fig_w = 21.0
+    map_frac = 1.6 / sum(width_ratios)
+    x0a, y0a = next(c for c in cases if not is_blank(c))[5]   # blanks carry no axes
+    aspect = float((y0a[-1] - y0a[0]) / (x0a[-1] - x0a[0]))
+    map_w = fig_w * map_frac * 0.80          # usable width after colorbar/wspace
+    row_h = map_w * aspect + 0.45            # + title/label allowance
+    # The map is aspect='equal' (box h/w = y_span/x_span = aspect), so it draws
+    # short and wide. Force the neighbouring cut panel to the SAME drawn height
+    # by giving it a matching box aspect, scaled by the width ratio between the
+    # two cells - otherwise the cut fills its full cell and dwarfs the map,
+    # leaving whitespace around every map.
+    cut_box_aspect = aspect * (1.6 / 1.2) * 0.92
+    fig, axes = plt.subplots(nrows, 2 * per_row, figsize=(fig_w, row_h * nrows),
+                             squeeze=False,
+                             gridspec_kw=dict(width_ratios=width_ratios,
+                                              wspace=0.42, hspace=0.42))
+    # Column-major (vertical-first) placement: consecutive cases fill a column
+    # top-to-bottom, so a model's own thresholds (listed consecutively, e.g.
+    # 75% then 90%) stay stacked in the same column instead of being split
+    # across a row boundary.
+    def cell(idx):
+        return idx % nrows, idx // nrows      # (row, case-column)
+
+    for k in range(ncases, nrows * per_row):
+        rr0, cp0 = cell(k)
+        axes[rr0][2 * cp0].axis("off")
+        axes[rr0][2 * cp0 + 1].axis("off")
+    for r, case in enumerate(cases):
+        rr, cp = cell(r)
+        if is_blank(case):
+            # Failed case: its cell pair stays blank (only the label, so it is
+            # obvious WHICH model dropped out) and every other panel keeps the
+            # position it has in the runs where this case succeeds.
+            for ax in (axes[rr][2 * cp], axes[rr][2 * cp + 1]):
+                ax.axis("off")
+            axes[rr][2 * cp].text(0.5, 0.5, case[0], transform=axes[rr][2 * cp].transAxes,
+                                  ha="center", va="center", fontsize=8, color="0.4")
+            continue
+        label, J, near, m, vals, (x_axis, y_axis), (ixl, iyl), o_mark, sep, rect = case
+        ax = axes[rr][2 * cp]
         # Movie-style rendering (compute_movie_field.py slides): raw signed
         # field, fixed limits, rainbow_r, bilinear imshow - identical color
         # scale across all rows so amplitudes compare directly. --auto-limits
@@ -751,6 +828,14 @@ def main(argv=None):
         if sep is not None:
             ax.contour(x_axis, y_axis, sep["az"].T, levels=[sep["level"]],
                        colors="white", linewidths=0.9)
+        # Where the x = const cut curves (right panel) are taken; line styles
+        # and colors match the curves there.
+        dxm = float(x_axis[1] - x_axis[0])
+        offm = max(1, int(round(args.near_window_di / dxm)))
+        for sgn, color, ls in ((-1, "tab:blue", "--"), (+1, "tab:orange", "-")):
+            icm = int(np.clip(ixl + sgn * offm, 0, vals.shape[0] - 1))
+            ax.axvline(x_axis[icm], color=color, linestyle=ls, linewidth=1.0,
+                       alpha=0.85)
         ax.plot(x_axis[m["peak_i"]], y_axis[iyl], "o", ms=7,
                 markerfacecolor="none", markeredgecolor="orange", mew=2)
         # Fallback aperture only: with a separatrix the white contour IS the
@@ -764,23 +849,13 @@ def main(argv=None):
         # point, rotated to the angle maximising mean |Jz|, grown along that
         # direction until the current intensification ends. Its length IS the
         # outflow extent; nothing else is boxed any more.
-        by_lo, by_hi = m["box_y"]
-        yb_lo, yb_hi = y_axis[by_lo], y_axis[by_hi - 1]
         if rect is not None:
             ax.add_patch(plt.Polygon(rect["corners"], closed=True, fill=False,
                                      edgecolor="orange", linestyle=":",
                                      linewidth=1.6))
-        # Flanking background (plateau) zones: contiguous segments of bg_mask.
-        idx = np.flatnonzero(m["bg_mask"])
-        for seg in np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1):
-            if len(seg) == 0:
-                continue
-            ax.add_patch(plt.Rectangle(
-                (x_axis[seg[0]], yb_lo), x_axis[seg[-1]] - x_axis[seg[0]],
-                yb_hi - yb_lo, fill=False, edgecolor="lime", linewidth=1.2,
-                linestyle=":"))
         ax.set_aspect("equal")
-        ax.set_ylabel(label, fontsize=8)
+        # Run/case identity on TOP of the map (title), not the y axis.
+        ax.set_title(label, fontsize=8, pad=3)
         # Ticks: x outside (below) where there is room; y INSIDE in white, so
         # the short map keeps its full height and the labels stay readable on
         # the dark end of the colormap. Axis labels follow the same rule: the
@@ -796,7 +871,7 @@ def main(argv=None):
         ax.text(0.098, 0.5, "y [d_i]", transform=ax.transAxes, rotation=90,
                 ha="left", va="center", fontsize=7, color="white")
 
-        ax = axes[r][1]
+        ax = axes[rr][2 * cp + 1]
         # x = const cuts across y at the two near-X box edges: where the
         # magnetized reconnection outflow crosses. Signed field, so the
         # outflow current structure (sheet cross-section + jet) is visible.
@@ -814,41 +889,28 @@ def main(argv=None):
                    color="tab:green", alpha=0.12)
         ax.axvline(y_axis[iyl], color="red", lw=0.9, alpha=0.6)
         rtxt = ("no rect" if rect is None else
-                f"max|Jz|={rect['max_J']:.3f}  θ={rect['angle_deg']:+.1f}°  "
+                f"jz_ratio={rect['jz_ratio']:.2f}  θ={rect['angle_deg']:+.1f}°  "
                 f"L_out={rect['outflow_len_di']:.2f} d_i")
-        ax.set_title(f"{rtxt}  ap_h={m['aperture_h_di']:.2f} d_i", fontsize=9)
+        ax.set_title(f"{rtxt}  p99/p50={m['band_p99p50']:.2f}", fontsize=9)
         ax.set_xlim(y_axis[0], y_axis[-1])
+        ax.set_box_aspect(cut_box_aspect)   # match the map's drawn height
         ax.legend(fontsize=6, frameon=False)
         ax.tick_params(labelsize=7)
 
-        ax = axes[r][2]
-        Jn = J / m["background"]
-        bins = np.linspace(0, max(3.0, np.max(Jn) * 1.05), 40)
-        ax.hist(Jn, bins=bins, density=True, alpha=0.6, color="tab:blue",
-                label="this run")
-        if ecsim_J_norm is not None and r > 0:
-            ax.hist(ecsim_J_norm, bins=bins, density=True, histtype="step",
-                    color="black", lw=1.4, label="ECsim ref")
-        ax.axvline(m["peak"] / m["background"], color="tab:red", lw=1.4)
-        ax.set_yscale("log")
-        ax.tick_params(labelsize=7)
-        ax.legend(fontsize=7, frameon=False)
-        if r == 0:
-            axes[r][0].set_title("field map (red x=X point, white o=O point; dotted orange =\n"
-                                 "outflow rectangle: angle by max mean |Jz|, length grown to the\n"
-                                 "intensification edge; "
-                                 "orange o=jet peak; "
-                                 "white = separatrix aperture, orange = near-X, lime dots = plateau bg)",
-                                 fontsize=9)
-            axes[r][1].set_title(f"{args.field}(y) at the near-X box edges (outflow crossings);\n"
-                                 "green=aperture extent, red=X-point y\n"
-                                 + axes[r][1].get_title(), fontsize=8)
-            axes[r][2].set_title("hist of J/median (red line = jet peak)", fontsize=10)
-
+    # Absolute-inch margins: the default subplots margins (top=0.88 etc.) are
+    # a fixed FRACTION, so on a tall multi-row figure they become inches of
+    # blank at top/bottom. Pin them in inches so only the content remains.
+    fig_h = row_h * nrows
+    fig.subplots_adjust(left=0.04, right=0.98,
+                        top=1 - 0.85 / fig_h,      # suptitle (2 lines)
+                        bottom=0.30 / fig_h,
+                        wspace=0.42, hspace=0.42)
     fig.suptitle(
         f"{args.campaign} {R}/{args.code}: lower-sheet jet metric, field {args.field}, "
-        f"thresholds {args.fracs} of peak {args.rate_column}",
-        fontsize=13, y=1.0,
+        f"thresholds {args.fracs} of peak {args.rate_column}\n"
+        "each case = [Jz map | Jz(y) cut at the x=const outflow crossings]; "
+        "map: red x=X, white o=O, white=separatrix, dotted orange=outflow rectangle",
+        fontsize=12, y=1 - 0.12 / fig_h,
     )
     out = out_dir / f"{R}_{args.code}.png"
     fig.savefig(out, dpi=args.dpi, bbox_inches="tight")
