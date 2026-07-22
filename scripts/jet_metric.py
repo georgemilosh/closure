@@ -27,9 +27,14 @@ Supporting views per case: the x = const Jz cuts at the near-X window edges
 (outflow crossings) and the ridge histogram against the corresponding ECsim
 kinetic reference (Le2DHGEM_RunID_<n>_f2 for regime R<n>).
 
+By default EVERY model in the campaign/regime folder is processed (the run
+directories themselves are the authority on what was run); --models narrows
+that to a hand-picked subset.
+
 Example:
 
     python scripts/jet_metric.py --regime R12 --code new --fracs 0.75,0.9
+    python scripts/jet_metric.py --regime R12 --models FCNN_00285,MLP_00535
 """
 
 from __future__ import annotations
@@ -65,11 +70,6 @@ ECSIM_FILES = "/volume1/scratch/share_dir/iPiC3D-nathan"
 ECSIM_DIAG = f"{DIAGNOSTICS_BASE}/iPiC3D-nathan"
 
 DEFAULT_CAMPAIGN = "stability_campaign2"
-# Same good/bad selection as fields_at_recon_thresholds.py.
-DEFAULT_MODELS = [
-    "FCNN_00285", "FCNN_00172", "FCNN_00711", "FCNN_00938", "MLP_00643", "MLP_00586",
-    "FCNN_00365", "FCNN_00435", "FCNN_00611", "MLP_00535", "MLP_00596", "MLP_00772",
-]
 
 #: y half-width (d_i) of the band around the X point used for the ridge trace.
 BAND_HALFWIDTH_DI = 0.3
@@ -98,6 +98,31 @@ def _parse_list(value):
     return [v.strip() for v in str(value).split(",") if v.strip()]
 
 
+def discover_models(campaign, regime, code, recon=None, runs_base=RUNS_BASE):
+    """Every model of this (campaign, regime, code), sorted.
+
+    Run directories are named ``<code>_<model>``, so the campaign/regime
+    folder is itself the list of what was run - no hand-maintained selection
+    to drift out of sync with the campaign. Runs that were launched but have
+    no usable dump/CSV row simply come back as blank slots in the figure,
+    which is the point: a missing model stays visible.
+
+    Falls back to the runs named in the reconnection CSV when the folder is
+    unreachable (diagnostics copied without the raw dumps).
+    """
+    prefix = f"{code}_"
+    d = Path(runs_base) / campaign / regime
+    if d.is_dir():
+        models = sorted(p.name[len(prefix):] for p in d.iterdir()
+                        if p.is_dir() and p.name.startswith(prefix))
+        if models:
+            return models
+    if recon is not None and "run" in recon:
+        return sorted({str(r)[len(prefix):] for r in recon["run"].dropna().unique()
+                       if str(r).startswith(prefix)})
+    return []
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description=__doc__.split("\n\n")[0],
@@ -106,8 +131,10 @@ def build_parser():
     parser.add_argument("--campaign", default=DEFAULT_CAMPAIGN)
     parser.add_argument("--regime", default="R0", help="Single regime (R<n>)")
     parser.add_argument("--code", default="new", choices=["old", "new"])
-    parser.add_argument("--models", type=_parse_list, default=DEFAULT_MODELS,
-                        help="Comma-separated checkpoint keys")
+    parser.add_argument("--models", type=_parse_list, default=None,
+                        help="Comma-separated checkpoint keys. Default: every "
+                        "model found in the campaign/regime folder, i.e. every "
+                        "<code>_* run directory")
     parser.add_argument("--fracs", default=[0.9],
                         type=lambda v: [float(f) for f in _parse_list(v)],
                         help="Fractions of each run's own peak recon rate")
@@ -218,6 +245,10 @@ def build_parser():
                         "symmetric limits + auto colormap instead")
     parser.add_argument("--interpolation", default="bilinear",
                         help="imshow interpolation for the maps")
+    parser.add_argument("--per-row", type=int, default=3,
+                        help="Cases (map + cut pair) per figure row; the whole "
+                        "campaign is ~30 models, so widen this to keep the "
+                        "montage from growing very tall")
     parser.add_argument("--output-dir", default=None,
                         help="Default: <diagnostics>/<campaign>/jet_metric")
     parser.add_argument("--dpi", type=int, default=130)
@@ -598,6 +629,16 @@ def main(argv=None):
 
     recon = pd.read_csv(f"{diag}/{R}/reconnection_menura.csv")
 
+    models = args.models
+    if models is None:
+        models = discover_models(args.campaign, R, args.code, recon=recon)
+        if not models:
+            raise SystemExit(
+                f"No {args.code}_* runs found for {args.campaign}/{R} under "
+                f"{RUNS_BASE} or in the reconnection CSV; pass --models explicitly")
+        print(f"{len(models)} models discovered in {args.campaign}/{R} "
+              f"({args.code}): {', '.join(models)}")
+
     # ---- assemble cases: ECsim kinetic reference first, then the models ----
     cases = []  # (label, J, near, metrics, vals, extent, marks)
     ecsim_J_norm = None
@@ -671,7 +712,7 @@ def main(argv=None):
                 print(f"ECsim {ec_run} ({pct}%): {reason}")
                 cases.append(blank_case(f"ECsim {ec_run}", f"{pct}%: {reason}"))
 
-    for model in args.models:
+    for model in models:
         run = f"{args.code}_{model}"
         sub_df = recon[recon["run"] == run]
         for frac in args.fracs:
@@ -758,36 +799,72 @@ def main(argv=None):
             print(f"{flat:<42} {rect_c['jz_ratio']:>8.2f} {m['band_p99p50']:>8.2f} "
                   f"{rect_c['angle_deg']:>+6.1f}° {rect_c['outflow_len_di']:>9.2f}")
 
-    # ---- figure: 3 cases per row, each case = [field map | cut profile],
-    # i.e. a 6-column grid (histograms dropped). Row height is set from the
-    # map's own data aspect so the aspect='equal' maps fill their cells with
-    # no vertical whitespace.
-    per_row = 3
+    # ---- figure: --per-row cases per row, each case = [field map | cut
+    # profile], i.e. a 2*per_row-column grid (histograms dropped). Row height
+    # is set from the map's own data aspect so the aspect='equal' maps fill
+    # their cells with no vertical whitespace.
+    per_row = max(1, min(args.per_row, len(cases)))
     ncases = len(cases)
     nrows = int(np.ceil(ncases / per_row))
-    width_ratios = [1.6, 1.2] * per_row
-    fig_w = 21.0
-    map_frac = 1.6 / sum(width_ratios)
+    # Horizontal budget. The map is aspect='equal', so its drawn width is fixed
+    # by the crop geometry - cell width beyond that just becomes margin around
+    # it. The cut is an ordinary line plot with no aspect constraint, so every
+    # spare inch goes to IT: it gets the LARGER width ratio, and the gutter is
+    # cut to only what text needs. WSPACE is set by the one gutter that carries
+    # any: the map's colorbar tick labels overhang into it and the cut's y
+    # labels reach back, so below ~0.28 "-0.10" and "0.1" collide. (Was 1.2 /
+    # 0.42 - the cut sat narrower than the map with ~1 in of dead space beside
+    # every panel; it is ~40% wider now at the same drawn height.)
+    MAP_R, CUT_R, WSPACE = 1.6, 1.75, 0.30
+    LEFT, RIGHT = 0.04, 0.98                 # also used in subplots_adjust below
+    width_ratios = [MAP_R, CUT_R] * per_row
+    ncols = 2 * per_row
+    fig_w = 7.5 * per_row        # per-case width; the map below lands at the
+                                 # size it had before the cut was widened
     x0a, y0a = next(c for c in cases if not is_blank(c))[5]   # blanks carry no axes
     aspect = float((y0a[-1] - y0a[0]) / (x0a[-1] - x0a[0]))
-    map_w = fig_w * map_frac * 0.80          # usable width after colorbar/wspace
-    row_h = map_w * aspect + 0.45            # + title/label allowance
+    # Drawn map width, exactly: the horizontal span less the wspace gutters,
+    # shared out by width_ratios. row_h follows from it, so an approximation
+    # here would show up as vertical whitespace or clipped maps.
+    axes_w = (RIGHT - LEFT) * fig_w / (1 + WSPACE * (ncols - 1) / ncols)
+    map_w = axes_w * MAP_R / sum(width_ratios)
+    map_h = map_w * aspect                   # drawn height of an equal-aspect map
+    # Vertical budget, in inches, derived the same way. ROW_GAP is what the
+    # text BETWEEN two stacked rows measures: the upper map's x tick labels
+    # (0.15) + the lower map's two-line title (0.25), plus clearance. The
+    # x LABEL is not in that sum - it would add another 0.12 and is why the
+    # rows used to collide, so it is drawn only under the last case of each
+    # column (as the tick comment below always claimed). BOT_PAD then has to
+    # hold that bottom-row label, TOP_PAD the two-line suptitle.
+    ROW_GAP, TOP_PAD, BOT_PAD = 0.48, 0.85, 0.36
+    # Solve fig_h so the maps keep their full drawn height AND the gaps stay
+    # ROW_GAP: (fig_h - pads) = nrows*map_h + (nrows-1)*ROW_GAP. Feeding a
+    # bigger hspace to a fixed row height would instead make the maps
+    # height-limited, shrinking them back out of the width they just gained.
+    row_h = map_h + ROW_GAP * (nrows - 1) / nrows + (TOP_PAD + BOT_PAD) / nrows
+    HSPACE = ROW_GAP / map_h
     # The map is aspect='equal' (box h/w = y_span/x_span = aspect), so it draws
     # short and wide. Force the neighbouring cut panel to the SAME drawn height
     # by giving it a matching box aspect, scaled by the width ratio between the
     # two cells - otherwise the cut fills its full cell and dwarfs the map,
-    # leaving whitespace around every map.
-    cut_box_aspect = aspect * (1.6 / 1.2) * 0.92
-    fig, axes = plt.subplots(nrows, 2 * per_row, figsize=(fig_w, row_h * nrows),
+    # leaving whitespace around every map. The 0.92 keeps the cut just inside
+    # the map's height so its title clears the row above.
+    cut_box_aspect = aspect * (MAP_R / CUT_R) * 0.92
+    fig, axes = plt.subplots(nrows, ncols, figsize=(fig_w, row_h * nrows),
                              squeeze=False,
                              gridspec_kw=dict(width_ratios=width_ratios,
-                                              wspace=0.42, hspace=0.42))
+                                              wspace=WSPACE, hspace=HSPACE))
     # Column-major (vertical-first) placement: consecutive cases fill a column
     # top-to-bottom, so a model's own thresholds (listed consecutively, e.g.
     # 75% then 90%) stay stacked in the same column instead of being split
     # across a row boundary.
     def cell(idx):
         return idx % nrows, idx // nrows      # (row, case-column)
+
+    # The x label hangs under the lowest DRAWN case of each column - not the
+    # bottom row, whose slot may be a failed case with no axes to carry it.
+    xlabel_at = {k // nrows: k for k, c in enumerate(cases) if not is_blank(c)}
+    xlabel_at = set(xlabel_at.values())        # last non-blank per column wins
 
     for k in range(ncases, nrows * per_row):
         rr0, cp0 = cell(k)
@@ -853,6 +930,12 @@ def main(argv=None):
             ax.add_patch(plt.Polygon(rect["corners"], closed=True, fill=False,
                                      edgecolor="orange", linestyle=":",
                                      linewidth=1.6))
+        # Pin the view to the data. The rectangle is centred on the X point and
+        # may reach past the domain edge when that point is off-centre; letting
+        # the patch autoscale the axes stretches the map, which then no longer
+        # fills its cell (blank strip between the map and its colorbar).
+        ax.set_xlim(x_axis[0], x_axis[-1])
+        ax.set_ylim(y_axis[0], y_axis[-1])
         ax.set_aspect("equal")
         # Run/case identity on TOP of the map (title), not the y axis.
         ax.set_title(label, fontsize=8, pad=3)
@@ -867,7 +950,11 @@ def main(argv=None):
         for lbl in ax.get_yticklabels():
             lbl.set_color("white")
             lbl.set_horizontalalignment("left")
-        ax.set_xlabel("x [d_i]", fontsize=7, labelpad=1)
+        # Only under the LAST case of this column: everywhere else the label
+        # would sit in the gap between two rows and collide with the title of
+        # the map below (the tick labels alone already fit there).
+        if r in xlabel_at:
+            ax.set_xlabel("x [d_i]", fontsize=7, labelpad=1)
         ax.text(0.098, 0.5, "y [d_i]", transform=ax.transAxes, rotation=90,
                 ha="left", va="center", fontsize=7, color="white")
 
@@ -901,10 +988,10 @@ def main(argv=None):
     # a fixed FRACTION, so on a tall multi-row figure they become inches of
     # blank at top/bottom. Pin them in inches so only the content remains.
     fig_h = row_h * nrows
-    fig.subplots_adjust(left=0.04, right=0.98,
-                        top=1 - 0.85 / fig_h,      # suptitle (2 lines)
-                        bottom=0.30 / fig_h,
-                        wspace=0.42, hspace=0.42)
+    fig.subplots_adjust(left=LEFT, right=RIGHT,
+                        top=1 - TOP_PAD / fig_h,   # suptitle (2 lines)
+                        bottom=BOT_PAD / fig_h,
+                        wspace=WSPACE, hspace=HSPACE)
     fig.suptitle(
         f"{args.campaign} {R}/{args.code}: lower-sheet jet metric, field {args.field}, "
         f"thresholds {args.fracs} of peak {args.rate_column}\n"
