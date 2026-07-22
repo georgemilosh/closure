@@ -40,6 +40,7 @@ Example:
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 
 import numpy as np
@@ -70,6 +71,16 @@ ECSIM_FILES = "/volume1/scratch/share_dir/iPiC3D-nathan"
 ECSIM_DIAG = f"{DIAGNOSTICS_BASE}/iPiC3D-nathan"
 
 DEFAULT_CAMPAIGN = "stability_campaign2"
+#: Code variants some campaigns prefix their run directories with.
+CODES = ("new", "old")
+
+#: Checkpoint directory -> training recipe, as in stability2_scan.ipynb.
+RECIPE = {
+    "ablations_f2_serial": "serial",
+    "production_ablations_f2_val0": "prodval0",
+    "production_ablations_f2_step100_val0": "step100",
+    "physics_f2_serial": "serial",
+}
 
 #: y half-width (d_i) of the band around the X point used for the ridge trace.
 BAND_HALFWIDTH_DI = 0.3
@@ -98,29 +109,111 @@ def _parse_list(value):
     return [v.strip() for v in str(value).split(",") if v.strip()]
 
 
+def model_description(campaign, regime, run, runs_base=RUNS_BASE):
+    """What distinguishes a run's checkpoint, '' if unavailable.
+
+    The checkpoint a run was compiled against is recorded in its
+    parameters.h (new code stores a relative model_path_rel, old code an
+    absolute model_path), and the directories on the way to it ARE the
+    training configuration:
+
+      .../Lightning/<model-set>/<recipe>/<runs*>/<descriptor...>/checkpoints/
+      best-epoch=..-val_loss=0.NNNN.pt
+
+    Campaigns nest a different number of descriptors - stability_campaign2
+    has one (ablate_noJnoE_P_deeper), physics_campaign_f2 two (the loss
+    config and the ablation) - so everything between the model set and
+    "checkpoints" is taken rather than a fixed offset. Dropped from it:
+
+    * the ``runs``/``runs_MLP``/``runs_val0`` level, which is packaging
+      rather than configuration;
+    * any component the run name already states (physics_campaign_f2 names
+      its run directories after the loss config), so the title does not say
+      the same thing twice.
+
+    Recipes are mapped through RECIPE and the ablation spelled the way
+    stability2_scan.ipynb's row_label spells it, so a checkpoint is named
+    identically in the panel titles and in the campaign heatmaps. The 4-digit
+    number in a stability run key is that val_loss x 1e4, so it is not
+    repeated here.
+    """
+    src = Path(runs_base) / campaign / regime / run / "src" / "parameters.h"
+    try:
+        text = src.read_text()
+    except OSError:
+        return ""
+    m = (re.search(r'model_path_rel\s*=\s*"([^"]+\.pt)"', text)
+         or re.search(r'\bmodel_path\s*=\s*"([^"]+\.pt)"', text))
+    if not m:
+        return ""
+    parts = m.group(1).split("/")
+    if "checkpoints" not in parts:
+        return ""
+    end = parts.index("checkpoints")
+    # Start after Lightning/<model-set>/; without that anchor fall back to the
+    # single-descriptor layout, which is what the absolute old-code paths and
+    # everything before this campaign used.
+    start = parts.index("Lightning") + 2 if "Lightning" in parts else end - 2
+    fields = [p for p in parts[max(start, 0):end]
+              if not p.startswith("runs") and p not in run]
+    return "  ".join(RECIPE.get(p, p).removeprefix("ablate_").replace("_P_", "/")
+                     for p in fields)
+
+
+def campaign_runs(campaign, regime, recon=None, runs_base=RUNS_BASE):
+    """Every run name of a (campaign, regime), sorted.
+
+    The run directories are the authority on what was launched; the runs
+    named in the reconnection CSV are the fallback when those are unreachable
+    (diagnostics copied without the raw dumps).
+    """
+    d = Path(runs_base) / campaign / regime
+    if d.is_dir():
+        names = sorted(p.name for p in d.iterdir() if p.is_dir())
+        if names:
+            return names
+    if recon is not None and "run" in recon:
+        return sorted(str(r) for r in recon["run"].dropna().unique())
+    return []
+
+
+def resolve_code(campaign, regime, code, recon=None, runs_base=RUNS_BASE):
+    """The ``<code>_`` prefix this campaign puts on its run directories, or ''.
+
+    Campaigns differ in whether a run name carries a code variant at all:
+    stability_campaign2 runs every checkpoint under both (new_FCNN_00172 /
+    old_FCNN_00172), while physics_campaign_f2 names each directory after the
+    model alone (FCNN_baseline_mse). Auto-detection keeps one command line
+    working for both - an explicit --code is honoured, otherwise the prefix is
+    used only if the campaign actually has prefixed runs.
+    """
+    if code and code.lower() != "none":
+        return code
+    names = campaign_runs(campaign, regime, recon, runs_base)
+    if code:                       # explicit "none"
+        return ""
+    return next((c for c in CODES
+                 if any(n.startswith(f"{c}_") for n in names)), "")
+
+
+def run_name(code, model):
+    """Run directory for a model - the code prefix only when there is one."""
+    return f"{code}_{model}" if code else model
+
+
 def discover_models(campaign, regime, code, recon=None, runs_base=RUNS_BASE):
     """Every model of this (campaign, regime, code), sorted.
 
-    Run directories are named ``<code>_<model>``, so the campaign/regime
-    folder is itself the list of what was run - no hand-maintained selection
-    to drift out of sync with the campaign. Runs that were launched but have
-    no usable dump/CSV row simply come back as blank slots in the figure,
-    which is the point: a missing model stays visible.
-
-    Falls back to the runs named in the reconnection CSV when the folder is
-    unreachable (diagnostics copied without the raw dumps).
+    The campaign/regime folder is itself the list of what was run - no
+    hand-maintained selection to drift out of sync with the campaign. Runs
+    that were launched but have no usable dump/CSV row simply come back as
+    blank slots in the figure, which is the point: a missing model stays
+    visible. With an empty ``code`` the run names ARE the model keys.
     """
-    prefix = f"{code}_"
-    d = Path(runs_base) / campaign / regime
-    if d.is_dir():
-        models = sorted(p.name[len(prefix):] for p in d.iterdir()
-                        if p.is_dir() and p.name.startswith(prefix))
-        if models:
-            return models
-    if recon is not None and "run" in recon:
-        return sorted({str(r)[len(prefix):] for r in recon["run"].dropna().unique()
-                       if str(r).startswith(prefix)})
-    return []
+    prefix = f"{code}_" if code else ""
+    return [n[len(prefix):]
+            for n in campaign_runs(campaign, regime, recon, runs_base)
+            if n.startswith(prefix)]
 
 
 def build_parser():
@@ -130,7 +223,13 @@ def build_parser():
     )
     parser.add_argument("--campaign", default=DEFAULT_CAMPAIGN)
     parser.add_argument("--regime", default="R0", help="Single regime (R<n>)")
-    parser.add_argument("--code", default="new", choices=["old", "new"])
+    parser.add_argument("--code", default=None, choices=["old", "new", "none"],
+                        help="Code variant prefixing the run directories "
+                        "(<code>_<model>). Default: detected from the campaign "
+                        "- 'new' where runs carry the prefix "
+                        "(stability_campaign2), none where the run directory "
+                        "IS the model key (physics_campaign_f2). 'none' forces "
+                        "the unprefixed form")
     parser.add_argument("--models", type=_parse_list, default=None,
                         help="Comma-separated checkpoint keys. Default: every "
                         "model found in the campaign/regime folder, i.e. every "
@@ -615,6 +714,14 @@ def is_blank(case):
     return case[1] is None                       # J is None only for placeholders
 
 
+def case_column(case):
+    """The case label as the metrics table prints it: the title flattened to
+    one line, minus - for a failed case - the reason, which is printed after
+    the numeric columns instead so it cannot widen them."""
+    lines = case[0].split("\n")
+    return lines[0] if is_blank(case) else " ".join(lines)
+
+
 def failure_reason(exc):
     """CaseError carries its own message; anything else shows its type too."""
     return str(exc) if isinstance(exc, CaseError) else f"{type(exc).__name__}: {exc}"
@@ -629,15 +736,18 @@ def main(argv=None):
 
     recon = pd.read_csv(f"{diag}/{R}/reconnection_menura.csv")
 
+    code = resolve_code(args.campaign, R, args.code, recon=recon)
+    tag = code or "all"                          # figure name / titles
     models = args.models
     if models is None:
-        models = discover_models(args.campaign, R, args.code, recon=recon)
+        models = discover_models(args.campaign, R, code, recon=recon)
         if not models:
+            want = f"{code}_* runs" if code else "run directories"
             raise SystemExit(
-                f"No {args.code}_* runs found for {args.campaign}/{R} under "
-                f"{RUNS_BASE} or in the reconnection CSV; pass --models explicitly")
-        print(f"{len(models)} models discovered in {args.campaign}/{R} "
-              f"({args.code}): {', '.join(models)}")
+                f"No {want} found for {args.campaign}/{R} under {RUNS_BASE} or "
+                f"in the reconnection CSV; pass --models explicitly")
+        print(f"{len(models)} models discovered in {args.campaign}/{R}"
+              f"{f' ({code})' if code else ''}: {', '.join(models)}")
 
     # ---- assemble cases: ECsim kinetic reference first, then the models ----
     cases = []  # (label, J, near, metrics, vals, extent, marks)
@@ -713,7 +823,14 @@ def main(argv=None):
                 cases.append(blank_case(f"ECsim {ec_run}", f"{pct}%: {reason}"))
 
     for model in models:
-        run = f"{args.code}_{model}"
+        run = run_name(code, model)
+        # Training recipe + ablation variant (see model_description), on the
+        # SAME line as the run so the field/time stays the second line. The
+        # widest campaign label measures 2.60 in at fontsize 8 against a
+        # ~2.65 in panel, so it fits; empty for a run whose parameters.h is
+        # gone, and the title is then just the run.
+        desc = model_description(args.campaign, R, run)
+        head = f"{run}  {desc}" if desc else run
         sub_df = recon[recon["run"] == run]
         for frac in args.fracs:
             pct = int(frac * 100)
@@ -773,30 +890,34 @@ def main(argv=None):
                         if rect["mask"].any() and sheet.any():
                             rect["jz_ratio"] = float(A_case[rect["mask"]].mean()
                                                      / A_case[sheet].mean())
-                cases.append((f"{run}\n{flabel}, t={th[1]:.3g} ({pct}%)",
+                cases.append((f"{head}\n{flabel}, t={th[1]:.3g} ({pct}%)",
                               J, near, m, vals, (x_axis, y_axis), (ixl, iyl), o_mark, sep, rect))
             except Exception as exc:   # keep the slot; report on stdout
                 reason = failure_reason(exc)
                 print(f"{run} ({pct}%): {reason}")
-                cases.append(blank_case(run, f"{pct}%: {reason}"))
+                cases.append(blank_case(head, f"{pct}%: {reason}"))
 
     if all(is_blank(c) for c in cases):
         raise SystemExit("No cases could be built")
 
     # ---- metrics table ----
-    print(f"\n{'case':<42} {'jz_ratio':>8} {'p99/p50':>8} {'angle':>7} {'L_out_di':>9}")
+    # Case column sized to the longest label actually present - run +
+    # checkpoint description + field/time - so the numeric columns stay
+    # aligned whatever a campaign names its runs.
+    W = max(len(case_column(c)) for c in cases)
+    print(f"\n{'case':<{W}} {'jz_ratio':>8} {'p99/p50':>8} {'angle':>7} {'L_out_di':>9}")
     for case in cases:
-        flat = case[0].replace("\n", " ")
+        flat = case_column(case)
         if is_blank(case):   # reason after the columns, so the table stays aligned
-            run_lbl, _, why = case[0].partition("\n")
-            print(f"{run_lbl:<42} {'-':>8} {'-':>8} {'-':>7} {'-':>9}  {why}")
+            why = case[0].split("\n")[-1]
+            print(f"{flat:<{W}} {'-':>8} {'-':>8} {'-':>7} {'-':>9}  {why}")
             continue
         label, J, near, m, *rest_fields = case
         rect_c = rest_fields[-1]
         if rect_c is None:
-            print(f"{flat:<42} {'-':>8} {m['band_p99p50']:>8.2f} {'-':>7} {'-':>9}")
+            print(f"{flat:<{W}} {'-':>8} {m['band_p99p50']:>8.2f} {'-':>7} {'-':>9}")
         else:
-            print(f"{flat:<42} {rect_c['jz_ratio']:>8.2f} {m['band_p99p50']:>8.2f} "
+            print(f"{flat:<{W}} {rect_c['jz_ratio']:>8.2f} {m['band_p99p50']:>8.2f} "
                   f"{rect_c['angle_deg']:>+6.1f}° {rect_c['outflow_len_di']:>9.2f}")
 
     # ---- figure: --per-row cases per row, each case = [field map | cut
@@ -831,12 +952,20 @@ def main(argv=None):
     map_h = map_w * aspect                   # drawn height of an equal-aspect map
     # Vertical budget, in inches, derived the same way. ROW_GAP is what the
     # text BETWEEN two stacked rows measures: the upper map's x tick labels
-    # (0.15) + the lower map's two-line title (0.25), plus clearance. The
-    # x LABEL is not in that sum - it would add another 0.12 and is why the
-    # rows used to collide, so it is drawn only under the last case of each
-    # column (as the tick comment below always claimed). BOT_PAD then has to
-    # hold that bottom-row label, TOP_PAD the two-line suptitle.
-    ROW_GAP, TOP_PAD, BOT_PAD = 0.48, 0.85, 0.36
+    # (0.152) + the lower map's title, plus clearance. The x LABEL is not in
+    # that sum - it would add another 0.12 and is why the rows used to
+    # collide, so it is drawn only under the last case of each column (as the
+    # tick comment below always claimed).
+    # Title height at fontsize 8 / pad 3 is linear in line count (measured:
+    # 0.122 in for one line, +0.125 per line after). Deriving it from the
+    # ACTUAL longest title keeps the rows clear as titles change - they went
+    # from two lines to three when the checkpoint description was added.
+    title_lines = max(len(c[0].split("\n")) for c in cases if not is_blank(c))
+    title_h = 0.122 + 0.125 * (title_lines - 1)
+    ROW_GAP = 0.152 + title_h + 0.08
+    # TOP_PAD clears the two-line suptitle (~0.49 in) plus the first row's
+    # title; BOT_PAD holds the bottom row's tick labels and x label.
+    TOP_PAD, BOT_PAD = 0.49 + title_h, 0.36
     # Solve fig_h so the maps keep their full drawn height AND the gaps stay
     # ROW_GAP: (fig_h - pads) = nrows*map_h + (nrows-1)*ROW_GAP. Feeding a
     # bigger hspace to a fixed row height would instead make the maps
@@ -993,13 +1122,13 @@ def main(argv=None):
                         bottom=BOT_PAD / fig_h,
                         wspace=WSPACE, hspace=HSPACE)
     fig.suptitle(
-        f"{args.campaign} {R}/{args.code}: lower-sheet jet metric, field {args.field}, "
+        f"{args.campaign} {R}/{tag}: lower-sheet jet metric, field {args.field}, "
         f"thresholds {args.fracs} of peak {args.rate_column}\n"
         "each case = [Jz map | Jz(y) cut at the x=const outflow crossings]; "
         "map: red x=X, white o=O, white=separatrix, dotted orange=outflow rectangle",
         fontsize=12, y=1 - 0.12 / fig_h,
     )
-    out = out_dir / f"{R}_{args.code}.png"
+    out = out_dir / f"{R}_{tag}.png"
     fig.savefig(out, dpi=args.dpi, bbox_inches="tight")
     plt.close(fig)
     print("\nsaved", out)
