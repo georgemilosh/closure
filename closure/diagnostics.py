@@ -1176,6 +1176,52 @@ def _apply_overlay_selection(
     return frame
 
 
+def _overlay_group_rank(
+    group_cols: list[str],
+    *,
+    select: dict[str, list[str]] | None,
+    select_patterns: dict[str, list[str]] | None,
+    csv_labels: list[str],
+):
+    """Rank function ordering series the way the user listed them.
+
+    ``--run a,b,c`` (like ``--field`` / ``--select``) reads as an ordering and
+    not merely a filter, so the legend - and the color/dash/width gradient of
+    ``_overlay_style``, which is driven by series index - follows the listed
+    order instead of pandas' alphabetical groupby sort. Glob patterns rank by
+    which pattern a value matched first, and ``csv_source`` falls back to the
+    order the CSVs were given on the command line. Columns with no explicit
+    order, and values within one rank, keep the native groupby order (the sort
+    applied with this key is stable).
+    """
+    orders: list[tuple[dict[str, int], list[str]]] = []
+    for col in group_cols:
+        explicit = [str(v) for v in (select or {}).get(col, [])]
+        patterns = [str(p) for p in (select_patterns or {}).get(col, [])]
+        if col == "csv_source" and not explicit and not patterns:
+            explicit = [str(label) for label in csv_labels]
+        index = {value: i for i, value in enumerate(dict.fromkeys(explicit))}
+        orders.append((index, patterns))
+
+    def rank(group_key) -> tuple[int, ...]:
+        if not isinstance(group_key, tuple):
+            group_key = (group_key,)
+        ranks = []
+        for value, (index, patterns) in zip(group_key, orders):
+            key = str(value)
+            if key in index:
+                ranks.append(index[key])
+                continue
+            matched = next(
+                (i for i, pat in enumerate(patterns) if fnmatch.fnmatch(key, pat)),
+                len(patterns),
+            )
+            ranks.append(len(index) + matched)
+        return tuple(ranks)
+
+    return rank
+
+
 def plot_csv_overlay(
     csv_paths: list[str | Path],
     *,
@@ -1198,7 +1244,12 @@ def plot_csv_overlay(
     ``select`` filters rows before plotting: a mapping of column name to the
     list of accepted (string-compared) values, e.g. ``{"field_label": ["P_e"]}``
     to overlay only the ``P_e`` profile. This mirrors a single notebook profile
-    cell instead of dumping every field onto one axes.
+    cell instead of dumping every field onto one axes. The listed values also
+    set the series order: legend entries and the ``_overlay_style`` color/dash
+    gradient follow the order given rather than sorting alphabetically. Series
+    with no explicit order (columns absent from ``select``, values matched only
+    by a pattern, extra ``csv_source`` values) keep their alphabetical order
+    after the ones that were named - see ``_overlay_group_rank``.
 
     ``select_patterns`` filters the same way but matches each (string-compared)
     column value against shell-style glob patterns, e.g.
@@ -1235,7 +1286,8 @@ def plot_csv_overlay(
 
     matched_refs: set[str] = set()
     frames = []
-    for path, csv_label in zip(csv_paths, _csv_source_labels(csv_paths)):
+    csv_labels = _csv_source_labels(csv_paths)
+    for path, csv_label in zip(csv_paths, csv_labels):
         frame = pd.read_csv(path)
         if "csv_source" not in frame.columns:
             frame["csv_source"] = csv_label
@@ -1296,7 +1348,14 @@ def plot_csv_overlay(
         ylabel = _default_overlay_ylabel(y, data)
 
     fig, ax = plt.subplots(figsize=(8, 5))
+    group_rank = _overlay_group_rank(
+        group_cols,
+        select=select,
+        select_patterns=select_patterns,
+        csv_labels=csv_labels,
+    )
     groups = list(data.groupby(group_cols, dropna=False))
+    groups.sort(key=lambda item: group_rank(item[0]))
     for idx, (group_key, group) in enumerate(groups):
         if not isinstance(group_key, tuple):
             group_key = (group_key,)

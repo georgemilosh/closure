@@ -38,6 +38,7 @@ examples/**
 !scripts/bands_ez.py
 !scripts/bands_ez_ecsim.sh
 !scripts/bands_ez_folder.sh
+!scripts/check_ecsim_run_integrity.py
 
 # Environment ymls (not needed in repo)
 gputorch.yml

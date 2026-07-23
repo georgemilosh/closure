@@ -636,14 +636,16 @@ def build_parser() -> argparse.ArgumentParser:
     overlay.add_argument(
         "--field",
         default=None,
-        help="Plot only these field_label values (comma-separated), e.g. P_e or Bx,By. Mirrors one notebook profile cell.",
+        help="Plot only these field_label values (comma-separated), e.g. P_e or Bx,By. Mirrors one "
+        "notebook profile cell. The listed order is also the plotting order.",
     )
     overlay.add_argument(
         "--run",
         default=None,
         help="Plot only these runs by exact name (comma-separated), e.g. "
         "Le2DHGEM_RunID_0_f2,Le2DHGEM_RunID_1_f2. Mirrors --field but for the run column; "
-        "use --run-pattern for glob matching.",
+        "use --run-pattern for glob matching. The listed order is also the plotting order "
+        "(legend entries, colors and line styles follow it).",
     )
     overlay.add_argument(
         "--select",

@@ -296,6 +296,59 @@ def test_plot_csv_overlay_separates_same_run_name_across_two_csvs(tmp_path):
     assert any("csv_source=R5" in label for label in labels)
 
 
+def test_plot_csv_overlay_series_follow_select_order(tmp_path):
+    """--run/--field list order is the plotting order, not pandas' alphabetical sort."""
+    runs = ["b_run", "a_run", "c_run", "extra_run"]
+    frame = pd.DataFrame(
+        {
+            "run": [run for run in runs for _ in range(2)],
+            "time": [0.0, 1.0] * len(runs),
+            "grid_frac": [1.0, 2.0] * len(runs),
+        }
+    )
+    csv_path = tmp_path / "bands.csv"
+    frame.to_csv(csv_path, index=False)
+
+    import matplotlib.axes
+
+    def _labels(**kwargs) -> list[str]:
+        labels: list[str] = []
+        real_plot = matplotlib.axes.Axes.plot
+
+        def spy_plot(self, *args, **plot_kwargs):
+            labels.append(plot_kwargs.get("label"))
+            return real_plot(self, *args, **plot_kwargs)
+
+        matplotlib.axes.Axes.plot = spy_plot
+        try:
+            plot_csv_overlay([csv_path], x="time", y="grid_frac", group_by=["run"], **kwargs)
+        finally:
+            matplotlib.axes.Axes.plot = real_plot
+        return labels
+
+    labels = _labels(
+        output=tmp_path / "ordered.png",
+        select={"run": ["c_run", "a_run", "b_run"]},
+    )
+    assert labels == ["run=c_run", "run=a_run", "run=b_run"]
+
+    # Pattern-matched values rank by which pattern they matched; unnamed values
+    # (extra_run) stay after the explicitly listed ones, alphabetical among themselves.
+    labels = _labels(
+        output=tmp_path / "patterned.png",
+        select_patterns={"run": ["c*", "*_run"]},
+    )
+    assert labels == ["run=c_run", "run=a_run", "run=b_run", "run=extra_run"]
+
+    # No explicit order -> unchanged alphabetical groupby order.
+    assert _labels(output=tmp_path / "plain.png") == [
+        "run=a_run",
+        "run=b_run",
+        "run=c_run",
+        "run=extra_run",
+    ]
+
+
 def test_cli_overlay_csv_run_pattern_builds_scoped_selection(monkeypatch):
     from closure import diagnostics_cli
 
