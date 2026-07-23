@@ -130,6 +130,7 @@ def _load_for_command(args: argparse.Namespace, experiment: str):
         menura_analysis_dir=args.menura_analysis_dir,
         menura_scale_ranges=args.menura_scale_ranges,
         menura_base_nx=args.menura_base_nx,
+        request_fields=getattr(args, "fields", None),
         verbose=args.verbose,
     )
 
