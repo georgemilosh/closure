@@ -7,6 +7,7 @@ __all__ = ["main"]
 import argparse
 import logging
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -469,10 +470,58 @@ def _parse_select(pairs: list[str] | None) -> dict[str, list[str]] | None:
     return select
 
 
+def _split_top_level(value: str) -> list[str]:
+    """Split on commas outside parentheses, so ``maximum(a,b)`` stays one entry."""
+    parts: list[str] = []
+    depth = 0
+    current = ""
+    for char in value:
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        if char == "," and depth <= 0:
+            parts.append(current)
+            current = ""
+            continue
+        current += char
+    parts.append(current)
+    return [p.strip() for p in parts if p.strip()]
+
+
+_PLAIN_FIELD = re.compile(r"[A-Za-z_]\w*\Z")
+
+
+def _parse_fields(value: str) -> tuple[list[str], dict[str, str]]:
+    """Split ``--field`` into plotted labels and the derived ones among them.
+
+    An entry that is a bare name is an existing ``field_label``; anything else
+    is an arithmetic expression over field labels (``P_e+P_i+B^2/(8*pi)``),
+    optionally named with ``LABEL=EXPR``. Both kinds share one list so the
+    given order stays the plotting order either way.
+    """
+    labels: list[str] = []
+    derived: dict[str, str] = {}
+    for entry in _split_top_level(value):
+        if _PLAIN_FIELD.match(entry):
+            labels.append(entry)
+            continue
+        label, sep, expression = entry.partition("=")
+        if sep and _PLAIN_FIELD.match(label.strip()) and expression.strip():
+            label = label.strip()
+            expression = expression.strip()
+        else:
+            label = expression = entry
+        labels.append(label)
+        derived[label] = expression
+    return labels, derived
+
+
 def _cmd_overlay(args: argparse.Namespace) -> None:
     select = _parse_select(args.select)
+    derived: dict[str, str] = {}
     if args.field:
-        fields = [f.strip() for f in args.field.split(",") if f.strip()]
+        fields, derived = _parse_fields(args.field)
         select = {**(select or {}), "field_label": fields}
     if args.run:
         runs = [r.strip() for r in args.run.split(",") if r.strip()]
@@ -502,6 +551,7 @@ def _cmd_overlay(args: argparse.Namespace) -> None:
         select=select,
         select_patterns=select_patterns,
         csv_select_patterns=csv_select_patterns,
+        derived=derived or None,
         xlabel=args.xlabel,
         ylabel=args.ylabel,
     )
@@ -637,7 +687,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--field",
         default=None,
         help="Plot only these field_label values (comma-separated), e.g. P_e or Bx,By. Mirrors one "
-        "notebook profile cell. The listed order is also the plotting order.",
+        "notebook profile cell. The listed order is also the plotting order. An entry that isn't a "
+        "bare name is an arithmetic expression over field labels and is computed on the fly, e.g. "
+        "'P_e+P_i+B^2/(8*pi)'; write LABEL=EXPR (e.g. 'P_tot=P_e+P_i+B^2/(8*pi)') to give it a "
+        "shorter legend name. Names resolve to field labels, to a vector magnitude when only the "
+        "components were exported (B from Bx/By/Bz), or to pi/e; '^' is exponentiation and "
+        "sqrt/abs/exp/log/log10/sin/cos/tan/sinh/cosh/tanh/minimum/maximum are available.",
     )
     overlay.add_argument(
         "--run",

@@ -216,19 +216,18 @@ def test_plot_csv_overlay_csv_select_patterns_scopes_per_file(tmp_path):
         )
 
 
-def test_csv_source_labels_uses_parent_dir_name_and_falls_back_on_collision(tmp_path):
-    r0 = tmp_path / "R0" / "profiles_menura.csv"
-    r5 = tmp_path / "R5" / "profiles_menura.csv"
-    r0.parent.mkdir()
-    r5.parent.mkdir()
+def test_csv_source_labels_lengthen_only_as_far_as_needed(tmp_path):
+    r0 = tmp_path / "menura" / "R0" / "profiles.csv"
+    r5 = tmp_path / "menura" / "R5" / "profiles.csv"
+    other_r0 = tmp_path / "ecsim" / "R0" / "profiles.csv"
+    for path in (r0, r5, other_r0):
+        path.parent.mkdir(parents=True)
     assert _csv_source_labels([r0, r5]) == ["R0", "R5"]
 
-    # Same parent dir name under different subtrees -> labels would collide,
-    # so fall back to the full resolved path for every entry.
-    other_r0 = tmp_path / "other" / "R0" / "profiles_menura.csv"
-    other_r0.parent.mkdir(parents=True)
-    labels = _csv_source_labels([r0, other_r0])
-    assert labels == [str(r0.resolve()), str(other_r0.resolve())]
+    # Same parent dir name under different subtrees: grow by one component,
+    # not all the way to the absolute path - these labels go in the legend.
+    assert _csv_source_labels([r0, other_r0]) == ["menura/R0", "ecsim/R0"]
+    assert _csv_source_labels([r0, r5, other_r0]) == ["menura/R0", "menura/R5", "ecsim/R0"]
 
 
 def test_plot_csv_overlay_separates_same_run_name_across_two_csvs(tmp_path):
@@ -347,6 +346,148 @@ def test_plot_csv_overlay_series_follow_select_order(tmp_path):
         "run=c_run",
         "run=extra_run",
     ]
+
+
+def _derived_profile_frame() -> pd.DataFrame:
+    """Two coords x {P_e, P_i, Bx, By} in the long format profiles export."""
+    fields = {"P_e": [1.0, 2.0], "P_i": [3.0, 4.0], "Bx": [3.0, 5.0], "By": [4.0, 12.0]}
+    return pd.DataFrame(
+        {
+            "run": ["R0"] * 8,
+            "field": [f.split("_")[0] for f in fields for _ in range(2)],
+            "species": [None] * 8,
+            "field_label": [f for f in fields for _ in range(2)],
+            "projection": ["y"] * 8,
+            "coord": [0.0, 1.0] * len(fields),
+            "value": [v for values in fields.values() for v in values],
+        }
+    )
+
+
+def _overlay_series(csv_path, **kwargs) -> dict[str, np.ndarray]:
+    """Run an overlay and capture what each series actually plotted."""
+    import matplotlib.axes
+
+    series: dict[str, np.ndarray] = {}
+    real_plot = matplotlib.axes.Axes.plot
+
+    def spy_plot(self, *args, **plot_kwargs):
+        series[plot_kwargs.get("label")] = np.asarray(args[1], dtype=float)
+        return real_plot(self, *args, **plot_kwargs)
+
+    matplotlib.axes.Axes.plot = spy_plot
+    try:
+        plot_csv_overlay([csv_path], **kwargs)
+    finally:
+        matplotlib.axes.Axes.plot = real_plot
+    return series
+
+
+def test_plot_csv_overlay_derived_field_combines_labels(tmp_path):
+    csv_path = tmp_path / "profiles.csv"
+    _derived_profile_frame().to_csv(csv_path, index=False)
+
+    # B is not a field_label: it resolves to the magnitude of the components.
+    expression = "P_e+P_i+B^2/(8*pi)"
+    series = _overlay_series(
+        csv_path,
+        output=tmp_path / "derived.png",
+        group_by=["field_label"],
+        select={"field_label": [expression]},
+        derived={expression: expression},
+    )
+    assert list(series) == [f"field_label={expression}"]
+    np.testing.assert_allclose(
+        series[f"field_label={expression}"],
+        [1.0 + 3.0 + 25.0 / (8 * np.pi), 2.0 + 4.0 + 169.0 / (8 * np.pi)],
+    )
+
+    # '^' is exponentiation, not XOR: as XOR it binds looser than '/' and the
+    # expression above would silently evaluate as B**(2/(8*pi)).
+    powers = _overlay_series(
+        csv_path,
+        output=tmp_path / "power.png",
+        group_by=["field_label"],
+        select={"field_label": ["Bx^2", "Bx**2"]},
+        derived={"Bx^2": "Bx^2", "Bx**2": "Bx**2"},
+    )
+    np.testing.assert_allclose(powers["field_label=Bx^2"], [9.0, 25.0])
+    np.testing.assert_allclose(powers["field_label=Bx**2"], [9.0, 25.0])
+
+
+def test_plot_csv_overlay_derived_field_plots_beside_plain_fields(tmp_path):
+    """A derived label filters, orders and groups like any exported field."""
+    csv_path = tmp_path / "profiles.csv"
+    _derived_profile_frame().to_csv(csv_path, index=False)
+
+    series = _overlay_series(
+        csv_path,
+        output=tmp_path / "mixed.png",
+        group_by=["field_label"],
+        select={"field_label": ["P_tot", "P_e"]},
+        derived={"P_tot": "P_e+P_i"},
+    )
+    assert list(series) == ["field_label=P_tot", "field_label=P_e"]
+    np.testing.assert_allclose(series["field_label=P_tot"], [4.0, 6.0])
+    np.testing.assert_allclose(series["field_label=P_e"], [1.0, 2.0])
+
+
+def test_plot_csv_overlay_derived_field_rejects_unsafe_expressions(tmp_path):
+    import pytest
+
+    csv_path = tmp_path / "profiles.csv"
+    _derived_profile_frame().to_csv(csv_path, index=False)
+
+    def _run(expression: str):
+        plot_csv_overlay(
+            [csv_path],
+            output=tmp_path / "bad.png",
+            select={"field_label": [expression]},
+            derived={expression: expression},
+        )
+
+    with pytest.raises(ValueError, match="Unsupported function"):
+        _run("__import__('os').system('true')")
+    with pytest.raises(ValueError, match="Unsupported syntax"):
+        _run("P_e if P_i else P_i")
+    with pytest.raises(KeyError, match="neither an available field_label"):
+        _run("P_e+P_missing")
+
+
+def test_cli_overlay_parses_expression_fields(monkeypatch):
+    from closure import diagnostics_cli
+
+    captured = {}
+
+    def fake_overlay(csvs, **kwargs):
+        captured.update(kwargs)
+        return "overlay.png"
+
+    monkeypatch.setattr(diagnostics_cli, "plot_csv_overlay", fake_overlay)
+
+    args = diagnostics_cli.build_parser().parse_args(
+        [
+            "overlay",
+            "diagnostics/profiles_menura.csv",
+            # bare name, named expression, bare expression - and a comma inside
+            # a call must not split the entry.
+            "--field",
+            "P_e, P_tot=P_e+P_i, B^2/(8*pi), maximum(P_e,P_i)",
+        ]
+    )
+    args.func(args)
+
+    assert captured["select"]["field_label"] == [
+        "P_e",
+        "P_tot",
+        "B^2/(8*pi)",
+        "maximum(P_e,P_i)",
+    ]
+    assert captured["derived"] == {
+        "P_tot": "P_e+P_i",
+        "B^2/(8*pi)": "B^2/(8*pi)",
+        "maximum(P_e,P_i)": "maximum(P_e,P_i)",
+    }
 
 
 def test_cli_overlay_csv_run_pattern_builds_scoped_selection(monkeypatch):

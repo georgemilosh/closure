@@ -29,11 +29,13 @@ __all__ = [
     "select_snapshot_indices",
 ]
 
+import ast
 import contextlib
 import fnmatch
 import importlib
 import io
 import logging
+import operator
 import re
 import sys
 from dataclasses import dataclass
@@ -1141,15 +1143,23 @@ def _csv_source_labels(paths: list[str | Path]) -> list[str]:
     ``ax.plot`` connects points from both files sorted purely by x, producing
     a scrambled zig-zag line instead of two overlaid curves - silently, with
     no error. Defaults to the parent directory name, which matches this
-    project's ``diagnostics/<batch>/<file>.csv`` layout (e.g. "R0", "R5");
-    falls back to the full resolved path if that isn't unique across the
-    given files.
+    project's ``diagnostics/<batch>/<file>.csv`` layout (e.g. "R0", "R5").
+
+    When that isn't unique - comparing two batches that both use ``R0``,
+    ``R5``, ... subdirectories - it lengthens by one path component at a time
+    ("nathan5-12_f2/R0" vs "iPiC3D-nathan/R0") rather than jumping straight to
+    the absolute path: these labels go in the legend, and a dozen absolute
+    paths there overflow the axes and hide the curves.
     """
     resolved = [Path(p).resolve() for p in paths]
-    labels = [p.parent.name for p in resolved]
-    if len(set(labels)) != len(labels):
-        labels = [str(p) for p in resolved]
-    return labels
+    # parts[:-1] drops the file name, which is rarely what distinguishes two
+    # exports; depth 0 is the parent directory, and the last step is the full
+    # path, so a unique label is always reached.
+    for depth in range(max(len(p.parts) for p in resolved)):
+        labels = ["/".join(p.parts[:-1][-1 - depth :]) for p in resolved]
+        if len(set(labels)) == len(labels):
+            return labels
+    return [str(p) for p in resolved]
 
 
 def _apply_overlay_selection(
@@ -1222,6 +1232,174 @@ def _overlay_group_rank(
     return rank
 
 
+_DERIVED_FUNCS = {
+    "sqrt": np.sqrt,
+    "abs": np.abs,
+    "exp": np.exp,
+    "log": np.log,
+    "log10": np.log10,
+    "sin": np.sin,
+    "cos": np.cos,
+    "tan": np.tan,
+    "sinh": np.sinh,
+    "cosh": np.cosh,
+    "tanh": np.tanh,
+    "minimum": np.minimum,
+    "maximum": np.maximum,
+}
+
+_DERIVED_CONSTS = {"pi": np.pi, "e": np.e}
+
+_DERIVED_BINOPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Pow: operator.pow,
+    ast.Mod: operator.mod,
+}
+
+_DERIVED_UNARYOPS = {ast.UAdd: operator.pos, ast.USub: operator.neg}
+
+_VECTOR_COMPONENTS = ("x", "y", "z")
+
+
+def _parse_derived_expression(expression: str) -> ast.Expression:
+    """Parse one derived-field expression, rejecting anything non-arithmetic.
+
+    ``^`` is rewritten to ``**`` *before* parsing rather than by binding
+    ``BitXor`` to ``pow`` afterwards: as XOR it binds looser than ``/``, so
+    ``B^2/(8*pi)`` would silently parse as ``B**(2/(8*pi))``. Textual
+    substitution is safe here because the grammar below admits no strings.
+    """
+    try:
+        tree = ast.parse(expression.replace("^", "**"), mode="eval")
+    except SyntaxError as exc:
+        raise ValueError(f"Cannot parse derived field expression {expression!r}: {exc}") from exc
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            if not isinstance(node.func, ast.Name) or node.func.id not in _DERIVED_FUNCS:
+                name = getattr(node.func, "id", "<expr>")
+                raise ValueError(
+                    f"Unsupported function {name!r} in {expression!r}; "
+                    f"available: {sorted(_DERIVED_FUNCS)}"
+                )
+            if node.keywords or any(isinstance(a, ast.Starred) for a in node.args):
+                raise ValueError(f"Function calls in {expression!r} take positional arguments only")
+        elif isinstance(node, ast.BinOp):
+            if type(node.op) not in _DERIVED_BINOPS:
+                raise ValueError(f"Unsupported operator in {expression!r}")
+        elif isinstance(node, ast.UnaryOp):
+            if type(node.op) not in _DERIVED_UNARYOPS:
+                raise ValueError(f"Unsupported unary operator in {expression!r}")
+        elif isinstance(node, ast.Constant):
+            if not isinstance(node.value, (int, float)) or isinstance(node.value, bool):
+                raise ValueError(f"Only numeric literals are allowed in {expression!r}")
+        elif not isinstance(node, (ast.Expression, ast.Name, ast.Load, *_DERIVED_BINOPS, *_DERIVED_UNARYOPS)):
+            raise ValueError(f"Unsupported syntax {type(node).__name__} in {expression!r}")
+    return tree
+
+
+def _expression_dependencies(expression: str) -> set[str]:
+    """Field labels an expression may need, including vector components.
+
+    ``B`` is not itself a ``field_label`` in the profile CSVs, so a bare name
+    also pulls in its ``x``/``y``/``z`` components - see
+    ``_derived_expression_env``. Names that don't exist in the data are simply
+    never matched by the selection, so over-asking here is harmless.
+    """
+    tree = _parse_derived_expression(expression)
+    called = {node.func.id for node in ast.walk(tree) if isinstance(node, ast.Call)}
+    names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)} - called
+    deps = set()
+    for name in names:
+        if name in _DERIVED_CONSTS:
+            continue
+        deps.add(name)
+        deps.update(f"{name}{c}" for c in _VECTOR_COMPONENTS)
+    return deps
+
+
+def _eval_derived_node(node: ast.AST, env: dict):
+    if isinstance(node, ast.Expression):
+        return _eval_derived_node(node.body, env)
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.Name):
+        if node.id not in env:
+            raise KeyError(
+                f"Derived field references {node.id!r}, which is neither an available "
+                f"field_label nor a constant; available: {sorted(k for k in env if k not in _DERIVED_CONSTS)}"
+            )
+        return env[node.id]
+    if isinstance(node, ast.BinOp):
+        return _DERIVED_BINOPS[type(node.op)](
+            _eval_derived_node(node.left, env), _eval_derived_node(node.right, env)
+        )
+    if isinstance(node, ast.UnaryOp):
+        return _DERIVED_UNARYOPS[type(node.op)](_eval_derived_node(node.operand, env))
+    if isinstance(node, ast.Call):
+        return _DERIVED_FUNCS[node.func.id](*(_eval_derived_node(a, env) for a in node.args))
+    raise ValueError(f"Unsupported syntax {type(node).__name__} in derived field expression")
+
+
+def _derived_expression_env(wide: pd.DataFrame) -> dict:
+    """Names an expression can use: every field_label, plus vector magnitudes.
+
+    A name whose components are present but which isn't itself a field_label
+    (``B`` given ``Bx``/``By``) resolves to the magnitude of the components that
+    *are* there. 2D GEM profile CSVs typically carry only ``Bx``/``By``, so
+    ``B`` silently means the in-plane magnitude - which is why the components
+    used get logged.
+    """
+    env = {**_DERIVED_CONSTS}
+    env.update({str(col): wide[col] for col in wide.columns})
+    bases = {str(col)[:-1] for col in wide.columns if str(col)[-1:] in _VECTOR_COMPONENTS}
+    for base in sorted(bases):
+        if not base or base in env:
+            continue
+        components = [f"{base}{c}" for c in _VECTOR_COMPONENTS if f"{base}{c}" in wide.columns]
+        env[base] = np.sqrt(sum(wide[c] ** 2 for c in components))
+        logger.info("Derived field name %r resolved as the magnitude of %s", base, ", ".join(components))
+    return env
+
+
+def _append_derived_fields(data: pd.DataFrame, derived: dict[str, str], *, value_col: str) -> pd.DataFrame:
+    """Append rows for each ``label -> expression`` derived quantity.
+
+    The profile CSVs are long-format (one row per field per coordinate), so the
+    quantities an expression combines live on *different* rows. They're pivoted
+    to one column per ``field_label`` - keyed on everything that identifies a
+    sample (run, csv_source, time, cut, coord) but not on ``field``/``species``,
+    which vary by construction - evaluated, and melted back so the result is
+    just another ``field_label`` the rest of the overlay path treats normally.
+    """
+    if "field_label" not in data.columns:
+        raise KeyError(f"Derived fields need a 'field_label' column; available: {list(data.columns)}")
+    index_cols = [c for c in data.columns if c not in {"field", "species", "field_label", value_col}]
+    if not index_cols:
+        raise KeyError("Derived fields need at least one column identifying a sample (e.g. coord)")
+    wide = data.pivot_table(index=index_cols, columns="field_label", values=value_col, aggfunc="mean")
+    env = _derived_expression_env(wide)
+
+    extras = []
+    for label, expression in derived.items():
+        values = _eval_derived_node(_parse_derived_expression(expression), env)
+        frame = wide.index.to_frame(index=False)
+        frame[value_col] = np.asarray(values, dtype=float) if np.ndim(values) else float(values)
+        frame["field"] = label
+        frame["species"] = pd.NA
+        frame["field_label"] = label
+        frame = frame.dropna(subset=[value_col])
+        if frame.empty:
+            raise ValueError(
+                f"Derived field {label!r} ({expression!r}) evaluated to no finite rows; "
+                "check that every field it references was exported for the selected runs"
+            )
+        extras.append(frame.reindex(columns=data.columns))
+    return pd.concat([data, *extras], ignore_index=True)
+
+
 def plot_csv_overlay(
     csv_paths: list[str | Path],
     *,
@@ -1236,6 +1414,7 @@ def plot_csv_overlay(
     select: dict[str, list[str]] | None = None,
     select_patterns: dict[str, list[str]] | None = None,
     csv_select_patterns: dict[str, dict[str, list[str]]] | None = None,
+    derived: dict[str, str] | None = None,
     xlabel: str | None = None,
     ylabel: str | None = None,
 ) -> Path:
@@ -1266,6 +1445,16 @@ def plot_csv_overlay(
     ``run='*r0*'`` filters only the Menura CSV). Every reference must match at
     least one given CSV.
 
+    ``derived`` adds quantities the CSVs don't contain, as a mapping of new
+    ``field_label`` to an arithmetic expression over existing ones, e.g.
+    ``{"P_e+P_i+B^2/(8*pi)": "P_e+P_i+B^2/(8*pi)"}`` for total pressure. Names
+    resolve to field labels, to a vector magnitude when only the components were
+    exported (``B`` from ``Bx``/``By``/``Bz``), or to ``pi``/``e``; ``^`` means
+    exponentiation and ``sqrt``/``log``/``exp``/trig calls are available. Derived
+    labels behave like any other field afterwards - they filter, order, group and
+    label exactly as ``select["field_label"]`` entries do, and listing them there
+    is what selects them for plotting.
+
     ``xlabel``/``ylabel`` override the axis labels; when omitted they default to
     what is actually plotted (the cut coordinate / field name / reconnection
     rate) rather than the raw CSV column name.
@@ -1284,6 +1473,18 @@ def plot_csv_overlay(
     if not csv_paths:
         raise ValueError("At least one CSV path is required")
 
+    # A derived field is built from field labels the user never asked to plot,
+    # so the per-file field_label filter has to be widened to let its inputs
+    # through; the requested labels are re-applied after the concat below, once
+    # the derived rows exist to be selected.
+    requested_fields = [str(f) for f in (select or {}).get("field_label", [])]
+    frame_select = select
+    if derived:
+        needed = set(requested_fields)
+        for expression in derived.values():
+            needed |= _expression_dependencies(expression)
+        frame_select = {**(select or {}), "field_label": sorted(needed)}
+
     matched_refs: set[str] = set()
     frames = []
     csv_labels = _csv_source_labels(csv_paths)
@@ -1300,7 +1501,7 @@ def plot_csv_overlay(
                     has_csv_rule = True
                     for col, patterns in cols.items():
                         frame_patterns[col] = list(patterns)
-        frame = _apply_overlay_selection(frame, select, frame_patterns or None)
+        frame = _apply_overlay_selection(frame, frame_select, frame_patterns or None)
         if has_csv_rule and frame.empty:
             logger.warning("Per-CSV pattern for %s matched no rows in that file", path)
         frames.append(frame)
@@ -1315,18 +1516,23 @@ def plot_csv_overlay(
 
     data = pd.concat(frames, ignore_index=True)
 
-    if (select or select_patterns or csv_select_patterns) and data.empty:
-        raise ValueError(
-            f"Selection (select={select!r}, patterns={select_patterns!r}, "
-            f"csv_patterns={csv_select_patterns!r}) removed all rows"
-        )
-
     if x is None:
         x = "time" if "recon_rate" in data.columns and "coord" not in data.columns else "coord"
     if y is None:
         y = "recon_rate" if "recon_rate" in data.columns and x == "time" else "value"
     if x not in data.columns or y not in data.columns:
         raise KeyError(f"Requested x={x!r}, y={y!r}; available columns: {list(data.columns)}")
+
+    if derived and not data.empty:
+        data = _append_derived_fields(data, derived, value_col=y)
+        if requested_fields:
+            data = data[data["field_label"].astype(str).isin(requested_fields)]
+
+    if (select or select_patterns or csv_select_patterns or derived) and data.empty:
+        raise ValueError(
+            f"Selection (select={select!r}, patterns={select_patterns!r}, "
+            f"csv_patterns={csv_select_patterns!r}) removed all rows"
+        )
 
     group_cols = group_by or [col for col in ("run", "field_label", "projection", "cut_value") if col in data.columns]
     if not group_cols:
