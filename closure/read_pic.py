@@ -1023,6 +1023,10 @@ def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, cho
                             f"Unable to open {fieldname = } from {files_path = } of {filename = }. "
                             f"Available fields: {available_fields}"
                         )
+                        # If the field is simply absent from the archive, re-raise with the
+                        # same message the npz path uses so callers can identify and skip it.
+                        if actual_fieldname not in available_fields:
+                            raise KeyError(f"'{fieldname} is not a file in the archive'") from e
                         raise e
             elif filename.endswith(".h5.pkl"):
                 with open(os.path.join(files_path, filename), "rb") as n:

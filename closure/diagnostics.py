@@ -66,6 +66,62 @@ DEFAULT_FIELDS_TO_READ = {
     "Qrem": False,
 }
 
+# Which coarse read flag(s) each base field name needs, keyed lowercase (species
+# suffix already stripped by parse_field_specs). Only plain fields that map to a
+# base read group are listed; anything absent is treated as derived/processed and
+# triggers a safe fall back to DEFAULT_FIELDS_TO_READ in _read_flags_for_specs.
+_FIELD_BASE_TO_FLAGS = {
+    "rho": ("rho",),
+    "n": ("N",),
+    "qrem": ("Qrem",),
+    "divb": ("divB",),
+    "b": ("B",), "bx": ("B",), "by": ("B",), "bz": ("B",),
+    "bmagn": ("B",), "az": ("B",),
+    "e": ("E",), "ex": ("E",), "ey": ("E",), "ez": ("E",),
+    "j": ("J",), "jx": ("J",), "jy": ("J",), "jz": ("J",),
+    "jmagn": ("J",), "jtotx": ("J",), "jtoty": ("J",), "jtotz": ("J",),
+    "jx-tot": ("J",), "jy-tot": ("J",), "jz-tot": ("J",), "jinplane": ("J",),
+    "v": ("J", "rho"), "vx": ("J", "rho"), "vy": ("J", "rho"),
+    "vz": ("J", "rho"), "vmagn": ("J", "rho"),
+    "p": ("P",),
+    "pxx": ("P",), "pxy": ("P",), "pxz": ("P",),
+    "pyy": ("P",), "pyz": ("P",), "pzz": ("P",),
+    "pyx": ("P",), "pzx": ("P",), "pzy": ("P",),
+    "ppar": ("P",), "pperp": ("P",),
+    "pi": ("PI",),
+    "pixx": ("PI",), "pixy": ("PI",), "pixz": ("PI",),
+    "piyy": ("PI",), "piyz": ("PI",), "pizz": ("PI",),
+    "piyx": ("PI",), "pizx": ("PI",), "pizy": ("PI",),
+}
+
+# Read groups that are computed inside read_pic.read_data from other groups, so
+# enabling them requires enabling their inputs too (P/PI are built from J, rho
+# and — for Ppar/Pperp — B; velocity from J and rho).
+_READ_FLAG_DEPS = {
+    "P": ("P", "J", "rho", "B"),
+    "PI": ("PI", "J", "rho"),
+}
+
+
+def _read_flags_for_specs(specs: "list[FieldSpec]") -> dict | None:
+    """Minimal ``fields_to_read`` covering ``specs``, or ``None`` to read all.
+
+    Returns ``None`` (meaning: fall back to ``DEFAULT_FIELDS_TO_READ``) whenever a
+    requested field is a derived/processed quantity we cannot map to a base read
+    group, since those diagnostics may depend on the full field set.
+    """
+    if not specs:
+        return None
+    flags = {key: False for key in DEFAULT_FIELDS_TO_READ}
+    for spec in specs:
+        mapped = _FIELD_BASE_TO_FLAGS.get(spec.name.lower())
+        if mapped is None:
+            return None
+        for flag in mapped:
+            for dep in _READ_FLAG_DEPS.get(flag, (flag,)):
+                flags[dep] = True
+    return flags
+
 SPECIES_LABELS = {"e", "i"}
 FIELD_ALIASES = {
     "jztot": "Jz-tot",
@@ -479,9 +535,16 @@ def load_experiment_data(
     menura_scale_ranges: bool = False,
     menura_base_nx: int = 512,
     fields_to_read: dict | None = None,
+    request_fields: "str | Iterable[str] | None" = None,
     verbose: bool = False,
 ) -> tuple[dict, np.ndarray, np.ndarray, list, list]:
-    """Load one experiment and optionally add normalization/diagnostics."""
+    """Load one experiment and optionally add normalization/diagnostics.
+
+    When ``fields_to_read`` is not given but ``request_fields`` is, only the read
+    groups needed by those fields are loaded (falling back to the full default
+    set if any requested field is a derived/processed quantity). This avoids
+    reading — and failing on — fields the caller never asked for (e.g. ``divB``).
+    """
     if alfven_units and normalization == "none":
         normalization = "alfven-infer"
     if backend == "auto":
@@ -518,7 +581,11 @@ def load_experiment_data(
         available = discover_available_snapshots(resolved_files_path, experiment)
         selected_times = select_snapshot_indices(available, choose_times)
 
-    read_flags = dict(DEFAULT_FIELDS_TO_READ if fields_to_read is None else fields_to_read)
+    if fields_to_read is not None:
+        read_flags = dict(fields_to_read)
+    else:
+        scoped = _read_flags_for_specs(parse_field_specs(request_fields)) if request_fields else None
+        read_flags = dict(scoped if scoped is not None else DEFAULT_FIELDS_TO_READ)
     choose_x_list = list(choose_x) if choose_x is not None else None
     choose_y_list = list(choose_y) if choose_y is not None else None
 

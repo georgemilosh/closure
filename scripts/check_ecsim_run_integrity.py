@@ -25,6 +25,12 @@ true 0.0249). ``B0z`` is the mean of ``Bz``. These are the constants that set
 the Alfven normalisation, so they are reported for every run whether or not it
 passes.
 
+Snapshots are read from whichever format shipped: the processed ``.npz``, or
+the raw iPiC3D h5. Full ``*-Fields_*.h5`` carries the same fields under the
+legacy ``/Step#0/Block`` layout; the reduced ``*-fieldB_*.h5`` only writes
+``Bxc``/``Bzc`` and *time-averaged* densities that are zero at t=0, so for it
+B0x/B0z are checked but density is reported ``--`` rather than a spurious 0.
+
 A duplicate scan additionally compares every pair of t=0 snapshots. Note the
 baseline: any two runs in this campaign already share ~half their arrays
 bit-for-bit, because every run uses the same Harris species (``rhoINIT``
@@ -129,44 +135,119 @@ def _gradient_axis(slab: np.ndarray) -> int:
     return int(np.argmax(spreads))
 
 
+def _read_planes(t0_file: str, harris: int, background: int) -> dict:
+    """Load the planes ``read_disk`` needs from a t=0 snapshot, whatever the
+    on-disk format the run was delivered in.
+
+    Returns ``bg``/``hs`` (background- and Harris-species density planes) and
+    ``bx``/``bz`` (magnetic-field planes), plus ``shape`` (the raw Bx dataset
+    shape, including any leading z-slices, used by the duplicate scan) and
+    ``narrays``. A density plane is ``None`` when the format does not carry an
+    instantaneous species density at t=0.
+
+    Three formats occur in this campaign:
+
+    - ``.npz`` -- the processed snapshots, ``rho_<sp>``/``Bx``/``Bz`` directly.
+    - full iPiC3D ``*-Fields_*.h5`` -- the same field names under the legacy
+      ``/Step#0/Block/<name>/0`` layout.
+    - reduced ``*-fieldB_*.h5`` -- only cell-centred ``Bxc``/``Bzc`` and
+      *time-averaged* species charge densities (``rhoc_avg_sp_<sp>``), which
+      are still zero at t=0. B0x/B0z are recoverable; density is not, so it is
+      reported ``None`` rather than a spurious 0.
+    """
+    # Slabs may be (nz, ny, nx) with nz of 1 or 2; the z-slices are duplicates.
+    if t0_file.endswith(".npz"):
+        z = np.load(t0_file)
+        return dict(
+            bg=np.asarray(z[f"rho_{background}"])[0],
+            hs=np.asarray(z[f"rho_{harris}"])[0],
+            bx=np.asarray(z["Bx"])[0],
+            bz=np.asarray(z["Bz"])[0],
+            shape=tuple(int(s) for s in np.asarray(z["Bx"]).shape),
+            narrays=len(z.files),
+        )
+
+    import h5py
+
+    with h5py.File(t0_file, "r") as n:
+        blk = n["Step#0"]["Block"]                       # legacy iPiC3D/ECsim layout
+        keys = {k.lower(): k for k in blk.keys()}
+
+        def plane(*names):
+            """First present of `names` (case-insensitive), z-slice dropped."""
+            for nm in names:
+                k = keys.get(nm.lower())
+                if k is not None:
+                    return np.asarray(blk[k]["0"])[0], k
+            return None, None
+
+        # Only the instantaneous species density is trusted; the fieldB
+        # `rhoc_avg_sp_*` average is deliberately not used (zero at t=0).
+        bg, _ = plane(f"rho_{background}")
+        hs, _ = plane(f"rho_{harris}")
+        bx, bxk = plane("Bx", "Bxc")
+        bz, _ = plane("Bz", "Bzc")
+        if bx is None or bz is None:
+            raise KeyError(f"no Bx/Bz field found (have {sorted(blk.keys())})")
+        return dict(
+            bg=bg, hs=hs, bx=bx, bz=bz,
+            shape=tuple(int(s) for s in blk[bxk]["0"].shape),
+            narrays=len(blk.keys()),
+        )
+
+
 def read_disk(t0_file: str, harris: int, background: int) -> dict:
     """Recover the physical initial conditions from a t=0 field snapshot."""
-    z = np.load(t0_file)
-    # Slabs may be (nz, ny, nx) with nz of 1 or 2; the z-slices are duplicates.
-    bg = np.asarray(z[f"rho_{background}"])[0]
-    hs = np.asarray(z[f"rho_{harris}"])[0]
-    bz = np.asarray(z["Bz"])[0]
-    bx = np.asarray(z["Bx"])[0]
+    p = _read_planes(t0_file, harris, background)
+    bg, hs, bx, bz = p["bg"], p["hs"], p["bx"], p["bz"]
 
-    axis = _gradient_axis(hs)
+    # The Harris density is the natural gradient probe; when a format omits it
+    # (fieldB), Bx works just as well -- it reverses across the sheet along y.
+    axis = _gradient_axis(hs if hs is not None else bx)
 
     def profile(a):
         return a.mean(axis=1 - axis)
 
     # Averaging over x kills the initial perturbation, which is x-dependent;
     # what survives is the lobe plateau, i.e. B0x itself.
-    bx_profile = profile(bx)
-
-    return dict(
-        rho_background=float(bg.mean()) * FOURPI,
-        rho_background_rstd=float(bg.std() / abs(bg.mean())) if bg.mean() else float("inf"),
-        rho_harris_peak=float(profile(hs).max()) * FOURPI,
-        b0x=float(np.abs(bx_profile).max()),
+    out = dict(
+        b0x=float(np.abs(profile(bx)).max()),
         b0x_raw_max=float(np.abs(bx).max()),
         b0z=float(bz.mean()),
-        shape=tuple(int(s) for s in np.asarray(z["Bx"]).shape),
-        narrays=len(z.files),
+        shape=p["shape"],
+        narrays=p["narrays"],
         gradient_axis=axis,
     )
+    if bg is not None:
+        out["rho_background"] = float(bg.mean()) * FOURPI
+        out["rho_background_rstd"] = (
+            float(bg.std() / abs(bg.mean())) if bg.mean() else float("inf"))
+    if hs is not None:
+        out["rho_harris_peak"] = float(profile(hs).max()) * FOURPI
+    return out
 
 
 def array_digests(t0_file: str) -> dict:
-    """SHA1 per array, so the pairwise scan reads each file once instead of N times."""
-    z = np.load(t0_file)
+    """SHA1 per array, so the pairwise scan reads each file once instead of N times.
+
+    Keyed by bare field name in both formats (``Bx``, ``rho_3``, ...) so h5 and
+    npz snapshots are self-comparable within their own resolution; cross-format
+    pairs never meet because the duplicate scan first filters on array shape.
+    """
     out = {}
-    for key in z.files:
-        a = np.ascontiguousarray(z[key])
-        out[key] = hashlib.sha1(a.tobytes()).hexdigest()
+    if t0_file.endswith(".npz"):
+        z = np.load(t0_file)
+        for key in z.files:
+            out[key] = hashlib.sha1(np.ascontiguousarray(z[key]).tobytes()).hexdigest()
+        return out
+
+    import h5py
+
+    with h5py.File(t0_file, "r") as n:
+        blk = n["Step#0"]["Block"]
+        for key in blk.keys():
+            a = np.ascontiguousarray(blk[key]["0"][()])
+            out[key] = hashlib.sha1(a.tobytes()).hexdigest()
     return out
 
 
@@ -178,6 +259,32 @@ def _close(a, b, rtol: float) -> bool:
     if a is None or b is None:
         return True  # nothing to compare against
     return abs(a - b) <= rtol * max(abs(b), 1e-12)
+
+
+def _find_t0(run_dir: str):
+    """Locate the t=0 field snapshot in whatever format the run was delivered.
+
+    Returns ``(path, ext, prefix)`` -- ``prefix`` is the filename stem up to the
+    iteration digits, so ``prefix + '*' + ext`` counts the run's snapshots.
+    Non-field ``*_000000`` files (e.g. particle dumps) are excluded by name.
+    Preference, most to least informative: processed ``.npz``, then the full
+    ``*-Fields`` h5, then the reduced ``*-fieldB`` h5 (density-less at t=0) --
+    so a run carrying both h5 variants is read from the full one.
+    """
+    cands = (glob.glob(os.path.join(run_dir, "*_000000.npz"))
+             + glob.glob(os.path.join(run_dir, "*_000000.h5")))
+    cands = [c for c in cands if "field" in os.path.basename(c).lower()]
+    if not cands:
+        return None, None, None
+
+    def rank(c):
+        base = os.path.basename(c).lower()
+        return (0 if c.endswith(".npz") else 1 if "fieldb" not in base else 2, base)
+
+    t0 = min(cands, key=rank)
+    ext = os.path.splitext(t0)[1]
+    prefix = re.sub(r"\d+" + re.escape(ext) + "$", "", os.path.basename(t0))
+    return t0, ext, prefix
 
 
 def collect(run_dir: str, harris: int, background: int) -> dict:
@@ -203,15 +310,15 @@ def collect(run_dir: str, harris: int, background: int) -> dict:
         rec["sim_b0z"] = sim["b0"][2] if sim["b0"] else None
         rec["sim_savedir"] = sim["savedir"]
 
-    snaps = sorted(glob.glob(os.path.join(run_dir, "*Fields_000000.npz")))
-    if not snaps:
+    t0, ext, prefix = _find_t0(run_dir)
+    if t0 is None:
         rec["problems"].append("no t=0 snapshot")
         return rec
-    rec["t0_file"] = os.path.basename(snaps[0])
-    rec["t0_path"] = snaps[0]
-    rec["nsnapshots"] = len(glob.glob(os.path.join(run_dir, "*Fields_*.npz")))
+    rec["t0_file"] = os.path.basename(t0)
+    rec["t0_path"] = t0
+    rec["nsnapshots"] = len(glob.glob(os.path.join(run_dir, prefix + "*" + ext)))
     try:
-        rec.update(read_disk(snaps[0], harris, background))
+        rec.update(read_disk(t0, harris, background))
     except Exception as exc:  # unreadable / unexpected layout
         rec["problems"].append(f"unreadable t=0 snapshot: {exc!r}")
     return rec

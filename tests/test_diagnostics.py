@@ -4,12 +4,14 @@ import numpy as np
 import pandas as pd
 
 from closure.diagnostics import (
+    DEFAULT_FIELDS_TO_READ,
     FieldSpec,
     _add_notebook_recon_normalization,
     _csv_source_labels,
     _default_overlay_xlabel,
     _default_overlay_ylabel,
     _overlay_style,
+    _read_flags_for_specs,
     apply_normalization,
     build_profiles_dataframe,
     discover_menura_iterations,
@@ -43,6 +45,44 @@ def test_parse_field_specs_accepts_aliases_and_species_suffixes():
         FieldSpec("P", "e"),
         FieldSpec("beta_par - beta_perp"),
     ]
+
+
+def test_read_flags_for_specs_scopes_to_requested_moment():
+    flags = _read_flags_for_specs(parse_field_specs("rho_i"))
+    assert flags is not None
+    assert flags["rho"] is True
+    # Everything else — crucially divB — stays off.
+    assert flags["divB"] is False
+    assert not any(v for k, v in flags.items() if k != "rho")
+
+
+def test_read_flags_for_specs_expands_pressure_dependencies():
+    # P is built inside read_data from J, rho and B (for Ppar/Pperp).
+    flags = _read_flags_for_specs(parse_field_specs("Pxx_e"))
+    assert flags is not None
+    assert {k for k, v in flags.items() if v} == {"P", "J", "rho", "B"}
+
+
+def test_read_flags_for_specs_velocity_needs_rho_and_current():
+    flags = _read_flags_for_specs(parse_field_specs("Vz_e"))
+    assert flags is not None
+    assert {k for k, v in flags.items() if v} == {"J", "rho"}
+
+
+def test_read_flags_for_specs_falls_back_for_derived_fields():
+    # A derived/processed quantity we cannot map ⇒ read the full default set.
+    assert _read_flags_for_specs(parse_field_specs("rho_i,beta_par")) is None
+    assert _read_flags_for_specs([]) is None
+
+
+def test_read_flags_for_specs_default_fields_command_scope():
+    # The `fields` subcommand default must not pull in P/divB it never plots.
+    flags = _read_flags_for_specs(
+        parse_field_specs("Az,Ey,Ez,rho_e,rho_i,Jz_e,Jz_i,Bx,By,Bz")
+    )
+    assert flags is not None
+    assert {k for k, v in flags.items() if v} == {"B", "E", "rho", "J"}
+    assert set(flags) == set(DEFAULT_FIELDS_TO_READ)
 
 
 def test_resolve_field_data_defaults_to_e_for_species_dict():
