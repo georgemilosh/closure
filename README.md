@@ -469,6 +469,8 @@ closure-diagnostics overlay diagnostics/reconnection_menura_f2.csv \
   --run "FCNN/1e-2_Jze.5_r0/noJnoE_P_baseline,FCNN/1e-2/noJnoE_P_baseline,MLP/1e-2/noJnoE_P_baseline" \
   --x time_norm --y recon_rate_norm --group-by run --logy \
   --output diagnostics/baselines_overlay.png
+# Combining SEVERAL CSVs (campaigns, backends) and deciding what one line means:
+# see "=== Combining runs, campaigns and groups ===" below.
 
 # === Band-resolved spectral scalars =========================================
 # Splits the omnidirectional E-field (or B-field, --field B) power spectrum of
@@ -510,6 +512,109 @@ closure-diagnostics bands R5 R7 --backend menura \
 closure-diagnostics overlay diagnostics/bands_menura.csv \
   --x time --y wave_frac --group-by run \
   --output diagnostics/bands_wave_overlay.png
+
+# === Combining runs, campaigns and groups ===================================
+# `overlay` takes any number of CSVs and concatenates them. Two independent
+# things decide the figure:
+#   * the FILTERS (--run/--run-pattern/--select/--select-pattern/
+#     --csv-run-pattern) pick the rows;
+#   * --group-by picks which columns define ONE line.
+# Every row also carries `csv_source`: its CSV's parent directory name (R0, R5,
+# ...), lengthened one path component at a time when those collide
+# ("iPiC3D-nathan/R5" vs "nathan5-12_f2/R5"). It behaves like any other column -
+# filter on it, group by it, or let overlay add it for you.
+
+# (1) Same run, several campaigns: one CSV per upstream condition, each holding
+# a run named MLP/1e-2/noJnoE_P_baseline. --run keeps that one run in every
+# file; --group-by csv_source makes the legend read R0/R5/R7/R12 instead of
+# repeating the identical run name four times.
+closure-diagnostics overlay \
+  diagnostics/nathan5-12_f2/R{0,5,7,12}/reconnection_menura.csv \
+  --run "MLP/1e-2/noJnoE_P_baseline" --group-by csv_source \
+  --x time_norm --y recon_rate_norm --logy \
+  --title "MLP baseline vs upstream condition" \
+  --output diagnostics/mlp_across_campaigns.png
+# Omitting --group-by also works: the default grouping (run/field_label/...)
+# gives all four files the same key, overlay detects that collision and appends
+# csv_source itself - you just get longer "run=..., csv_source=R0" labels.
+
+# (2) Runs x campaigns: glob the models, keep two of the campaigns. Filters on
+# different columns are ANDed, so this plots every globbed run of R0 and R12
+# (R0 also carries the _Jze.5_r0 variants -> 4 + 2 curves), one line per
+# (run, campaign) thanks to --group-by run csv_source.
+closure-diagnostics overlay \
+  diagnostics/nathan5-12_f2/R{0,5,7,12}/reconnection_menura.csv \
+  --run-pattern "*/noJnoE_P_baseline" --select csv_source=R0,R12 \
+  --group-by run csv_source \
+  --x time_norm --y recon_rate_norm --logy \
+  --output diagnostics/models_x_campaigns.png
+# Swap in --select-pattern csv_source='R1*' to take R10,R11,R12 instead.
+
+# (3) Two backends in one figure: an ECsim reference CSV plus a Menura campaign
+# CSV. --csv-run-pattern scopes the glob to the Menura file only, so the
+# reference run passes through unfiltered (a plain --run-pattern would have to
+# match both naming schemes at once).
+closure-diagnostics overlay \
+  diagnostics/iPiC3D-nathan/R5/reconnection_ecsim.csv \
+  diagnostics/nathan5-12_f2/R5/reconnection_menura.csv \
+  --csv-run-pattern reconnection_menura.csv '*/noJnoE_P_baseline' \
+  --x time_norm --y recon_rate_norm --logy \
+  --output diagnostics/ecsim_vs_menura_R5.png
+
+# --run and --run-pattern are ANDed, NOT ORed: an exact name in --run plus a
+# glob in --run-pattern keeps only runs matching both - usually nothing, and
+# overlay then aborts with "Selection ... removed all rows". To add one
+# reference run to a globbed family, list it inside the pattern (a glob without
+# wildcards is an exact match):
+closure-diagnostics overlay \
+  diagnostics/nathan5-12_f2/R{0,5}/bands_ez_menura.csv \
+  --run-pattern "*/noJnoE_P_baseline,iso_GEM_1e-2_Jze.5_r0" \
+  --group-by run csv_source --x time --y grid_frac --logy \
+  --output diagnostics/grid_frac_models_vs_reference.png
+
+# (4) Runs x fields (profiles): --group-by run field_label draws one line per
+# (run, field), across backends too. Derived fields are evaluated after the
+# concat, per run, so P_tot below is a pressure-balance check on all of them at
+# once (P_tot flat through the sheet while P_e bumps).
+closure-diagnostics overlay \
+  diagnostics/profiles_ecsim.csv diagnostics/profiles_menura.csv \
+  --field "P_tot=P_e+P_i+B^2/(8*pi),P_e" --group-by run field_label \
+  --x coord --y value --ylabel "pressure" \
+  --output diagnostics/pressure_balance.png
+# In an expression, B is the magnitude of whichever components the CSV holds:
+# with only Bx,By exported (the usual 2D GEM profile set) that is the IN-PLANE
+# magnitude, and the components used are logged. Add Bz to `profiles --fields`
+# for the full |B|.
+
+# --group-by must name enough columns to identify one curve. Grouping by
+# csv_source alone while a CSV holds several runs splices them into a single
+# x-sorted zig-zag - silently, since the automatic csv_source only guards
+# collisions BETWEEN files. Over-broad globs are the other trap:
+# --run-pattern 'iso_GEM*' on an R5 campaign CSV matches ~20 runs and the legend
+# covers the axes; narrow it to the handful you actually want to compare.
+
+# (5) Or combine at EXPORT time: `reconnection`/`bands` append by default, so
+# several calls accumulate into ONE CSV (one `run` per experiment) that needs no
+# multi-file overlay afterwards. Headers must match exactly - appending a run
+# exported without --recon-normalization to a `notebook`-normalized CSV fails
+# with "Cannot append ...: existing columns ... do not match". Start the file
+# with --csv-mode replace so reruns don't duplicate rows.
+closure-diagnostics reconnection R0 R5 --backend menura \
+  --files-path /volume1/scratch/georgem/menura/runs/GEM/hortense/nathan5-12_f2 \
+  --choose-times all --az-sigma 4 --recon-normalization notebook \
+  --csv-mode replace --output-csv diagnostics/reconnection_all.csv
+closure-diagnostics reconnection R7 R12 --backend menura \
+  --files-path /volume1/scratch/georgem/menura/runs/GEM/hortense/nathan5-12_f2 \
+  --choose-times all --az-sigma 4 --recon-normalization notebook \
+  --csv-mode append --output-csv diagnostics/reconnection_all.csv
+# Discovered run labels are relative to --files-path, so pointing it at the
+# campaign root keeps the R0/R5/... prefix inside the single file (unlike the
+# per-campaign CSVs above, exported with --files-path already inside R5). The
+# prefix is then part of the `run` column and globbable:
+closure-diagnostics overlay diagnostics/reconnection_all.csv \
+  --run-pattern "R*/MLP/1e-2/noJnoE_P_baseline" --group-by run \
+  --x time_norm --y recon_rate_norm --logy \
+  --output diagnostics/mlp_all_campaigns.png
 
 # === One-shot profile helpers ===============================================
 # Export the 8 profile fields and emit one PNG per field (= one notebook cell
