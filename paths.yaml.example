@@ -4,8 +4,21 @@
 # Relative paths are resolved against the directory containing this file.
 #
 # work_dir — training outputs, checkpoints, and normalization statistics.
-# data_dir — root of simulation data (HDF5 / pickle files).
+# data_dir — root of simulation data (HDF5 / pickle files). Also the ECsim /
+#            iPiC3D prepend that jet_metric.py joins to its --ecsim-files-path
+#            subpath (e.g. "iPiC3D-nathan").
+# menura_runs_dir — root of the menura campaign run trees (<campaign>/<regime>/<run>);
+#            used by the menura diagnostics / jet_metric.py.
+# menura_analysis_dir — the menura read_menura/menura_utils checkout the loader imports.
+#            Recommended to set explicitly: when absent, the lookup walks up from the DATA
+#            path and imports whatever analysis/ sits above the run tree, so two machines can
+#            silently run different analysis code (see MENURA_ION_PRESSURE_BUG.md).
+# diagnostics_dir — optional override; when absent, diagnostics default to
+#            ./diagnostics under the repo.
 #
 # See README.md § "Production Setup" for the full path resolution rules.
 work_dir: ./models
 data_dir: ./data
+menura_runs_dir: ./menura/runs
+menura_analysis_dir: ./menura/analysis
+# diagnostics_dir: ./diagnostics

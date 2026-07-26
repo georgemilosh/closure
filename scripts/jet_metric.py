@@ -40,6 +40,7 @@ Example:
 from __future__ import annotations
 
 import argparse
+import os
 import re
 from pathlib import Path
 
@@ -51,6 +52,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
+from closure import config
 from closure.diagnostics import (
     _as_axis,
     _compute_current_totals,
@@ -63,11 +65,24 @@ from closure.diagnostics import (
 )
 
 # --------------------------------------------------------------------------
-# Defaults (all overridable on the command line)
+# Path roots — resolved from paths.yaml (closure.config.load_paths), all
+# overridable on the command line:
+#   menura_runs_dir -> RUNS_BASE   menura campaign run trees (<campaign>/<regime>/<run>).
+#                                  Distinct from menura_analysis_dir, which points at the
+#                                  read_menura/menura_utils checkout used by the loader.
+#   data_dir    -> ECSIM_PREPEND   ECsim/iPiC3D data root; the "iPiC3D-nathan" subpath is
+#                                  given via --ecsim-files-path and joined onto this prepend
+#   diagnostics -> DIAGNOSTICS_BASE  always ./diagnostics under the repo, unless paths.yaml
+#                                    overrides it with a diagnostics_dir key
 # --------------------------------------------------------------------------
-DIAGNOSTICS_BASE = "/volume1/scratch/georgem/closure/diagnostics"
-RUNS_BASE = "/esat/cpadata/georgem/2025_112/georgem/menura/runs"
-ECSIM_FILES = "/volume1/scratch/share_dir/iPiC3D-nathan"
+_PATHS = config.load_paths()
+_REPO_ROOT = Path(config.__file__).resolve().parents[1]
+DIAGNOSTICS_BASE = str(_PATHS.get("diagnostics_dir") or (_REPO_ROOT / "diagnostics"))
+RUNS_BASE = _PATHS.get("menura_runs_dir") or "/dodrio/scratch/projects/2026_018/george/menura/runs"
+#: ECsim/iPiC3D data root that a relative --ecsim-files-path is prepended with.
+ECSIM_PREPEND = _PATHS.get("data_dir") or "."
+#: Default ECsim/iPiC3D subpath under ECSIM_PREPEND (see --ecsim-files-path).
+ECSIM_FILES = "iPiC3D-nathan"
 ECSIM_DIAG = f"{DIAGNOSTICS_BASE}/iPiC3D-nathan"
 
 DEFAULT_CAMPAIGN = "stability_campaign2"
@@ -299,7 +314,11 @@ def build_parser():
                         help="x extent (d_i) of the flanking background zones just "
                         "outside the near-X window (the sheet plateau the jet is "
                         "contrasted against); 0 = use the whole rest of the profile")
-    parser.add_argument("--ecsim-files-path", default=ECSIM_FILES)
+    parser.add_argument("--ecsim-files-path", default=ECSIM_FILES,
+                        help="ECsim/iPiC3D kinetic-reference data location. A relative "
+                        "value is joined onto the paths.yaml data_dir prepend "
+                        "(default %(default)r -> <data_dir>/iPiC3D-nathan); an absolute "
+                        "path is used as-is")
     parser.add_argument("--ecsim-diagnostics", default=ECSIM_DIAG)
     parser.add_argument("--rect-halfthick-di", type=float, default=0.15,
                         help="Half-thickness (d_i) of the thin outflow rectangle")
@@ -729,6 +748,10 @@ def failure_reason(exc):
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    # Relative --ecsim-files-path is taken under the paths.yaml data_dir prepend;
+    # an absolute path is honoured as given.
+    if not os.path.isabs(args.ecsim_files_path):
+        args.ecsim_files_path = os.path.join(ECSIM_PREPEND, args.ecsim_files_path)
     R = args.regime
     diag = f"{DIAGNOSTICS_BASE}/{args.campaign}"
     out_dir = Path(args.output_dir or f"{diag}/jet_metric")

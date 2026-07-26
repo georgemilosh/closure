@@ -383,7 +383,7 @@ closure-diagnostics fields R0/iso_GEM_1e-2_Jze.5_r0_1024x1024 --backend menura \
 # experiment in the CSV). `profiles` ALWAYS overwrites --output-csv (no append).
 closure-diagnostics profiles Le2DHGEM_RunID_0_f2 Le2DHGEM_RunID_5_f2 \
   --files-path /volume1/scratch/share_dir/iPiC3D-nathan \
-  --fields P_e,P_i,rho_e,rho_i,Jz_e,Jz_i,Bx,By \
+  --fields Ex,Ey,Ez,P_e,P_i,rho_e,rho_i,Jz_e,Jz_i,Bx,By \
   --projection y --choose-times 0 --processed \
   --normalization alfven-infer --sample-nb-factor 1 --choose-species e,i,e,i \
   --choose-x 0,512 --choose-y 0,256 \
@@ -394,7 +394,7 @@ closure-diagnostics profiles \
   R0/iso_GEM_1e-2_Jze.5_r0_1024x1024 R5/iso_GEM_1e-2_Jze.5_r0_1024x1024 \
   --backend menura \
   --files-path /volume1/scratch/georgem/menura/runs/GEM/hortense/nathan5-12 \
-  --fields P_e,P_i,rho_e,rho_i,Jz_e,Jz_i,Bx,By \
+  --fields Ex,Ey,Ez,P_e,P_i,rho_e,rho_i,Jz_e,Jz_i,Bx,By \
   --projection y --choose-times 0 --processed \
   --choose-x 0,512 --choose-y 0,256 --menura-scale-ranges \
   --output-csv diagnostics/profiles_menura.csv
