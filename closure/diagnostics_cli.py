@@ -17,6 +17,8 @@ import pandas as pd
 matplotlib.use("Agg")
 
 from closure.diagnostics import (
+    _sanitize_name,
+    animate_field_panels,
     build_profiles_dataframe,
     export_bands_dataframe,
     export_reconnection_dataframe,
@@ -162,6 +164,57 @@ def _cmd_fields(args: argparse.Namespace) -> None:
             cmap=args.cmap,
         )
         logger.info("Saved field panel: %s", path)
+
+
+def _movie_stem(specs: list, per_field: bool) -> str:
+    """Output file stem: one panel movie per run, or one movie per field."""
+    if not per_field:
+        return "fields_movie"
+    return f"{_sanitize_name(specs[0].label)}_movie"
+
+
+def _cmd_movie(args: argparse.Namespace) -> None:
+    specs = parse_field_specs(args.fields)
+    output_dir = Path(args.output_dir)
+    for experiment in args.experiments:
+        data, X, Y, qom, times = _load_for_command(args, experiment)
+        groups = [[spec] for spec in specs] if args.per_field else [specs]
+        # --output / --frames-dir name one thing each, so they only apply when this
+        # invocation produces exactly one movie; otherwise every movie would be
+        # written over the previous one.
+        single_movie = len(args.experiments) == 1 and len(groups) == 1
+        if not single_movie:
+            for flag, value in (("--output", args.output), ("--frames-dir", args.frames_dir)):
+                if value:
+                    logger.warning("%s names a single movie; writing under %s instead", flag, output_dir)
+        for group in groups:
+            if args.output and single_movie:
+                output = Path(args.output)
+            else:
+                output = output_dir / experiment / f"{_movie_stem(group, args.per_field)}.{args.format}"
+            frames_dir = None
+            if args.save_frames:
+                if args.frames_dir and single_movie:
+                    frames_dir = Path(args.frames_dir)
+                else:
+                    frames_dir = output.parent / f"{output.stem}_frames"
+            path = animate_field_panels(
+                data,
+                X,
+                Y,
+                group,
+                run_name=experiment,
+                times=times,
+                output=output,
+                ncols=args.ncols,
+                cmap=args.cmap,
+                fps=args.fps,
+                dpi=args.dpi,
+                frames_dir=frames_dir,
+            )
+            logger.info("Saved field movie: %s (%d frames)", path, len(times))
+            if frames_dir is not None:
+                logger.info("Saved frames: %s", frames_dir)
 
 
 def _profiles_one_experiment(args: argparse.Namespace, experiment: str) -> pd.DataFrame:
@@ -572,6 +625,35 @@ def build_parser() -> argparse.ArgumentParser:
     fields.add_argument("--ncols", type=int, default=None, help="Number of panel columns")
     fields.add_argument("--cmap", default="auto", help="Colormap or auto")
     fields.set_defaults(func=_cmd_fields)
+
+    movie = subparsers.add_parser(
+        "movie",
+        help="Animate the `fields` panels over time into a GIF or MP4",
+        description="Same panels, colormaps and load options as `fields`, but animated over every "
+        "loaded snapshot. Use --choose-times to pick the window (e.g. all, 0:40, 0:40:2); color "
+        "limits are computed once over the whole window so the panels do not flicker.",
+    )
+    _add_load_options(movie, default_choose_times="all")
+    movie.add_argument("--fields", default="Az,Ey,Ez,rho_e,rho_i,Jz_e,Jz_i,Bx,By,Bz", help="Comma-separated fields")
+    movie.add_argument("--output", default=None, help="Output path for a single movie (one experiment, panel mode)")
+    movie.add_argument("--output-dir", default="diagnostics", help="Output directory for generated movies")
+    movie.add_argument("--ncols", type=int, default=None, help="Number of panel columns")
+    movie.add_argument("--cmap", default="auto", help="Colormap or auto")
+    movie.add_argument("--format", choices=["gif", "mp4"], default="gif", help="Movie container (mp4 needs ffmpeg)")
+    movie.add_argument("--fps", type=int, default=5, help="Frames per second")
+    movie.add_argument("--dpi", type=int, default=150, help="Saved movie DPI")
+    movie.add_argument(
+        "--per-field",
+        action="store_true",
+        help="Write one single-panel movie per field instead of one multi-panel movie",
+    )
+    movie.add_argument(
+        "--save-frames",
+        action="store_true",
+        help="Also write every frame as frame_<time index>.png next to the movie",
+    )
+    movie.add_argument("--frames-dir", default=None, help="Override the directory used by --save-frames")
+    movie.set_defaults(func=_cmd_movie)
 
     profiles = subparsers.add_parser("profiles", help="Export 1D profile cuts to CSV")
     _add_load_options(profiles, default_choose_times="0")

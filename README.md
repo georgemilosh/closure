@@ -321,8 +321,8 @@ Default output layout:
 
 ### Field Diagnostics CLI
 
-`closure-diagnostics` exports notebook-style field figures and CSV diagnostics
-without copying plotting code into ad-hoc notebooks.
+`closure-diagnostics` exports notebook-style field figures, movies and CSV
+diagnostics without copying plotting code into ad-hoc notebooks.
 
 Two backends, selected with `--backend`:
 
@@ -376,6 +376,28 @@ closure-diagnostics fields R0/iso_GEM_1e-2_Jze.5_r0_1024x1024 --backend menura \
   --processed --choose-times 12 \
   --choose-x 0,512 --choose-y 0,256 --menura-scale-ranges \
   --output diagnostics/R0_fields.png
+
+# === Field movies ===========================================================
+# `movie` is `fields` animated: same panels, colormaps and load options, one
+# frame per loaded snapshot. --choose-times picks the window (default: all),
+# e.g. 0:40:2 for every other snapshot. Color limits are computed once over the
+# whole window, so panel brightness is comparable between frames instead of
+# flickering. The run name and the running time go in the figure title.
+closure-diagnostics movie R0/iso_GEM_1e-2_Jze.5_r0_1024x1024 --backend menura \
+  --files-path /volume1/scratch/georgem/menura/runs/GEM/hortense/nathan5-12 \
+  --fields Az,Ez,rho_i,Jz_i,Bx,By \
+  --choose-times all --choose-x 0,512 --choose-y 0,256 --menura-scale-ranges \
+  --output diagnostics/R0_fields_movie.gif --fps 8
+
+# One single-panel movie per field (Bx_movie.gif, rho_i_movie.gif, ...) plus the
+# individual PNG frames, all under <output-dir>/<experiment>/. Use --format mp4
+# for an H.264 movie instead of a GIF (needs ffmpeg on PATH).
+closure-diagnostics movie Le2DHGEM_RunID_5_f2 \
+  --files-path /volume1/scratch/share_dir/iPiC3D-nathan \
+  --fields Bx,rho_i,Jz_e --per-field --save-frames \
+  --normalization alfven-infer --choose-species e,i,e,i \
+  --choose-x 0,512 --choose-y 0,256 \
+  --output-dir diagnostics --format mp4 --fps 10
 
 # === Profiles (1D cuts) =====================================================
 # Mirrors profile_fns: cut along y at x = nx//2 (omit --cut-index), t = 0.
