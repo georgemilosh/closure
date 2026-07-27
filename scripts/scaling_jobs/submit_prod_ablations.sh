@@ -29,10 +29,14 @@
 #                                     SPLIT_ARCH=1 (then per feature × arch).
 #
 #   ARCH_LIST="baseline"             Which network-size variants to run.
-#                                     Space-separated subset of:
-#                                       baseline  = the tuned FCNN/MLP
-#                                       shallower = one fewer layer
-#                                       deeper    = one more layer
+#                                     Space-separated subset of the depth ladder (each step adds
+#                                     one more 128-unit/128-channel layer, width fixed):
+#                                       shallower = 3 layers   (FCNN RF  9)
+#                                       baseline  = 4 layers   (the tuned FCNN/MLP, RF 11)
+#                                       deeper    = 5 layers   (RF 13)
+#                                       deeper2   = 6 layers   (RF 15)
+#                                       deeper3   = 7 layers   (RF 17)
+#                                       deeper4   = 8 layers   (RF 19)
 #                                     SPLIT_ARCH=0: passed whole to each job, which
 #                                       runs the archs SERIALLY inside one allocation.
 #                                     SPLIT_ARCH=1: the helper submits one job PER arch.
@@ -74,6 +78,10 @@
 #   MODELS="cnn" ARCH_LIST="baseline shallower deeper" SPLIT_ARCH=1 MAX_EPOCHS=60 \
 #     bash scripts/scaling_jobs/submit_prod_ablations.sh
 #   # -> 4 features × 3 archs = 12 independent CNN jobs
+#
+#   # Depth-extension campaign (f2 val0 study): the 3 extra-deep archs, noJnoE only, P only,
+#   # both networks — 6 independent jobs:
+#   ARCH_LIST="deeper2 deeper3 deeper4" FEATURES=noJnoE TARGETS=P SPLIT_TARGET=1 SPLIT_ARCH=1 ...
 #
 #   # One single cell, by hand (no helper) — CNN, noE feature, deeper arch:
 #   sbatch -J prod_ablate_cnn_noE_deeper \

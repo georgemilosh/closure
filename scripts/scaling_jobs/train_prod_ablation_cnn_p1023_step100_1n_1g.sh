@@ -120,9 +120,19 @@ run_one() {
       ;;
   esac
 
-  # Architecture override (FCNN channels)
+  # Architecture override (FCNN channels). Depth ladder: each step inserts ONE more 128-ch
+  # 3x3 block before the 5x5 128->64 head, so width/kernels/dropout pattern stay fixed and
+  # only depth (and hence receptive field) varies:
+  #   shallower 3 conv (RF  9) | baseline 4 (RF 11) | deeper  5 (RF 13)
+  #   deeper2   6 conv (RF 15) | deeper3  7 (RF 17) | deeper4 8 (RF 19)
   if [[ "$arch" == "deeper" ]]; then
     arch_override="--model.network.init_args.channels=[${feature_channels},128,128,128,64,${target_channels}] --model.network.init_args.kernels=[3,3,3,5,3] --model.network.init_args.activations=[SiLU,SiLU,SiLU,SiLU,null] --model.network.init_args.batch_norms=[true,true,true,true,false] --model.network.init_args.dropouts=[0.0,0.15,0.15,0.1,0.0]"
+  elif [[ "$arch" == "deeper2" ]]; then
+    arch_override="--model.network.init_args.channels=[${feature_channels},128,128,128,128,64,${target_channels}] --model.network.init_args.kernels=[3,3,3,3,5,3] --model.network.init_args.activations=[SiLU,SiLU,SiLU,SiLU,SiLU,null] --model.network.init_args.batch_norms=[true,true,true,true,true,false] --model.network.init_args.dropouts=[0.0,0.15,0.15,0.15,0.1,0.0]"
+  elif [[ "$arch" == "deeper3" ]]; then
+    arch_override="--model.network.init_args.channels=[${feature_channels},128,128,128,128,128,64,${target_channels}] --model.network.init_args.kernels=[3,3,3,3,3,5,3] --model.network.init_args.activations=[SiLU,SiLU,SiLU,SiLU,SiLU,SiLU,null] --model.network.init_args.batch_norms=[true,true,true,true,true,true,false] --model.network.init_args.dropouts=[0.0,0.15,0.15,0.15,0.15,0.1,0.0]"
+  elif [[ "$arch" == "deeper4" ]]; then
+    arch_override="--model.network.init_args.channels=[${feature_channels},128,128,128,128,128,128,64,${target_channels}] --model.network.init_args.kernels=[3,3,3,3,3,3,5,3] --model.network.init_args.activations=[SiLU,SiLU,SiLU,SiLU,SiLU,SiLU,SiLU,null] --model.network.init_args.batch_norms=[true,true,true,true,true,true,true,false] --model.network.init_args.dropouts=[0.0,0.15,0.15,0.15,0.15,0.15,0.1,0.0]"
   elif [[ "$arch" == "shallower" ]]; then
     arch_override="--model.network.init_args.channels=[${feature_channels},128,64,${target_channels}] --model.network.init_args.kernels=[3,5,3] --model.network.init_args.activations=[SiLU,SiLU,null] --model.network.init_args.batch_norms=[true,true,false] --model.network.init_args.dropouts=[0.0,0.1,0.0]"
   elif [[ "$arch" == "baseline" ]]; then
