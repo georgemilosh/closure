@@ -112,6 +112,43 @@ def test_build_profiles_dataframe_exports_y_cut_at_x_index():
     np.testing.assert_allclose(frame["value"], _toy_data()["P"]["i"][2, :, 1])
 
 
+def test_build_profiles_dataframe_averages_over_fixed_axis():
+    X, Y = _toy_grid()
+    frame = build_profiles_dataframe(
+        _toy_data(),
+        X,
+        Y,
+        [FieldSpec("P", "i")],
+        run_name="R5",
+        times=[0.0, 0.5],
+        time_indices=[1],
+        projection="y",
+        average=True,
+    )
+    assert list(frame["coord"]) == [0.0, 10.0, 20.0]
+    assert frame["reduction"].unique().tolist() == ["mean"]
+    assert frame["cut_index"].unique().tolist() == [-1]
+    assert frame["cut_value"].isna().all()
+    np.testing.assert_allclose(frame["value"], _toy_data()["P"]["i"][:, :, 1].mean(axis=0))
+
+
+def test_build_profiles_dataframe_average_rejects_cut_arguments():
+    import pytest
+
+    X, Y = _toy_grid()
+    with pytest.raises(ValueError):
+        build_profiles_dataframe(
+            _toy_data(),
+            X,
+            Y,
+            [FieldSpec("P", "i")],
+            run_name="R5",
+            projection="y",
+            cut_index=2,
+            average=True,
+        )
+
+
 def test_plot_field_panels_writes_png(tmp_path):
     X, Y = _toy_grid()
     output = tmp_path / "fields.png"
@@ -453,6 +490,24 @@ def test_plot_csv_overlay_derived_field_combines_labels(tmp_path):
     )
     np.testing.assert_allclose(powers["field_label=Bx^2"], [9.0, 25.0])
     np.testing.assert_allclose(powers["field_label=Bx**2"], [9.0, 25.0])
+
+
+def test_plot_csv_overlay_derived_field_survives_nan_key_columns(tmp_path):
+    """--average profiles carry cut_value=NaN; the pivot must not drop them."""
+    frame = _derived_profile_frame()
+    frame["cut_value"] = np.nan
+    csv_path = tmp_path / "profiles.csv"
+    frame.to_csv(csv_path, index=False)
+
+    expression = "P_e+P_i"
+    series = _overlay_series(
+        csv_path,
+        output=tmp_path / "derived_nan.png",
+        group_by=["field_label"],
+        select={"field_label": [expression]},
+        derived={expression: expression},
+    )
+    np.testing.assert_allclose(series[f"field_label={expression}"], [4.0, 6.0])
 
 
 def test_plot_csv_overlay_derived_field_plots_beside_plain_fields(tmp_path):

@@ -187,6 +187,7 @@ def _profiles_one_experiment(args: argparse.Namespace, experiment: str) -> pd.Da
         projection=args.projection,
         cut_index=args.cut_index,
         cut_value=args.cut_value,
+        average=args.average,
     )
 
 
@@ -579,6 +580,11 @@ def build_parser() -> argparse.ArgumentParser:
     profiles.add_argument("--projection", choices=["x", "y"], default="y", help="Coordinate that varies along the cut")
     profiles.add_argument("--cut-index", type=int, default=None, help="Fixed-axis index for the cut")
     profiles.add_argument("--cut-value", type=float, default=None, help="Fixed-axis coordinate nearest to this value")
+    profiles.add_argument(
+        "--average",
+        action="store_true",
+        help="Average over the fixed axis instead of slicing (incompatible with --cut-index/--cut-value)",
+    )
     profiles.add_argument("--time-indices", default=None, help="Loaded time indices to export, comma-separated; default all loaded")
     profiles.add_argument("--output-csv", default="diagnostics/profiles.csv", help="Output CSV path")
     profiles.add_argument(

@@ -917,10 +917,18 @@ def build_profiles_dataframe(
     projection: str = "y",
     cut_index: int | None = None,
     cut_value: float | None = None,
+    average: bool = False,
 ) -> pd.DataFrame:
-    """Build a long-format CSV-ready dataframe of 1D field cuts."""
+    """Build a long-format CSV-ready dataframe of 1D field cuts.
+
+    With ``average=True`` the profile is the mean over the fixed axis instead
+    of a slice at one index; ``cut_index``/``cut_value`` must then be unset,
+    and the output ``cut_index``/``cut_value`` columns hold -1/NaN.
+    """
     if projection not in {"x", "y"}:
         raise ValueError("projection must be 'x' or 'y'")
+    if average and (cut_index is not None or cut_value is not None):
+        raise ValueError("average=True cannot be combined with cut_index or cut_value")
     x_axis, y_axis = _as_axis(X, Y)
     times_arr = np.asarray(list(times) if times is not None else [])
     indices = list(time_indices) if time_indices is not None else [0]
@@ -938,16 +946,26 @@ def build_profiles_dataframe(
 
             if projection == "y":
                 cut_axis = "x"
-                idx = _resolve_cut_index(x_axis, cut_index=cut_index, cut_value=cut_value)
                 coord = y_axis
-                values = values_2d[idx, :]
-                resolved_cut_value = x_axis[idx]
+                if average:
+                    idx = -1
+                    values = np.asarray(values_2d).mean(axis=0)
+                    resolved_cut_value = np.nan
+                else:
+                    idx = _resolve_cut_index(x_axis, cut_index=cut_index, cut_value=cut_value)
+                    values = values_2d[idx, :]
+                    resolved_cut_value = x_axis[idx]
             else:
                 cut_axis = "y"
-                idx = _resolve_cut_index(y_axis, cut_index=cut_index, cut_value=cut_value)
                 coord = x_axis
-                values = values_2d[:, idx]
-                resolved_cut_value = y_axis[idx]
+                if average:
+                    idx = -1
+                    values = np.asarray(values_2d).mean(axis=1)
+                    resolved_cut_value = np.nan
+                else:
+                    idx = _resolve_cut_index(y_axis, cut_index=cut_index, cut_value=cut_value)
+                    values = values_2d[:, idx]
+                    resolved_cut_value = y_axis[idx]
 
             time_value = float(times_arr[time_index]) if times_arr.size else np.nan
             field_label = spec.name if species is None else f"{spec.name}_{species}"
@@ -963,6 +981,7 @@ def build_profiles_dataframe(
                         "time": time_value,
                         "projection": projection,
                         "cut_axis": cut_axis,
+                        "reduction": "mean" if average else "slice",
                         "cut_index": int(idx),
                         "cut_value": float(resolved_cut_value),
                         "coord": float(coordinate),
@@ -1446,7 +1465,13 @@ def _append_derived_fields(data: pd.DataFrame, derived: dict[str, str], *, value
     index_cols = [c for c in data.columns if c not in {"field", "species", "field_label", value_col}]
     if not index_cols:
         raise KeyError("Derived fields need at least one column identifying a sample (e.g. coord)")
-    wide = data.pivot_table(index=index_cols, columns="field_label", values=value_col, aggfunc="mean")
+    # groupby(dropna=False) rather than pivot_table: keys can legitimately be
+    # NaN (cut_value for --average profiles) and must not drop those samples.
+    wide = (
+        data.groupby(index_cols + ["field_label"], dropna=False)[value_col]
+        .mean()
+        .unstack("field_label")
+    )
     env = _derived_expression_env(wide)
 
     extras = []
