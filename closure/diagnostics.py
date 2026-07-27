@@ -10,6 +10,7 @@ from __future__ import annotations
 __all__ = [
     "DEFAULT_FIELDS_TO_READ",
     "FieldSpec",
+    "animate_field_panels",
     "apply_normalization",
     "build_profiles_dataframe",
     "compute_common_diagnostics",
@@ -42,6 +43,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+import matplotlib.animation as animation
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -832,6 +834,30 @@ def _panel_grid_figsize(X: np.ndarray, Y: np.ndarray, nrows: int, ncols: int) ->
     return ((panel_width + 0.55) * ncols, (panel_height + 0.7) * nrows)
 
 
+def _draw_panel(
+    fig,
+    ax,
+    X: np.ndarray,
+    Y: np.ndarray,
+    values: np.ndarray,
+    *,
+    cmap_name: str,
+    vmin: float,
+    vmax: float,
+    title: str,
+):
+    """Draw one labelled, colorbar-decorated field panel and return its mesh."""
+    im = ax.pcolormesh(X, Y, values, vmin=vmin, vmax=vmax, cmap=cmap_name)
+    ax.set_aspect("equal")
+    ax.set_title(title)
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes("right", size="5%", pad=0.08)
+    fig.colorbar(im, cax=cax)
+    return im
+
+
 def plot_field_panels(
     data: dict,
     X: np.ndarray,
@@ -866,18 +892,21 @@ def plot_field_panels(
             raise ValueError(f"Field {spec.label!r} must be 2D or 3D, got shape {field_data.shape}")
         values_to_plot = _panel_values(values)
         vmin, vmax = _field_limits(values_to_plot, robust_quantile=robust_quantile)
-        im = ax.pcolormesh(X, Y, values_to_plot, vmin=vmin, vmax=vmax, cmap=get_cmap(spec.name, cmap))
-        ax.set_aspect("equal")
         label = spec.name if species is None else f"{spec.name}_{species}"
         title = f"{run_name}: {label}"
         if time_value is not None:
             title += f", t={time_value:.4g}"
-        ax.set_title(title)
-        ax.set_xlabel("X")
-        ax.set_ylabel("Y")
-        divider = make_axes_locatable(ax)
-        cax = divider.append_axes("right", size="5%", pad=0.08)
-        fig.colorbar(im, cax=cax)
+        _draw_panel(
+            fig,
+            ax,
+            X,
+            Y,
+            values_to_plot,
+            cmap_name=get_cmap(spec.name, cmap),
+            vmin=vmin,
+            vmax=vmax,
+            title=title,
+        )
 
     for ax in axes.ravel()[len(field_specs) :]:
         ax.axis("off")
@@ -886,6 +915,173 @@ def plot_field_panels(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout(pad=0.45, w_pad=0.85, h_pad=1.0)
     fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+    return out_path
+
+
+_TITLE_BAND_INCHES = 0.4
+
+
+def _frame_slice(field_data: np.ndarray, time_index: int) -> np.ndarray:
+    """One 2D frame of a field, tolerating static (2D) fields."""
+    return field_data[..., time_index] if field_data.ndim == 3 else field_data
+
+
+def _panel_time_limits(
+    field_data: np.ndarray, time_indices: list[int], robust_quantile: float
+) -> tuple[float, float, float]:
+    """Sign flip and color limits for one panel, fixed over every plotted frame.
+
+    Computing the limits once over the whole animated window is what keeps the
+    colorbar — and therefore the perceived amplitude — from flickering between
+    frames, unlike :func:`plot_field_panels`, which only ever sees one snapshot.
+    """
+    if field_data.ndim == 3 and time_indices != list(range(field_data.shape[2])):
+        stack = np.take(field_data, time_indices, axis=2)
+    else:
+        stack = field_data
+    flipped = _panel_values(stack)
+    sign = 1.0 if flipped is stack else -1.0
+    vmin, vmax = _field_limits(flipped, robust_quantile=robust_quantile)
+    return sign, vmin, vmax
+
+
+def _resolve_time_indices(time_indices: Iterable[int] | None, n_time: int) -> list[int]:
+    if time_indices is None:
+        return list(range(n_time))
+    resolved = []
+    for raw_index in time_indices:
+        index = int(raw_index)
+        if index < 0:
+            index += n_time
+        if index < 0 or index >= n_time:
+            raise IndexError(f"time index {raw_index} out of range 0..{n_time - 1}")
+        resolved.append(index)
+    if not resolved:
+        raise ValueError("At least one time index is required")
+    return resolved
+
+
+def _movie_writer(output: Path) -> str:
+    return "ffmpeg" if output.suffix.lower() in {".mp4", ".m4v", ".mov", ".avi", ".webm"} else "pillow"
+
+
+def animate_field_panels(
+    data: dict,
+    X: np.ndarray,
+    Y: np.ndarray,
+    field_specs: list[FieldSpec],
+    *,
+    run_name: str,
+    times: Iterable[float] | None = None,
+    time_indices: Iterable[int] | None = None,
+    output: str | Path,
+    ncols: int | None = None,
+    cmap: str = "auto",
+    figsize: tuple[float, float] | None = None,
+    robust_quantile: float = 0.995,
+    fps: int = 5,
+    dpi: int = 150,
+    frames_dir: str | Path | None = None,
+    writer: str | None = None,
+) -> Path:
+    """Animate the :func:`plot_field_panels` grid over time into a GIF or MP4.
+
+    The same panel layout, colormaps and sign convention as the still figure are
+    reused, with two differences: color limits are computed once over all plotted
+    frames so the panels do not flicker, and the run name plus running time move
+    to the figure title so each panel keeps only its field label. Fields loaded as
+    a single 2D snapshot stay static. The writer follows the ``output`` suffix
+    (``.gif`` → pillow, ``.mp4`` → ffmpeg) unless ``writer`` says otherwise. When
+    ``frames_dir`` is given, every frame is also written there as
+    ``frame_<time index>.png``.
+    """
+    if not field_specs:
+        raise ValueError("At least one field is required")
+    times_arr = np.asarray(list(times) if times is not None else [], dtype=float)
+
+    resolved: list[tuple[FieldSpec, str | None, np.ndarray]] = []
+    n_time: int | None = None
+    for spec in field_specs:
+        field_data, species = resolve_field_data(data, spec)
+        if field_data.ndim not in (2, 3):
+            raise ValueError(f"Field {spec.label!r} must be 2D or 3D, got shape {field_data.shape}")
+        if field_data.ndim == 3:
+            n_time = field_data.shape[2] if n_time is None else min(n_time, field_data.shape[2])
+        resolved.append((spec, species, field_data))
+    if n_time is None:
+        n_time = max(int(times_arr.size), 1)
+    indices = _resolve_time_indices(time_indices, n_time)
+
+    panels = []
+    for spec, species, field_data in resolved:
+        sign, vmin, vmax = _panel_time_limits(field_data, indices, robust_quantile)
+        panels.append((spec, species, field_data, sign, vmin, vmax))
+
+    def frame_title(time_index: int) -> str:
+        if time_index < times_arr.size:
+            unit = data.get("timeunit", "") if isinstance(data.get("timeunit"), str) else ""
+            return f"{run_name}, t={times_arr[time_index]:.4g}{unit}"
+        return f"{run_name}, frame {time_index}"
+
+    ncols_eff = ncols or int(np.ceil(np.sqrt(len(panels))))
+    nrows = int(np.ceil(len(panels) / ncols_eff))
+    if figsize is None:
+        panel_width, panel_height = _panel_grid_figsize(X, Y, nrows, ncols_eff)
+        figsize_eff = (panel_width, panel_height + _TITLE_BAND_INCHES)
+    else:
+        figsize_eff = figsize
+    fig, axes = plt.subplots(nrows, ncols_eff, figsize=figsize_eff, squeeze=False)
+
+    meshes = []
+    for index, (spec, species, field_data, sign, vmin, vmax) in enumerate(panels):
+        label = spec.name if species is None else f"{spec.name}_{species}"
+        meshes.append(
+            _draw_panel(
+                fig,
+                axes.ravel()[index],
+                X,
+                Y,
+                sign * _frame_slice(field_data, indices[0]),
+                cmap_name=get_cmap(spec.name, cmap),
+                vmin=vmin,
+                vmax=vmax,
+                # Run name and time live in the figure title, so the panels only
+                # need their field label (run names here are long paths).
+                title=label,
+            )
+        )
+
+    for ax in axes.ravel()[len(panels) :]:
+        ax.axis("off")
+
+    suptitle = fig.suptitle(frame_title(indices[0]))
+    # The figure title carries the running time, so it gets a band of its own
+    # instead of being laid over the panel titles. The frames of an animation all
+    # share one canvas size, so bbox_inches="tight" is not available here.
+    fig.tight_layout(pad=0.45, w_pad=0.85, h_pad=1.0, rect=(0.0, 0.0, 1.0, 1.0 - _TITLE_BAND_INCHES / figsize_eff[1]))
+
+    def update(frame: int):
+        time_index = indices[frame]
+        for mesh, (_, _, field_data, sign, _, _) in zip(meshes, panels, strict=True):
+            mesh.set_array(sign * _frame_slice(field_data, time_index))
+        suptitle.set_text(frame_title(time_index))
+        return [*meshes, suptitle]
+
+    out_path = Path(output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    # blit=False because the animated suptitle lives outside the panel axes and
+    # would otherwise never be redrawn.
+    anim = animation.FuncAnimation(fig, update, frames=len(indices), blit=False)
+    anim.save(out_path, dpi=dpi, fps=fps, writer=writer or _movie_writer(out_path))
+
+    if frames_dir is not None:
+        frames_path = Path(frames_dir)
+        frames_path.mkdir(parents=True, exist_ok=True)
+        for frame, time_index in enumerate(indices):
+            update(frame)
+            fig.savefig(frames_path / f"frame_{time_index:04d}.png", dpi=dpi)
+
     plt.close(fig)
     return out_path
 

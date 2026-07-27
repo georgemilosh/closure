@@ -12,6 +12,7 @@ from closure.diagnostics import (
     _default_overlay_ylabel,
     _overlay_style,
     _read_flags_for_specs,
+    animate_field_panels,
     apply_normalization,
     build_profiles_dataframe,
     discover_menura_iterations,
@@ -163,6 +164,145 @@ def test_plot_field_panels_writes_png(tmp_path):
     assert result == output
     assert output.exists()
     assert output.stat().st_size > 0
+
+
+def test_animate_field_panels_writes_gif_with_one_frame_per_snapshot(tmp_path):
+    from PIL import Image
+
+    X, Y = _toy_grid()
+    output = tmp_path / "fields_movie.gif"
+    result = animate_field_panels(
+        _toy_data(),
+        X,
+        Y,
+        [FieldSpec("Bx"), FieldSpec("rho", "e")],
+        run_name="R0",
+        times=[0.0, 0.5],
+        output=output,
+        dpi=50,
+    )
+    assert result == output
+    with Image.open(output) as movie:
+        assert movie.n_frames == 2
+
+
+def test_animate_field_panels_selects_time_indices_and_saves_frames(tmp_path):
+    X, Y = _toy_grid()
+    frames_dir = tmp_path / "frames"
+    animate_field_panels(
+        _toy_data(),
+        X,
+        Y,
+        [FieldSpec("Bx")],
+        run_name="R0",
+        times=[0.0, 0.5],
+        time_indices=[-1],
+        output=tmp_path / "movie.gif",
+        frames_dir=frames_dir,
+        dpi=50,
+    )
+    # Frames are named by their loaded time index, so -1 lands on frame_0001.
+    assert [p.name for p in sorted(frames_dir.iterdir())] == ["frame_0001.png"]
+
+
+def test_animate_field_panels_uses_limits_fixed_over_all_frames(tmp_path, monkeypatch):
+    from closure import diagnostics
+
+    X, Y = _toy_grid()
+    # Frame 1 is much brighter than frame 0; limits taken from frame 0 alone
+    # would clip it, which is exactly the flicker to avoid.
+    field = np.stack([np.ones((4, 3)), 50.0 * np.ones((4, 3))], axis=-1)
+    clims = []
+    original = diagnostics._draw_panel
+
+    def record(fig, ax, x, y, values, **kwargs):
+        clims.append((kwargs["vmin"], kwargs["vmax"]))
+        return original(fig, ax, x, y, values, **kwargs)
+
+    monkeypatch.setattr(diagnostics, "_draw_panel", record)
+    animate_field_panels(
+        {"Bx": field},
+        X,
+        Y,
+        [FieldSpec("Bx")],
+        run_name="R0",
+        times=[0.0, 1.0],
+        output=tmp_path / "movie.gif",
+        dpi=50,
+    )
+
+    assert len(clims) == 1
+    assert clims[0][1] > 40.0  # covers the bright frame, not just frame 0
+
+
+def test_cli_movie_per_field_writes_one_movie_per_field(tmp_path, monkeypatch):
+    from closure import diagnostics_cli
+
+    X, Y = _toy_grid()
+    calls = []
+    frames = []
+
+    def fake_load(*_args, **_kwargs):
+        return _toy_data(), X, Y, [-1.0, 1.0], [0.0, 0.5]
+
+    def fake_animate(_data, _X, _Y, specs, **kwargs):
+        calls.append((list(specs), kwargs["output"]))
+        frames.append(kwargs)
+        return kwargs["output"]
+
+    monkeypatch.setattr(diagnostics_cli, "load_experiment_data", fake_load)
+    monkeypatch.setattr(diagnostics_cli, "animate_field_panels", fake_animate)
+
+    args = diagnostics_cli.build_parser().parse_args(
+        [
+            "movie",
+            "R0",
+            "--fields",
+            "Bx,rho_e",
+            "--per-field",
+            "--save-frames",
+            # Ignored (with a warning) because this run writes more than one movie;
+            # honoring it would pile every field's frames into one directory.
+            "--frames-dir",
+            str(tmp_path / "shared"),
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+    args.func(args)
+
+    assert [specs for specs, _ in calls] == [[FieldSpec("Bx")], [FieldSpec("rho", "e")]]
+    assert [out.name for _, out in calls] == ["Bx_movie.gif", "rho_e_movie.gif"]
+    assert all(out.parent == tmp_path / "R0" for _, out in calls)
+    assert [kwargs["frames_dir"].name for kwargs in frames] == ["Bx_movie_frames", "rho_e_movie_frames"]
+
+
+def test_cli_movie_defaults_to_all_snapshots_and_one_panel_grid(tmp_path, monkeypatch):
+    from closure import diagnostics_cli
+
+    X, Y = _toy_grid()
+    calls = []
+
+    monkeypatch.setattr(
+        diagnostics_cli,
+        "load_experiment_data",
+        lambda *a, **k: (_toy_data(), X, Y, [-1.0, 1.0], [0.0, 0.5]),
+    )
+    monkeypatch.setattr(
+        diagnostics_cli,
+        "animate_field_panels",
+        lambda *a, **kwargs: calls.append(kwargs) or kwargs["output"],
+    )
+
+    args = diagnostics_cli.build_parser().parse_args(
+        ["movie", "R0", "--fields", "Bx,rho_e", "--format", "mp4", "--fps", "12", "--output", str(tmp_path / "m.mp4")]
+    )
+    assert args.choose_times == "all"
+    args.func(args)
+
+    assert len(calls) == 1
+    assert calls[0]["output"] == tmp_path / "m.mp4"
+    assert calls[0]["fps"] == 12
 
 
 def test_plot_csv_overlay_writes_png(tmp_path):

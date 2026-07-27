@@ -116,8 +116,17 @@ run_one() {
   esac
 
   # Architecture override (MLP feature_dims). Baseline = 26.6K (the best-generalising size, §5.16.2).
+  # Depth ladder: each step inserts ONE more 128-wide hidden layer before the 128->64 head, so
+  # width/dropout pattern stay fixed and only depth varies (noJnoE, P: 26K/42K/59K/75K/92K params):
+  #   shallower 3 layers | baseline 4 | deeper 5 | deeper2 6 | deeper3 7 | deeper4 8
   if [[ "$arch" == "deeper" ]]; then
     arch_override="--model.network.init_args.feature_dims=[${feature_channels},128,128,128,64,${target_channels}] --model.network.init_args.activations=[SiLU,SiLU,SiLU,SiLU,null] --model.network.init_args.dropouts=[0.0,0.15,0.15,0.1,0.0]"
+  elif [[ "$arch" == "deeper2" ]]; then
+    arch_override="--model.network.init_args.feature_dims=[${feature_channels},128,128,128,128,64,${target_channels}] --model.network.init_args.activations=[SiLU,SiLU,SiLU,SiLU,SiLU,null] --model.network.init_args.dropouts=[0.0,0.15,0.15,0.15,0.1,0.0]"
+  elif [[ "$arch" == "deeper3" ]]; then
+    arch_override="--model.network.init_args.feature_dims=[${feature_channels},128,128,128,128,128,64,${target_channels}] --model.network.init_args.activations=[SiLU,SiLU,SiLU,SiLU,SiLU,SiLU,null] --model.network.init_args.dropouts=[0.0,0.15,0.15,0.15,0.15,0.1,0.0]"
+  elif [[ "$arch" == "deeper4" ]]; then
+    arch_override="--model.network.init_args.feature_dims=[${feature_channels},128,128,128,128,128,128,64,${target_channels}] --model.network.init_args.activations=[SiLU,SiLU,SiLU,SiLU,SiLU,SiLU,SiLU,null] --model.network.init_args.dropouts=[0.0,0.15,0.15,0.15,0.15,0.15,0.1,0.0]"
   elif [[ "$arch" == "shallower" ]]; then
     arch_override="--model.network.init_args.feature_dims=[${feature_channels},128,64,${target_channels}] --model.network.init_args.activations=[SiLU,SiLU,null] --model.network.init_args.dropouts=[0.0,0.1,0.0]"
   elif [[ "$arch" == "baseline" ]]; then

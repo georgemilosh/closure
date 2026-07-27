@@ -49,7 +49,7 @@ CH = {"default": 10, "noE": 7, "noJ": 7, "noJnoE": 4}
 BS = {"CNN": 4, "MLP": 8096}                 # eager batch size (forward-only)
 FEATURES = ["default", "noE", "noJ", "noJnoE"]
 TARGETS = ["P", "divP"]
-ARCHS = os.environ.get("ARCHS", "baseline shallower deeper").split()   # all archs by default
+ARCHS = os.environ.get("ARCHS", "baseline shallower deeper deeper2 deeper3 deeper4").split()  # all archs by default; cells with no checkpoint are skipped
 
 EVAL_SPLITS = os.environ.get("EVAL_SPLITS", "test val").split()
 FULL_TEST = os.environ.get("TEST_SPLIT", "./splits/iPiC3D-nathan5-12/RunID_5_step100.csv")  # f2: RunID_5_f2_step100.csv
