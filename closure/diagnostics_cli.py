@@ -24,6 +24,7 @@ from closure.diagnostics import (
     export_reconnection_dataframe,
     load_experiment_data,
     parse_field_specs,
+    parse_limit_arg,
     plot_csv_overlay,
     plot_field_panels,
 )
@@ -58,6 +59,14 @@ def _parse_species(value: str) -> list[str]:
     return [part.strip() for part in value.split(",") if part.strip()]
 
 
+def _parse_limit(value: str) -> float | dict[str, float]:
+    """argparse type for --vmin/--vmax: a number or field=number assignments."""
+    try:
+        return parse_limit_arg(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
+
+
 def _parse_factor(value: str) -> float:
     cleaned = value.strip().lower().replace("*", "")
     if cleaned == "pi":
@@ -66,6 +75,28 @@ def _parse_factor(value: str) -> float:
         factor = cleaned[:-2]
         return float(factor or 1.0) * math.pi
     return float(value)
+
+
+def _add_color_options(parser: argparse.ArgumentParser) -> None:
+    """Colormap and color-limit options shared by `fields` and `movie`."""
+    parser.add_argument("--cmap", default="auto", help="Colormap for every panel, or auto for the per-field default")
+    parser.add_argument(
+        "--robust-quantile",
+        type=float,
+        default=0.995,
+        help="Quantile of |field| used for the automatic color limits (1.0 uses the full range)",
+    )
+    for bound in ("vmin", "vmax"):
+        parser.add_argument(
+            f"--{bound}",
+            type=_parse_limit,
+            default=None,
+            help=f"Override the automatic {bound}: one number for every panel (0.05), per-field "
+            "assignments (Bz=0.05,rho_i=2, where rho=2 covers both species), or a mix where the "
+            "bare number is the fallback (0.05,Bz=0.1). Limits are in plotted units, so "
+            "sign-flipped panels take positive bounds; giving only one bound of a symmetric "
+            "(diverging) panel mirrors it",
+        )
 
 
 def _add_load_options(parser: argparse.ArgumentParser, *, default_choose_times: str) -> None:
@@ -162,6 +193,9 @@ def _cmd_fields(args: argparse.Namespace) -> None:
             output=output,
             ncols=args.ncols,
             cmap=args.cmap,
+            robust_quantile=args.robust_quantile,
+            vmin=args.vmin,
+            vmax=args.vmax,
         )
         logger.info("Saved field panel: %s", path)
 
@@ -208,6 +242,9 @@ def _cmd_movie(args: argparse.Namespace) -> None:
                 output=output,
                 ncols=args.ncols,
                 cmap=args.cmap,
+                robust_quantile=args.robust_quantile,
+                vmin=args.vmin,
+                vmax=args.vmax,
                 fps=args.fps,
                 dpi=args.dpi,
                 frames_dir=frames_dir,
@@ -624,7 +661,7 @@ def build_parser() -> argparse.ArgumentParser:
     fields.add_argument("--output", default=None, help="Output path for one experiment")
     fields.add_argument("--output-dir", default="diagnostics", help="Output directory for generated figures")
     fields.add_argument("--ncols", type=int, default=None, help="Number of panel columns")
-    fields.add_argument("--cmap", default="auto", help="Colormap or auto")
+    _add_color_options(fields)
     fields.set_defaults(func=_cmd_fields)
 
     movie = subparsers.add_parser(
@@ -632,14 +669,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Animate the `fields` panels over time into a GIF or MP4",
         description="Same panels, colormaps and load options as `fields`, but animated over every "
         "loaded snapshot. Use --choose-times to pick the window (e.g. all, 0:40, 0:40:2); color "
-        "limits are computed once over the whole window so the panels do not flicker.",
+        "limits are computed once over the whole window so the panels do not flicker, and "
+        "--vmin/--vmax/--robust-quantile override them.",
     )
     _add_load_options(movie, default_choose_times="all")
     movie.add_argument("--fields", default="Az,Ey,Ez,rho_e,rho_i,Jz_e,Jz_i,Bx,By,Bz", help="Comma-separated fields")
     movie.add_argument("--output", default=None, help="Output path for a single movie (one experiment, panel mode)")
     movie.add_argument("--output-dir", default="diagnostics", help="Output directory for generated movies")
     movie.add_argument("--ncols", type=int, default=None, help="Number of panel columns")
-    movie.add_argument("--cmap", default="auto", help="Colormap or auto")
+    _add_color_options(movie)
     movie.add_argument("--format", choices=["gif", "mp4"], default="gif", help="Movie container (mp4 needs ffmpeg)")
     movie.add_argument("--fps", type=int, default=5, help="Frames per second")
     movie.add_argument("--dpi", type=int, default=150, help="Saved movie DPI")

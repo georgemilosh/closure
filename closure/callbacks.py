@@ -125,7 +125,10 @@ class TorchScriptCheckpointExportCallback(L.Callback):
         ckpt_path: Path,
         pl_module: L.LightningModule,
     ) -> None:
-        checkpoint = torch.load(str(ckpt_path), map_location="cpu")
+        # weights_only=False is required from torch 2.6 on, where the default flipped to True:
+        # Lightning checkpoints carry pickled hyperparameters, not just tensors. The file was
+        # written by this very run, so there is no untrusted input here.
+        checkpoint = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
         state_dict = checkpoint.get("state_dict", checkpoint)
         network_state_dict = {
             key.removeprefix("network."): value.detach().cpu()

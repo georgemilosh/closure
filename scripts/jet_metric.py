@@ -78,7 +78,7 @@ from closure.diagnostics import (
 _PATHS = config.load_paths()
 _REPO_ROOT = Path(config.__file__).resolve().parents[1]
 DIAGNOSTICS_BASE = str(_PATHS.get("diagnostics_dir") or (_REPO_ROOT / "diagnostics"))
-RUNS_BASE = _PATHS.get("menura_runs_dir") or "/dodrio/scratch/projects/2026_018/george/menura/runs"
+RUNS_BASE = _PATHS.get("menura_runs_dir") or "/esat/cpadata/georgem/2025_112/georgem/menura/runs"
 #: ECsim/iPiC3D data root that a relative --ecsim-files-path is prepended with.
 ECSIM_PREPEND = _PATHS.get("data_dir") or "."
 #: Default ECsim/iPiC3D subpath under ECSIM_PREPEND (see --ecsim-files-path).
@@ -122,6 +122,27 @@ def _parse_pair(value):
 
 def _parse_list(value):
     return [v.strip() for v in str(value).split(",") if v.strip()]
+
+
+#: Map overlays --hide-overlays can switch off, with what each one draws. They
+#: are drawing only: the X/O anchors, the peak index and the fitted rectangle are
+#: computed either way and still feed the cuts, the panel titles and the CSV.
+MAP_OVERLAYS = {
+    "xo": "red x at the X point, white o at the O point",
+    "peak": "orange ring at the sheet-line |Jz| peak",
+    "rect": "dotted orange outflow rectangle",
+}
+
+
+def _parse_overlays(value):
+    """argparse type for --hide-overlays: a comma list of MAP_OVERLAYS names."""
+    names = set(_parse_list(value))
+    unknown = sorted(names - set(MAP_OVERLAYS))
+    if unknown:
+        raise argparse.ArgumentTypeError(
+            f"Unknown overlay {', '.join(unknown)}; choose from "
+            f"{', '.join(MAP_OVERLAYS)}")
+    return names
 
 
 def model_description(campaign, regime, run, runs_base=RUNS_BASE):
@@ -347,6 +368,19 @@ def build_parser():
                         "white contour on the maps: the level set, scanned between "
                         "Az_X and the lobe value, across which median |Jz| jumps "
                         "most sharply - the physical sheet boundary)")
+    parser.add_argument("--hide-overlays", type=_parse_overlays, default=set(),
+                        metavar="NAME[,NAME...]",
+                        help="Map overlays to leave undrawn: "
+                        + "; ".join(f"{name} ({what})"
+                                    for name, what in MAP_OVERLAYS.items())
+                        + ". Presentation only - every anchor still sets the "
+                        "x=const cuts, the rectangle fit and the separatrix scan, "
+                        "so no reported number changes")
+    parser.add_argument("--dashed-cut-guides", action="store_true",
+                        help="Draw the right-edge (orange) x=const guide line on "
+                        "the maps dashed like the left-edge one instead of solid; "
+                        "the two map lines then no longer echo the solid/dashed "
+                        "styles of the matching curves in the cut panel")
     parser.add_argument("--no-ecsim", action="store_true",
                         help="Skip the ECsim reference row")
     # Map rendering, defaults matching the compute_movie_field.py slide style.
@@ -369,6 +403,9 @@ def build_parser():
                         "montage from growing very tall")
     parser.add_argument("--output-dir", default=None,
                         help="Default: <diagnostics>/<campaign>/jet_metric")
+    parser.add_argument("--runs-base", default=RUNS_BASE,
+                        help="Root of menura campaign run trees "
+                        "(<campaign>/<regime>/<run>). Overrides paths.yaml/defaults")
     parser.add_argument("--dpi", type=int, default=130)
     return parser
 
@@ -759,15 +796,17 @@ def main(argv=None):
 
     recon = pd.read_csv(f"{diag}/{R}/reconnection_menura.csv")
 
-    code = resolve_code(args.campaign, R, args.code, recon=recon)
+    code = resolve_code(args.campaign, R, args.code, recon=recon,
+                        runs_base=args.runs_base)
     tag = code or "all"                          # figure name / titles
     models = args.models
     if models is None:
-        models = discover_models(args.campaign, R, code, recon=recon)
+        models = discover_models(args.campaign, R, code, recon=recon,
+                                 runs_base=args.runs_base)
         if not models:
             want = f"{code}_* runs" if code else "run directories"
             raise SystemExit(
-                f"No {want} found for {args.campaign}/{R} under {RUNS_BASE} or "
+                f"No {want} found for {args.campaign}/{R} under {args.runs_base} or "
                 f"in the reconnection CSV; pass --models explicitly")
         print(f"{len(models)} models discovered in {args.campaign}/{R}"
               f"{f' ({code})' if code else ''}: {', '.join(models)}")
@@ -852,7 +891,7 @@ def main(argv=None):
         # widest campaign label measures 2.60 in at fontsize 8 against a
         # ~2.65 in panel, so it fits; empty for a run whose parameters.h is
         # gone, and the title is then just the run.
-        desc = model_description(args.campaign, R, run)
+        desc = model_description(args.campaign, R, run, runs_base=args.runs_base)
         head = f"{run}  {desc}" if desc else run
         sub_df = recon[recon["run"] == run]
         for frac in args.fracs:
@@ -863,7 +902,7 @@ def main(argv=None):
                 if th is None or xp is None:
                     raise CaseError("no usable threshold/X point")
                 vals, x_axis, y_axis, flabel, dcase = load_case(
-                    run, f"{RUNS_BASE}/{args.campaign}/{R}", th[0], args,
+                    run, f"{args.runs_base}/{args.campaign}/{R}", th[0], args,
                     backend="menura", choose_species=["e", "i"],
                     normalization="none",
                 )
@@ -1050,10 +1089,11 @@ def main(argv=None):
                        vmin=vmin, vmax=vmax, cmap=cmap)
         cax = make_axes_locatable(ax).append_axes("right", size="3%", pad=0.05)
         fig.colorbar(im, cax=cax).ax.tick_params(labelsize=6)
-        ax.plot(x_axis[ixl], y_axis[iyl], "rx", ms=9, mew=2)
-        if o_mark is not None and 0 <= o_mark[1] < vals.shape[1]:
-            ax.plot(x_axis[o_mark[0]], y_axis[o_mark[1]], "o", ms=9,
-                    markerfacecolor="white", markeredgecolor="black", mew=1.8)
+        if "xo" not in args.hide_overlays:
+            ax.plot(x_axis[ixl], y_axis[iyl], "rx", ms=9, mew=2)
+            if o_mark is not None and 0 <= o_mark[1] < vals.shape[1]:
+                ax.plot(x_axis[o_mark[0]], y_axis[o_mark[1]], "o", ms=9,
+                        markerfacecolor="white", markeredgecolor="black", mew=1.8)
         if sep is not None:
             ax.contour(x_axis, y_axis, sep["az"].T, levels=[sep["level"]],
                        colors="white", linewidths=0.9)
@@ -1061,12 +1101,14 @@ def main(argv=None):
         # and colors match the curves there.
         dxm = float(x_axis[1] - x_axis[0])
         offm = max(1, int(round(args.near_window_di / dxm)))
-        for sgn, color, ls in ((-1, "tab:blue", "--"), (+1, "tab:orange", "-")):
+        right_ls = "--" if args.dashed_cut_guides else "-"
+        for sgn, color, ls in ((-1, "tab:blue", "--"), (+1, "tab:orange", right_ls)):
             icm = int(np.clip(ixl + sgn * offm, 0, vals.shape[0] - 1))
             ax.axvline(x_axis[icm], color=color, linestyle=ls, linewidth=1.0,
                        alpha=0.85)
-        ax.plot(x_axis[m["peak_i"]], y_axis[iyl], "o", ms=7,
-                markerfacecolor="none", markeredgecolor="orange", mew=2)
+        if "peak" not in args.hide_overlays:
+            ax.plot(x_axis[m["peak_i"]], y_axis[iyl], "o", ms=7,
+                    markerfacecolor="none", markeredgecolor="orange", mew=2)
         # Fallback aperture only: with a separatrix the white contour IS the
         # aperture boundary, so the fixed green dashed band would mislead.
         y_lo, y_hi = y_axis[m["band_lo_i"]], y_axis[m["band_hi_i"]]
@@ -1078,7 +1120,7 @@ def main(argv=None):
         # point, rotated to the angle maximising mean |Jz|, grown along that
         # direction until the current intensification ends. Its length IS the
         # outflow extent; nothing else is boxed any more.
-        if rect is not None:
+        if rect is not None and "rect" not in args.hide_overlays:
             ax.add_patch(plt.Polygon(rect["corners"], closed=True, fill=False,
                                      edgecolor="orange", linestyle=":",
                                      linewidth=1.6))
@@ -1144,11 +1186,21 @@ def main(argv=None):
                         top=1 - TOP_PAD / fig_h,   # suptitle (2 lines)
                         bottom=BOT_PAD / fig_h,
                         wspace=WSPACE, hspace=HSPACE)
+    # The map legend lists only what is actually drawn, so --hide-overlays does
+    # not leave the figure promising marks it no longer carries.
+    drawn = []
+    if "xo" not in args.hide_overlays:
+        drawn.append("red x=X, white o=O")
+    if not args.no_separatrix:
+        drawn.append("white=separatrix")
+    if "rect" not in args.hide_overlays:
+        drawn.append("dotted orange=outflow rectangle")
+    drawn.append("blue/orange lines=the two x=const cuts")
     fig.suptitle(
         f"{args.campaign} {R}/{tag}: lower-sheet jet metric, field {args.field}, "
         f"thresholds {args.fracs} of peak {args.rate_column}\n"
         "each case = [Jz map | Jz(y) cut at the x=const outflow crossings]; "
-        "map: red x=X, white o=O, white=separatrix, dotted orange=outflow rectangle",
+        f"map: {', '.join(drawn)}",
         fontsize=12, y=1 - 0.12 / fig_h,
     )
     out = out_dir / f"{R}_{tag}.png"

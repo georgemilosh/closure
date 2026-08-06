@@ -24,6 +24,7 @@ __all__ = [
     "load_menura_data",
     "normalize_field_name",
     "parse_field_specs",
+    "parse_limit_arg",
     "plot_csv_overlay",
     "plot_field_panels",
     "resolve_field_data",
@@ -41,7 +42,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Mapping
 
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
@@ -821,6 +822,124 @@ def _panel_values(values: np.ndarray) -> np.ndarray:
     return values
 
 
+LIMIT_WILDCARD = "*"
+
+
+def _canonical_limit_key(key: str) -> str:
+    """Normalize one color-limit key the same way a ``--fields`` entry is."""
+    cleaned = str(key).strip()
+    if cleaned == LIMIT_WILDCARD:
+        return LIMIT_WILDCARD
+    specs = parse_field_specs(cleaned)
+    return specs[0].label if specs else cleaned
+
+
+def parse_limit_arg(value: str | float | Mapping[str, float] | None) -> float | dict[str, float] | None:
+    """Parse a ``--vmin``/``--vmax`` argument into a color-limit override.
+
+    Accepts a bare number for every panel (``"0.05"``), per-field assignments
+    keyed by field label (``"Bz=0.05,rho_i=2"``, with ``rho=2`` covering every
+    species of ``rho``), or a mix where the bare number is the fallback for the
+    fields not named (``"0.05,Bz=0.1"``). Keys are canonicalized by
+    :func:`parse_field_specs`, so ``--fields`` aliases work here too. Returns
+    ``None``, a float, or a mapping keyed by canonical label in which
+    :data:`LIMIT_WILDCARD` holds the fallback.
+    """
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        return {_canonical_limit_key(key): float(number) for key, number in value.items()}
+    if not isinstance(value, str):
+        return float(value)
+
+    overrides: dict[str, float] = {}
+    for token in _parse_list_arg(value):
+        key, separator, raw_number = token.partition("=")
+        if not separator:
+            key, raw_number = LIMIT_WILDCARD, token
+        try:
+            overrides[_canonical_limit_key(key)] = float(raw_number)
+        except ValueError:
+            raise ValueError(f"Expected a number or field=number color limit, got {token!r}") from None
+    if not overrides:
+        return None
+    if set(overrides) == {LIMIT_WILDCARD}:
+        return overrides[LIMIT_WILDCARD]
+    return overrides
+
+
+def _limit_for(override: float | Mapping[str, float] | None, label: str, spec: FieldSpec) -> float | None:
+    """The color bound that applies to one panel, or ``None`` to stay automatic.
+
+    A panel is matched by its resolved label first (``rho_e``), then by the label
+    as requested and by the bare field name (``rho``, so one key can cover both
+    species), then by the wildcard fallback.
+    """
+    if override is None:
+        return None
+    if not isinstance(override, Mapping):
+        return float(override)
+    for key in (label, spec.label, spec.name, LIMIT_WILDCARD):
+        if key in override:
+            return float(override[key])
+    return None
+
+
+def _warn_unused_limits(
+    override: float | Mapping[str, float] | None, panels: Iterable[tuple[str, FieldSpec]], argument: str
+) -> None:
+    """Warn about limit keys that name no plotted panel, which are silent typos."""
+    if not isinstance(override, Mapping):
+        return
+    panels = list(panels)
+    known = {LIMIT_WILDCARD}
+    for label, spec in panels:
+        known |= {label, spec.label, spec.name}
+    unused = sorted(set(override) - known)
+    if unused:
+        logger.warning(
+            "%s: no plotted field matches %s; panels are %s",
+            argument,
+            ", ".join(unused),
+            ", ".join(sorted({label for label, _ in panels})),
+        )
+
+
+def _apply_limit_overrides(
+    vmin_auto: float, vmax_auto: float, vmin: float | None, vmax: float | None
+) -> tuple[float, float]:
+    """Fold explicit bounds into the automatically computed limits of one panel.
+
+    Signed fields get symmetric automatic limits, so supplying only one bound
+    mirrors it (``--vmax 0.05`` gives ``(-0.05, 0.05)``) rather than leaving a
+    lopsided diverging colorbar; a panel whose automatic range already starts at
+    zero keeps its other automatic bound. Supplying both is taken verbatim.
+    """
+    if vmin is None and vmax is None:
+        return vmin_auto, vmax_auto
+    symmetric = vmin_auto < 0.0 and abs(vmin_auto + vmax_auto) <= 1e-9 * max(abs(vmin_auto), abs(vmax_auto))
+    low = vmin
+    high = vmax
+    if low is None:
+        low = -abs(high) if symmetric else vmin_auto
+    if high is None:
+        high = abs(low) if symmetric else vmax_auto
+    if not low < high:
+        raise ValueError(f"Color limits must satisfy vmin < vmax, got vmin={low!r}, vmax={high!r}")
+    return float(low), float(high)
+
+
+def _panel_limits(
+    auto_limits: tuple[float, float],
+    spec: FieldSpec,
+    label: str,
+    vmin: float | Mapping[str, float] | None,
+    vmax: float | Mapping[str, float] | None,
+) -> tuple[float, float]:
+    """Automatic limits for one panel with any user override applied."""
+    return _apply_limit_overrides(*auto_limits, _limit_for(vmin, label, spec), _limit_for(vmax, label, spec))
+
+
 def _panel_grid_figsize(X: np.ndarray, Y: np.ndarray, nrows: int, ncols: int) -> tuple[float, float]:
     x_axis, y_axis = _as_axis(X, Y)
     x_span = float(np.nanmax(x_axis) - np.nanmin(x_axis))
@@ -872,8 +991,17 @@ def plot_field_panels(
     cmap: str = "auto",
     figsize: tuple[float, float] | None = None,
     robust_quantile: float = 0.995,
+    vmin: float | Mapping[str, float] | None = None,
+    vmax: float | Mapping[str, float] | None = None,
 ) -> Path:
-    """Save a grid of requested fields, similar to notebook ``plot_requested_fields``."""
+    """Save a grid of requested fields, similar to notebook ``plot_requested_fields``.
+
+    Color limits default to :func:`_field_limits` at ``robust_quantile``; ``vmin``
+    and ``vmax`` override them, either as one number for every panel or as a
+    mapping keyed by field label (see :func:`parse_limit_arg`). Limits are read in
+    plotted units, so an all-negative field — drawn sign-flipped, like ``rho_e``
+    under a negative-charge convention — takes positive bounds.
+    """
     if not field_specs:
         raise ValueError("At least one field is required")
     ncols_eff = ncols or int(np.ceil(np.sqrt(len(field_specs))))
@@ -881,6 +1009,7 @@ def plot_field_panels(
     figsize_eff = figsize or _panel_grid_figsize(X, Y, nrows, ncols_eff)
     fig, axes = plt.subplots(nrows, ncols_eff, figsize=figsize_eff, squeeze=False)
 
+    panels: list[tuple[str, FieldSpec]] = []
     for index, spec in enumerate(field_specs):
         ax = axes.ravel()[index]
         field_data, species = resolve_field_data(data, spec)
@@ -891,8 +1020,10 @@ def plot_field_panels(
         else:
             raise ValueError(f"Field {spec.label!r} must be 2D or 3D, got shape {field_data.shape}")
         values_to_plot = _panel_values(values)
-        vmin, vmax = _field_limits(values_to_plot, robust_quantile=robust_quantile)
         label = spec.name if species is None else f"{spec.name}_{species}"
+        panels.append((label, spec))
+        auto_limits = _field_limits(values_to_plot, robust_quantile=robust_quantile)
+        panel_vmin, panel_vmax = _panel_limits(auto_limits, spec, label, vmin, vmax)
         title = f"{run_name}: {label}"
         if time_value is not None:
             title += f", t={time_value:.4g}"
@@ -903,10 +1034,13 @@ def plot_field_panels(
             Y,
             values_to_plot,
             cmap_name=get_cmap(spec.name, cmap),
-            vmin=vmin,
-            vmax=vmax,
+            vmin=panel_vmin,
+            vmax=panel_vmax,
             title=title,
         )
+
+    _warn_unused_limits(vmin, panels, "vmin")
+    _warn_unused_limits(vmax, panels, "vmax")
 
     for ax in axes.ravel()[len(field_specs) :]:
         ax.axis("off")
@@ -980,6 +1114,8 @@ def animate_field_panels(
     cmap: str = "auto",
     figsize: tuple[float, float] | None = None,
     robust_quantile: float = 0.995,
+    vmin: float | Mapping[str, float] | None = None,
+    vmax: float | Mapping[str, float] | None = None,
     fps: int = 5,
     dpi: int = 150,
     frames_dir: str | Path | None = None,
@@ -995,6 +1131,10 @@ def animate_field_panels(
     (``.gif`` → pillow, ``.mp4`` → ffmpeg) unless ``writer`` says otherwise. When
     ``frames_dir`` is given, every frame is also written there as
     ``frame_<time index>.png``.
+
+    ``vmin``/``vmax`` override those fixed limits per panel exactly as in
+    :func:`plot_field_panels` — one number for every panel or a mapping keyed by
+    field label (see :func:`parse_limit_arg`) — and stay fixed over the movie.
     """
     if not field_specs:
         raise ValueError("At least one field is required")
@@ -1014,9 +1154,16 @@ def animate_field_panels(
     indices = _resolve_time_indices(time_indices, n_time)
 
     panels = []
+    labelled: list[tuple[str, FieldSpec]] = []
     for spec, species, field_data in resolved:
-        sign, vmin, vmax = _panel_time_limits(field_data, indices, robust_quantile)
-        panels.append((spec, species, field_data, sign, vmin, vmax))
+        label = spec.name if species is None else f"{spec.name}_{species}"
+        labelled.append((label, spec))
+        sign, auto_vmin, auto_vmax = _panel_time_limits(field_data, indices, robust_quantile)
+        panel_vmin, panel_vmax = _panel_limits((auto_vmin, auto_vmax), spec, label, vmin, vmax)
+        panels.append((spec, species, field_data, sign, panel_vmin, panel_vmax))
+
+    _warn_unused_limits(vmin, labelled, "vmin")
+    _warn_unused_limits(vmax, labelled, "vmax")
 
     def frame_title(time_index: int) -> str:
         if time_index < times_arr.size:
@@ -1034,7 +1181,7 @@ def animate_field_panels(
     fig, axes = plt.subplots(nrows, ncols_eff, figsize=figsize_eff, squeeze=False)
 
     meshes = []
-    for index, (spec, species, field_data, sign, vmin, vmax) in enumerate(panels):
+    for index, (spec, species, field_data, sign, panel_vmin, panel_vmax) in enumerate(panels):
         label = spec.name if species is None else f"{spec.name}_{species}"
         meshes.append(
             _draw_panel(
@@ -1044,8 +1191,8 @@ def animate_field_panels(
                 Y,
                 sign * _frame_slice(field_data, indices[0]),
                 cmap_name=get_cmap(spec.name, cmap),
-                vmin=vmin,
-                vmax=vmax,
+                vmin=panel_vmin,
+                vmax=panel_vmax,
                 # Run name and time live in the figure title, so the panels only
                 # need their field label (run names here are long paths).
                 title=label,

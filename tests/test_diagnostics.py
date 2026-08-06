@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from closure.diagnostics import (
     DEFAULT_FIELDS_TO_READ,
     FieldSpec,
     _add_notebook_recon_normalization,
+    _apply_limit_overrides,
     _csv_source_labels,
     _default_overlay_xlabel,
     _default_overlay_ylabel,
@@ -18,6 +20,7 @@ from closure.diagnostics import (
     discover_menura_iterations,
     discover_menura_runs,
     parse_field_specs,
+    parse_limit_arg,
     plot_csv_overlay,
     plot_field_panels,
     resolve_field_data,
@@ -233,6 +236,180 @@ def test_animate_field_panels_uses_limits_fixed_over_all_frames(tmp_path, monkey
 
     assert len(clims) == 1
     assert clims[0][1] > 40.0  # covers the bright frame, not just frame 0
+
+
+def test_parse_limit_arg_reads_numbers_per_field_keys_and_fallbacks():
+    assert parse_limit_arg(None) is None
+    assert parse_limit_arg("0.05") == 0.05
+    # A bare number mixed with assignments becomes the wildcard fallback, and
+    # keys normalize the same way --fields entries do (Jztot -> Jz-tot).
+    assert parse_limit_arg("0.05,Bz=0.1,Jztot=3") == {"*": 0.05, "Bz": 0.1, "Jz-tot": 3.0}
+    assert parse_limit_arg({"rho": 2}) == {"rho": 2.0}
+    with pytest.raises(ValueError):
+        parse_limit_arg("Bz=loud")
+
+
+def test_apply_limit_overrides_mirrors_a_single_bound_only_when_symmetric():
+    assert _apply_limit_overrides(-1.0, 1.0, None, None) == (-1.0, 1.0)
+    # Signed (diverging) panel: one bound sets both, so the colorbar stays centered.
+    assert _apply_limit_overrides(-1.0, 1.0, None, 0.05) == (-0.05, 0.05)
+    assert _apply_limit_overrides(-1.0, 1.0, -0.05, None) == (-0.05, 0.05)
+    # Positive-definite panel: the unspecified bound stays automatic.
+    assert _apply_limit_overrides(0.0, 4.0, None, 2.0) == (0.0, 2.0)
+    assert _apply_limit_overrides(0.0, 4.0, 1.0, None) == (1.0, 4.0)
+    assert _apply_limit_overrides(0.0, 4.0, -1.0, 2.0) == (-1.0, 2.0)
+    with pytest.raises(ValueError):
+        _apply_limit_overrides(0.0, 4.0, 3.0, 1.0)
+
+
+def _record_panel_clims(monkeypatch):
+    """Capture the (label, vmin, vmax) each panel is drawn with."""
+    from closure import diagnostics
+
+    clims = []
+    original = diagnostics._draw_panel
+
+    def record(fig, ax, x, y, values, **kwargs):
+        clims.append((kwargs["title"], kwargs["vmin"], kwargs["vmax"]))
+        return original(fig, ax, x, y, values, **kwargs)
+
+    monkeypatch.setattr(diagnostics, "_draw_panel", record)
+    return clims
+
+
+def _signed_and_positive_data():
+    signed = np.linspace(-3.0, 3.0, 4 * 3 * 2).reshape(4, 3, 2)
+    return {"Bz": signed, "rho": {"e": np.ones((4, 3, 2)), "i": 2.0 * np.ones((4, 3, 2))}}
+
+
+def test_plot_field_panels_applies_per_field_color_limits(tmp_path, monkeypatch):
+    X, Y = _toy_grid()
+    clims = _record_panel_clims(monkeypatch)
+
+    plot_field_panels(
+        _signed_and_positive_data(),
+        X,
+        Y,
+        [FieldSpec("Bz"), FieldSpec("rho", "i")],
+        run_name="R0",
+        output=tmp_path / "fields.png",
+        # `rho` keys both species; the Bz bound is mirrored because Bz diverges.
+        vmax=parse_limit_arg("Bz=0.05,rho=8"),
+    )
+
+    limits = {title.split(": ")[-1]: (vmin, vmax) for title, vmin, vmax in clims}
+    assert limits["Bz"] == (-0.05, 0.05)
+    assert limits["rho_i"] == (0.0, 8.0)
+
+
+def test_plot_field_panels_warns_about_limit_keys_that_match_no_panel(tmp_path, caplog):
+    X, Y = _toy_grid()
+    with caplog.at_level("WARNING", logger="closure.diagnostics"):
+        plot_field_panels(
+            _signed_and_positive_data(),
+            X,
+            Y,
+            [FieldSpec("Bz")],
+            run_name="R0",
+            output=tmp_path / "fields.png",
+            vmax=parse_limit_arg("Bzz=0.05"),
+        )
+    assert "Bzz" in caplog.text
+
+
+def test_animate_field_panels_honors_limit_and_quantile_overrides(tmp_path, monkeypatch):
+    X, Y = _toy_grid()
+    clims = _record_panel_clims(monkeypatch)
+
+    animate_field_panels(
+        _signed_and_positive_data(),
+        X,
+        Y,
+        [FieldSpec("Bz"), FieldSpec("rho", "e")],
+        run_name="R0",
+        times=[0.0, 0.5],
+        output=tmp_path / "movie.gif",
+        dpi=50,
+        vmin=parse_limit_arg("rho_e=0.5"),
+        vmax=parse_limit_arg("Bz=1.5"),
+        robust_quantile=1.0,
+    )
+
+    # Panels are drawn once and reused for every frame, so one entry each.
+    limits = {title: (vmin, vmax) for title, vmin, vmax in clims}
+    assert limits["Bz"] == (-1.5, 1.5)
+    # rho_e is flat at 1.0: vmin is explicit, vmax stays the full-range automatic bound.
+    assert limits["rho_e"] == (0.5, 1.0)
+
+
+def test_cli_movie_forwards_color_limits_and_quantile(tmp_path, monkeypatch):
+    from closure import diagnostics_cli
+
+    X, Y = _toy_grid()
+    calls = []
+
+    monkeypatch.setattr(
+        diagnostics_cli,
+        "load_experiment_data",
+        lambda *a, **k: (_toy_data(), X, Y, [-1.0, 1.0], [0.0, 0.5]),
+    )
+    monkeypatch.setattr(
+        diagnostics_cli,
+        "animate_field_panels",
+        lambda *a, **kwargs: calls.append(kwargs) or kwargs["output"],
+    )
+
+    args = diagnostics_cli.build_parser().parse_args(
+        [
+            "movie",
+            "R0",
+            "--fields",
+            "Bx,rho_e",
+            "--cmap",
+            "RdBu_r",
+            "--vmax",
+            "0.05,Bx=0.1",
+            "--vmin",
+            "-0.2",
+            "--robust-quantile",
+            "0.9",
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+    args.func(args)
+
+    assert calls[0]["cmap"] == "RdBu_r"
+    assert calls[0]["vmax"] == {"*": 0.05, "Bx": 0.1}
+    assert calls[0]["vmin"] == -0.2
+    assert calls[0]["robust_quantile"] == 0.9
+
+
+def test_cli_fields_forwards_color_limits_and_quantile(tmp_path, monkeypatch):
+    from closure import diagnostics_cli
+
+    X, Y = _toy_grid()
+    calls = []
+
+    monkeypatch.setattr(
+        diagnostics_cli,
+        "load_experiment_data",
+        lambda *a, **k: (_toy_data(), X, Y, [-1.0, 1.0], [0.0, 0.5]),
+    )
+    monkeypatch.setattr(
+        diagnostics_cli,
+        "plot_field_panels",
+        lambda *a, **kwargs: calls.append(kwargs) or kwargs["output"],
+    )
+
+    args = diagnostics_cli.build_parser().parse_args(
+        ["fields", "R0", "--fields", "Bx", "--vmax", "rho=2", "--output-dir", str(tmp_path)]
+    )
+    args.func(args)
+
+    assert calls[0]["vmax"] == {"rho": 2.0}
+    assert calls[0]["vmin"] is None
+    assert calls[0]["robust_quantile"] == 0.995
 
 
 def test_cli_movie_per_field_writes_one_movie_per_field(tmp_path, monkeypatch):

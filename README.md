@@ -359,6 +359,31 @@ Conventions used by every example below, chosen to match `fullres.ipynb`:
   **menura** also add `--menura-scale-ranges`, which scales these 512-cell base
   ranges up to the run resolution; for **ECsim** they are plain index ranges.
 
+- **Colormaps and color limits** (`fields` and `movie` share these four flags):
+  - `--cmap` sets one colormap for every panel. The default `auto` picks per
+    field: `viridis` for the positive-definite ones (`rho`, `Pxx`, `Pyy`, `Pzz`,
+    `Ppar/Pperp`, `Bmagn`, `agyrotropy`, `beta_par`, `beta_perp`) and `seismic`
+    for the rest. To give two fields *different* colormaps, run `movie` with
+    `--per-field` (one movie per field) once per colormap.
+  - Limits are automatic by default: `±quantile(|field|, 0.995)` for a signed
+    field, `[0, quantile(field, 0.995)]` for a positive-definite one.
+    `--robust-quantile` moves that quantile (`1.0` = full range, lower = clip
+    harder). `movie` computes them once over the whole animated window, so
+    panels do not flicker; that is unchanged by the flags below.
+  - `--vmin` / `--vmax` override them, as one number for every panel
+    (`--vmax 0.05`), as per-field assignments (`--vmax "Bz=0.05,rho_i=2"`, where
+    a bare field name like `rho=2` covers both species), or as a mix in which the
+    bare number is the fallback for the fields not named (`--vmax "0.05,Bz=0.1"`).
+    Keys accept the same aliases as `--fields`; a key matching no plotted panel
+    logs a warning instead of being silently dropped.
+  - Supplying only one bound of a **signed** field mirrors it, so `--vmax 0.03`
+    gives `(-0.03, 0.03)` and the diverging colorbar stays centered on zero. For a
+    panel whose automatic range already starts at zero, the bound you leave out
+    stays automatic (`--vmax "rho=8"` → `[0, 8]`).
+  - Limits are read in **plotted** units. An all-negative field is drawn
+    sign-flipped (e.g. `rho_e` under a negative-charge convention plots
+    `-rho_e`), so it takes positive bounds.
+
 In the exercises below you may use `--normalization alfven-sample --sample-nb-factor 1` for ECsim or use `--normalization alfven-explicit`, while for menura it can be avoided all together assuming that it was run with $B0_x = 1$
 
 ```bash
@@ -377,12 +402,22 @@ closure-diagnostics fields R0/iso_GEM_1e-2_Jze.5_r0_1024x1024 --backend menura \
   --choose-x 0,512 --choose-y 0,256 --menura-scale-ranges \
   --output diagnostics/R0_fields.png
 
+# Fixed colors: one colormap everywhere, ±0.03 on the two signed B panels (one
+# bound mirrors), 0..8 on both rho panels, and a tighter automatic quantile for
+# whatever is left on auto.
+closure-diagnostics fields Le2DHGEM_RunID_5_f2 \
+  --files-path /volume1/scratch/share_dir/iPiC3D-nathan \
+  --fields Bx,By,rho_e,rho_i,Jz_e --choose-species e,i,e,i --choose-times 0 \
+  --cmap RdBu_r --vmax "Bx=0.03,By=0.03,rho=8" --robust-quantile 0.99 \
+  --output diagnostics/R5_fields_fixed.png
+
 # === Field movies ===========================================================
 # `movie` is `fields` animated: same panels, colormaps and load options, one
 # frame per loaded snapshot. --choose-times picks the window (default: all),
 # e.g. 0:40:2 for every other snapshot. Color limits are computed once over the
 # whole window, so panel brightness is comparable between frames instead of
-# flickering. The run name and the running time go in the figure title.
+# flickering (--vmin/--vmax/--robust-quantile set them by hand). The run name
+# and the running time go in the figure title.
 closure-diagnostics movie R0/iso_GEM_1e-2_Jze.5_r0_1024x1024 --backend menura \
   --files-path /volume1/scratch/georgem/menura/runs/GEM/hortense/nathan5-12 \
   --fields Az,Ez,rho_i,Jz_i,Bx,By \
@@ -398,6 +433,15 @@ closure-diagnostics movie Le2DHGEM_RunID_5_f2 \
   --normalization alfven-infer --choose-species e,i,e,i \
   --choose-x 0,512 --choose-y 0,256 \
   --output-dir diagnostics --format mp4 --fps 10
+
+# Same movie with hand-set colors, e.g. to compare two runs on one scale: Bz on
+# ±0.05, both rho species on 0..8, everything else on ±0.5 (the bare fallback).
+# --per-field is the way to vary --cmap between fields.
+closure-diagnostics movie Le2DHGEM_RunID_5_f2 \
+  --files-path /volume1/scratch/share_dir/iPiC3D-nathan \
+  --fields Bz,rho_e,rho_i,Jz_e --choose-species e,i,e,i \
+  --choose-times 0:40:2 --vmax "0.5,Bz=0.05,rho=8" \
+  --output diagnostics/R5_fields_movie.gif --fps 8
 
 # === Profiles (1D cuts) =====================================================
 # Mirrors profile_fns: cut along y at x = nx//2 (omit --cut-index), t = 0.
