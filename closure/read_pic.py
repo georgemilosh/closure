@@ -647,6 +647,44 @@ def read_ipic3d_field(files_path, cycles, fieldname, choose_x=DEFAULT_CHOOSE_X, 
     return field_times
 
 
+def _add_flow_strain_invariants(data, fields_to_read, X, Y, verbose=False):
+    """Attach the Tier-2 flow-strain invariants to a loaded ``data`` dict.
+
+    Shared by both reader paths so the training features and Menura's feature
+    kernel evaluate the same quantities.  See :mod:`closure.field_invariants`:
+    unlike the electron-frame electric field these depend only on B and the
+    bulk flow, so they introduce no P_e feedback into the closure.
+    """
+    if not fields_to_read.get("flow_strain", False):
+        return
+    if verbose:
+        logger.info("computing flow-strain invariants")
+    from closure.field_invariants import (
+        INVARIANT_NAMES,
+        STRAIN_TENSOR_NAMES,
+        flow_gradient_invariants,
+        flow_strain_components,
+    )
+
+    dx = X[1, 0] - X[0, 0]
+    dy = Y[0, 1] - Y[0, 0]
+    # Arrays are laid out [x, y, ...]; the invariants differentiate the first
+    # two axes and broadcast over whatever trailing axis the reader supplies.
+    magnetic = np.stack([data["Bx"], data["By"], data["Bz"]])
+    for name in tuple(INVARIANT_NAMES) + tuple(STRAIN_TENSOR_NAMES):
+        data[name.split("_", 1)[0]] = {}
+    for species in data["Vx"].keys():
+        velocity = np.stack(
+            [data["Vx"][species], data["Vy"][species], data["Vz"][species]]
+        )
+        for name, value in flow_gradient_invariants(magnetic, velocity, dx, dy).items():
+            data[name.split("_", 1)[0]][species] = value
+        # The raw tensor components travel alongside the invariants: same
+        # stencil, same cost, and the caller picks whichever it configured.
+        for name, value in flow_strain_components(velocity, dx, dy).items():
+            data[name.split("_", 1)[0]][species] = value
+
+
 def read_data_ipic3d(files_path, cycles, fields_to_read, qom=None, choose_species=None, choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, 
               choose_z=DEFAULT_CHOOSE_Z, verbose=DEFAULT_VERBOSE, small=1e-10, **kwargs):
     """
@@ -937,7 +975,9 @@ def read_data_ipic3d(files_path, cycles, fields_to_read, qom=None, choose_specie
                 logger.warning(f"Failed to calculate q{component} see: {e}")
             if not fields_to_read.get('EF', False):
                 del data[f'EF{component}']
-    return data   
+
+    _add_flow_strain_invariants(data, fields_to_read, X, Y, verbose)
+    return data
 
 def read_fieldname(files_path,filenames,fieldname,choose_x=DEFAULT_CHOOSE_X, choose_y=DEFAULT_CHOOSE_Y, 
                    choose_z=DEFAULT_CHOOSE_Z, indexing=DEFAULT_INDEXING, verbose=DEFAULT_VERBOSE, filters=None):
@@ -1408,6 +1448,12 @@ def _augment_fields_to_read_from_requests(fields_to_read, request_features, requ
             _enable("rho")
         elif base in {"PIxx", "PIxy", "PIxz", "PIyy", "PIyz", "PIzz"}:
             _enable("PI")
+            _enable("J")
+            _enable("rho")
+        elif base in {"Wpar", "divV", "Wmix", "Wperp"}:
+            # Tier-2 flow-strain invariants need B and the species bulk flow.
+            _enable("flow_strain")
+            _enable("B")
             _enable("J")
             _enable("rho")
         elif base in {"EPx", "EPy", "EPz"}:
@@ -1995,6 +2041,7 @@ def read_data(files_path, filenames, fields_to_read, qom, choose_species=None, c
                 #logger.info(f"{data[f'q{component}'].keys() = }")
             if not fields_to_read.get('EF', False):
                 del data[f'EF{component}']
+    _add_flow_strain_invariants(data, fields_to_read, X, Y, verbose)
     empty_keys, empty_nested_keys = _collect_empty_data_keys(data)
     if empty_keys:
         logger.warning(f"read_data empty top-level keys: {empty_keys}")

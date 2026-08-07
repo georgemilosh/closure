@@ -271,20 +271,23 @@ def plot_pred_targets(
         X = X * np.sqrt(nb)
         Y = Y * np.sqrt(nb)
 
+    # Models trained with scaler_targets=False (the field-frame pressure closures)
+    # carry no target statistics: the network already emits physical units.  Fall
+    # back to the identity transform rather than dereferencing None.
+    def _unstandardize(values):
+        std, mean = dataset.targets_std, dataset.targets_mean
+        if std is not None:
+            values = values * std[list_of_target_indices].reshape(pred_shape)
+        if mean is not None:
+            values = values + mean[list_of_target_indices].reshape(pred_shape)
+        return values
+
     prediction_reshaped = invfunc(
-        (
-            prediction_np
-            * dataset.targets_std[list_of_target_indices].reshape(pred_shape)
-            + dataset.targets_mean[list_of_target_indices].reshape(pred_shape)
-        )[:, channel]
+        _unstandardize(prediction_np)[:, channel]
     ).reshape(dataset.targets_shape[:-1] + (1,))
 
     ground_truth_reshaped = invfunc(
-        (
-            ground_truth_np
-            * dataset.targets_std[list_of_target_indices].reshape(pred_shape)
-            + dataset.targets_mean[list_of_target_indices].reshape(pred_shape)
-        )[:, channel]
+        _unstandardize(ground_truth_np)[:, channel]
     ).reshape(dataset.targets_shape[:-1] + (1,))
 
     if plot_indices is None:

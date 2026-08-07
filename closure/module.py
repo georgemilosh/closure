@@ -147,7 +147,7 @@ class ClosureLitModule(L.LightningModule):
     def test_step(self, batch, batch_idx):
         features, targets = batch
         prediction = self(features)
-        loss = self.criterion(prediction, targets)
+        loss = self._compute_base_loss(features, prediction, targets)
         self.log("test_loss", loss, on_step=False, on_epoch=True)
         self._log_metrics(prediction, targets, prefix="test")
         return loss
@@ -449,7 +449,7 @@ class ClosureLitModule(L.LightningModule):
 
     def _compute_loss_terms(self, features, prediction, targets):
         """Return base and optional physics-informed loss components."""
-        base_loss = self.criterion(prediction, targets)
+        base_loss = self._compute_base_loss(features, prediction, targets)
         zero = prediction.new_zeros(())
         gradp_loss = zero
         eamb_loss = zero
@@ -460,6 +460,20 @@ class ClosureLitModule(L.LightningModule):
             eamb_loss = self._eamb_proxy_loss(features, prediction, targets)
 
         return base_loss, gradp_loss, eamb_loss
+
+    def _compute_base_loss(self, features, prediction, targets):
+        """Compute the network-specific training loss or the configured default.
+
+        Networks may expose ``compute_training_loss`` when their natural
+        training representation differs from their public forward output.  A
+        field-aligned pressure model, for example, can return Cartesian tensor
+        channels to callers while comparing prediction and target in its local
+        frame.  Ordinary networks remain on the unchanged criterion path.
+        """
+        network_loss = getattr(self.network, "compute_training_loss", None)
+        if callable(network_loss):
+            return network_loss(features, prediction, targets, self.criterion)
+        return self.criterion(prediction, targets)
 
     def _physics_loss_scale(self) -> float:
         """Epoch-wise multiplier for optional physics loss warmup/ramp."""

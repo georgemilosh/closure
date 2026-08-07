@@ -432,6 +432,17 @@ def code2alfven(
         except Exception:
             pass
 
+    # Flow-strain invariants are rates (v_A / d_i): with x_alfven = x sqrt(nb)
+    # and v_alfven = v / va, the conversion factor is va sqrt(nb) = b0x, i.e.
+    # the same factor that rescales the time axis below.
+    for field_name in ["Wpar", "divV", "Wmix", "Wperp",
+                       "Wxx", "Wyy", "Wzz", "Wxy", "Wxz", "Wyz"]:
+        try:
+            for spec in data[field_name].keys():
+                data[field_name][spec] = data[field_name][spec] / b0x
+        except Exception:
+            pass
+
     for field_name in ["gyro_radius"]:
         try:
             for spec in data[field_name].keys():
