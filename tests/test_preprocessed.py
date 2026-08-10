@@ -24,6 +24,7 @@ from closure.datasets import (
     ChunkOrderedSampler,
     LazyNPZDataFrameDataset,
     PreprocessedChunkDataset,
+    _preprocessing_fingerprint,
 )
 
 # Shared NPZ field plumbing (same fields as test_cli_fit_lazy.py).
@@ -72,6 +73,45 @@ def _make_preprocessed(
 # -----------------------------------------------------------------------
 
 class TestPreprocessedChunkDataset:
+    def test_fingerprint_covers_all_cached_preprocessing(self, tmp_path):
+        common = dict(
+            samples_file="train.csv",
+            request_features=["Bx", "By", "Bz"],
+            request_targets=["Ex", "Ey", "Ez"],
+            prescaler_features=[None, None, None],
+            prescaler_targets=[None, None, None],
+            alfven_units=True,
+            read_features_targets_kwargs=_RFT_KWARGS,
+            scaler_features=False,
+            scaler_targets=False,
+            norm_folder=str(tmp_path / "norm"),
+            features_dtype_numpy=np.float32,
+            targets_dtype_numpy=np.float32,
+        )
+        baseline = _preprocessing_fingerprint(**common)
+        filtered = _preprocessing_fingerprint(
+            **common,
+            filter_features={
+                "name": "periodic_binomial_channels",
+                "channels": ["Bx"],
+                "passes": 4,
+                "axes": [1, 2],
+            },
+        )
+        normalized = _preprocessing_fingerprint(
+            **{**common, "scaler_features": True}
+        )
+        different_reader = _preprocessing_fingerprint(
+            **{
+                **common,
+                "read_features_targets_kwargs": {
+                    **_RFT_KWARGS,
+                    "choose_x": [0, 4],
+                },
+            }
+        )
+        assert len({baseline, filtered, normalized, different_reader}) == 4
+
     def test_metadata_created(self, tiny_npz_dir, tmp_path):
         ds = _make_preprocessed(tiny_npz_dir, tmp_path)
         assert ds._num_chunks >= 1

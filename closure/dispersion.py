@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from collections.abc import Sequence
 
 import numpy as np
+from scipy.linalg import expm
 from scipy.optimize import linear_sum_assignment
 
 try:
@@ -47,17 +48,273 @@ class HallMHDBackground:
         Background ion-fluid velocity.
     B0 : array-like, shape ``(2,)`` or ``(3,)``
         Background magnetic field.
+    J0 : array-like, shape ``(2,)`` or ``(3,)``
+        Local background total current.  The default preserves the uniform,
+        zero-current equilibrium used by the original helpers.  A nonzero
+        value is required for a frozen-coefficient linearization in a current
+        sheet because both ``u_e = u_i - J/rho`` and ``J x B / rho`` then have
+        first-order density and magnetic-field terms.
     """
 
     rho0: float
     u0: tuple[float, float, float] = (0.0, 0.0, 0.0)
     B0: tuple[float, float, float] = (1.0, 0.0, 0.0) # default B0 along x for Harris sheet, but this is arbitrary
+    J0: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     def __post_init__(self):
         if self.rho0 <= 0.0:
             raise ValueError("rho0 must be positive")
         object.__setattr__(self, "u0", tuple(_as_3vector(self.u0, name="u0")))
         object.__setattr__(self, "B0", tuple(_as_3vector(self.B0, name="B0")))
+        object.__setattr__(self, "J0", tuple(_as_3vector(self.J0, name="J0")))
+
+
+# Channel orders at the MENURA/TorchScript boundary.  Keeping these explicit is
+# important: MENURA stores the tensor diagonals first, while the reduced-fluid
+# pressure-divergence helper above uses the conventional packed-symmetric order.
+MENURA_FEATURE_NAMES = (
+    "rho_e",
+    "Bx",
+    "By",
+    "Bz",
+    "Vx_e",
+    "Vy_e",
+    "Vz_e",
+    "Ex",
+    "Ey",
+    "Ez",
+    "Wxx_e",
+    "Wyy_e",
+    "Wzz_e",
+    "Wxy_e",
+    "Wxz_e",
+    "Wyz_e",
+)
+MENURA_PRESSURE_COMPONENTS = ("Pxx", "Pyy", "Pzz", "Pxy", "Pxz", "Pyz")
+DISPERSION_PRESSURE_COMPONENTS = ("Pxx", "Pxy", "Pxz", "Pyy", "Pyz", "Pzz")
+
+
+def menura_fourth_order_derivative_wavenumber(kvec, cell_size: float) -> np.ndarray:
+    r"""Return the real modified wavenumber of MENURA's fourth-order derivative.
+
+    MENURA applies
+
+    ``D f = [8(f[i+1]-f[i-1])-(f[i+2]-f[i-2])] / (12 dx)``.
+
+    For a Fourier mode this is ``i * k_eff`` with
+    ``k_eff = [8 sin(k dx)-sin(2 k dx)]/(6 dx)``.  A two-component input is
+    interpreted as a 2-D MENURA mode and receives an exactly zero z component.
+    """
+    if cell_size <= 0.0:
+        raise ValueError("cell_size must be positive")
+    k3 = _as_3vector(kvec, name="kvec")
+    phase = k3 * float(cell_size)
+    return (8.0 * np.sin(phase) - np.sin(2.0 * phase)) / (6.0 * float(cell_size))
+
+
+def menura_fourth_order_laplacian_symbol(kvec, cell_size: float) -> float:
+    r"""Return MENURA's fourth-order Laplacian Fourier symbol (non-positive)."""
+    if cell_size <= 0.0:
+        raise ValueError("cell_size must be positive")
+    k3 = _as_3vector(kvec, name="kvec")
+    phase = k3 * float(cell_size)
+    one_dim = (-2.0 * np.cos(2.0 * phase) + 32.0 * np.cos(phase) - 30.0)
+    return float(np.sum(one_dim) / (12.0 * float(cell_size) ** 2))
+
+
+def menura_binomial_filter_transfer(kvec, cell_size: float, *, passes: int = 1) -> float:
+    r"""Return the transfer of MENURA's 2-D 3x3 binomial smoother.
+
+    One pass is the separable ``[1, 2, 1]/4`` stencil in x and y, hence
+    ``cos(kx*dx/2)^2 cos(ky*dx/2)^2``.  The 2-D production kernel never filters
+    along z.  ``passes=0`` is exactly the identity.
+    """
+    if cell_size <= 0.0:
+        raise ValueError("cell_size must be positive")
+    if int(passes) != passes or passes < 0:
+        raise ValueError("passes must be a non-negative integer")
+    k3 = _as_3vector(kvec, name="kvec")
+    one_pass = np.cos(0.5 * k3[0] * cell_size) ** 2 * np.cos(
+        0.5 * k3[1] * cell_size
+    ) ** 2
+    return float(one_pass ** int(passes))
+
+
+def _cross_product_matrix(vector) -> np.ndarray:
+    """Matrix ``C`` such that ``C @ x == vector x x``."""
+    x, y, z = _as_3vector(vector, name="vector")
+    return np.array(
+        [[0.0, -z, y], [z, 0.0, -x], [-y, x, 0.0]], dtype=np.complex128
+    )
+
+
+def menura_electron_velocity_jacobian(
+    kvec,
+    background: HallMHDBackground,
+    *,
+    cell_size: float,
+) -> np.ndarray:
+    r"""Return ``d u_e / d q`` for MENURA features and reduced primitives.
+
+    The primitive order is ``(rho, ui_x, ui_y, ui_z, Bx, By, Bz)``.  Around a
+    locally frozen state, MENURA's legacy moment convention gives
+    ``u_e = u_i - J/rho`` and ``delta J = i k_eff x delta B``.  At nonzero
+    local current the density column is therefore ``J0/rho0**2``; dropping it
+    silently changes the sheet-state loop while leaving lobe states almost
+    unchanged.
+    """
+    k_eff = menura_fourth_order_derivative_wavenumber(kvec, cell_size)
+    jac = np.zeros((3, 7), dtype=np.complex128)
+    jac[:, 0] = np.asarray(background.J0, dtype=float) / float(background.rho0) ** 2
+    jac[:, 1:4] = np.eye(3)
+    jac[:, 4:7] = -(1j / float(background.rho0)) * _cross_product_matrix(k_eff)
+    return jac
+
+
+def menura_strain_feature_jacobian(
+    kvec,
+    background: HallMHDBackground,
+    *,
+    cell_size: float,
+    filter_passes: int = 4,
+) -> np.ndarray:
+    r"""Return ``d(Wxx,Wyy,Wzz,Wxy,Wxz,Wyz)/d q`` for a MENURA mode."""
+    k_eff = menura_fourth_order_derivative_wavenumber(kvec, cell_size)
+    ue_jac = menura_electron_velocity_jacobian(kvec, background, cell_size=cell_size)
+    kx, ky, _ = k_eff
+    jac = np.zeros((6, 7), dtype=np.complex128)
+    jac[0] = 1j * kx * ue_jac[0]
+    jac[1] = 1j * ky * ue_jac[1]
+    # Wzz is identically zero in MENURA's two-dimensional feature kernel.
+    jac[3] = 0.5j * (kx * ue_jac[1] + ky * ue_jac[0])
+    jac[4] = 0.5j * kx * ue_jac[2]
+    jac[5] = 0.5j * ky * ue_jac[2]
+    return jac * menura_binomial_filter_transfer(
+        kvec, cell_size, passes=filter_passes
+    )
+
+
+def menura_feature_jacobian(
+    kvec,
+    background: HallMHDBackground,
+    *,
+    cell_size: float,
+    strain_filter_passes: int = 4,
+    electric_feature_jacobian: np.ndarray | None = None,
+) -> np.ndarray:
+    r"""Map reduced primitive perturbations to the 16 MENURA model features.
+
+    The density feature includes MENURA's ECsim conversion ``rho_e=-rho/(4*pi)``.
+    Electric-field inputs are algebraic rather than evolved variables in the
+    reduced system; they default to zero and can be supplied explicitly for a
+    model that actually consumes them.
+    """
+    jac = np.zeros((len(MENURA_FEATURE_NAMES), 7), dtype=np.complex128)
+    jac[0, 0] = -1.0 / (4.0 * np.pi)
+    jac[1:4, 4:7] = np.eye(3)
+    jac[4:7] = menura_electron_velocity_jacobian(
+        kvec, background, cell_size=cell_size
+    )
+    if electric_feature_jacobian is not None:
+        electric = np.asarray(electric_feature_jacobian, dtype=np.complex128)
+        if electric.shape != (3, 7):
+            raise ValueError("electric_feature_jacobian must have shape (3, 7)")
+        jac[7:10] = electric
+    jac[10:16] = menura_strain_feature_jacobian(
+        kvec,
+        background,
+        cell_size=cell_size,
+        filter_passes=strain_filter_passes,
+    )
+    return jac
+
+
+def menura_pressure_primitive_jacobian(
+    pressure_feature_jacobian: np.ndarray,
+    feature_jacobian: np.ndarray,
+) -> np.ndarray:
+    r"""Compose a physical MENURA pressure/feature Jacobian with ``d feature/d q``.
+
+    The returned rows are reordered for
+    :func:`electron_pressure_tensor_to_electric_jacobian`.
+    """
+    pressure_feature = np.asarray(pressure_feature_jacobian, dtype=np.complex128)
+    feature = np.asarray(feature_jacobian, dtype=np.complex128)
+    if pressure_feature.shape != (6, len(MENURA_FEATURE_NAMES)):
+        raise ValueError(
+            f"pressure_feature_jacobian must have shape (6, {len(MENURA_FEATURE_NAMES)})"
+        )
+    if feature.shape != (len(MENURA_FEATURE_NAMES), 7):
+        raise ValueError(
+            f"feature_jacobian must have shape ({len(MENURA_FEATURE_NAMES)}, 7)"
+        )
+    # MENURA: Pxx,Pyy,Pzz,Pxy,Pxz,Pyz -> packed symmetric: Pxx,Pxy,Pxz,Pyy,Pyz,Pzz
+    return (pressure_feature @ feature)[[0, 3, 4, 1, 5, 2]]
+
+
+def build_menura_closure_operator(
+    background: HallMHDBackground,
+    kvec,
+    pressure_feature_jacobian: np.ndarray,
+    *,
+    cell_size: float,
+    strain_filter_passes: int = 4,
+    eamb_filter_passes: int = 0,
+    hall_scale: float = 1.0,
+    resistivity: float = 0.0,
+    hyper_resistivity: float = 0.0,
+) -> np.ndarray:
+    r"""Compose a learned closure with MENURA's exact discrete spatial symbols.
+
+    Hyper-resistivity enters Ohm's law as ``-eta_hyp Laplacian(J)``.  On a
+    Fourier mode this is an additional positive mode-dependent resistivity.
+    Output-side smoothing, when requested, multiplies only the pressure-derived
+    ``E_amb`` term and is therefore suitable for the explicitly diagnostic arm.
+    """
+    k_eff = menura_fourth_order_derivative_wavenumber(kvec, cell_size)
+    feature_jac = menura_feature_jacobian(
+        kvec,
+        background,
+        cell_size=cell_size,
+        strain_filter_passes=strain_filter_passes,
+    )
+    tensor_jac = menura_pressure_primitive_jacobian(
+        pressure_feature_jacobian, feature_jac
+    )
+    closure_electric = electron_pressure_tensor_to_electric_jacobian(
+        k_eff, background, tensor_jac
+    )
+    closure_electric *= menura_binomial_filter_transfer(
+        kvec, cell_size, passes=eamb_filter_passes
+    )
+    eta_mode = float(resistivity) - float(hyper_resistivity) * menura_fourth_order_laplacian_symbol(
+        kvec, cell_size
+    )
+    return build_hall_mhd_operator(
+        background,
+        k_eff,
+        hall_scale=hall_scale,
+        closure_electric_jacobian=closure_electric,
+        resistivity=eta_mode,
+    )
+
+
+def operator_amplification(operator: np.ndarray, timestep: float) -> dict[str, float]:
+    r"""Return modal and worst-vector amplification of ``exp(timestep*operator)``."""
+    matrix = np.asarray(operator, dtype=np.complex128)
+    if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+        raise ValueError("operator must be a square matrix")
+    if timestep < 0.0:
+        raise ValueError("timestep must be non-negative")
+    propagator = expm(float(timestep) * matrix)
+    eigenvalues = np.linalg.eigvals(matrix)
+    spectral = float(np.exp(float(timestep) * np.max(np.real(eigenvalues))))
+    transient = float(np.linalg.svd(propagator, compute_uv=False)[0])
+    return {
+        "spectral_radius": spectral,
+        "largest_singular_value": transient,
+        "max_growth_rate": float(np.max(np.real(eigenvalues))),
+    }
 
 
 def isotropic_electron_closure_electric_jacobian(
@@ -210,7 +467,11 @@ def build_hall_mhd_operator(
 
     The primitive-state ordering is
     ``(rho, ux, uy, uz, Bx, By, Bz)`` and the linearized system is evaluated
-    about a uniform equilibrium with zero background current.
+    about a locally frozen equilibrium.  ``J0=0`` recovers the historical
+    uniform-background operator.  Nonzero ``J0`` includes every algebraic
+    first-order term from ``J x B / rho`` in Ohm's law and ion momentum.  As a
+    WKB/frozen-coefficient analysis it does not include gradients of the
+    background pressure or flow; those are lower-order in the high-k gate.
 
     The model uses cold ions by default. Any prescribed electron closure enters
     through the generalized Ohm law as an electric-field correction matrix
@@ -220,6 +481,7 @@ def build_hall_mhd_operator(
     k3 = _as_3vector(kvec, name="kvec")
     b0 = np.asarray(background.B0, dtype=float)
     u0 = np.asarray(background.u0, dtype=float)
+    j0 = np.asarray(background.J0, dtype=float)
     rho0 = float(background.rho0)
 
     closure_jac = np.zeros((3, 7), dtype=np.complex128)
@@ -245,13 +507,23 @@ def build_hall_mhd_operator(
 
         delta_j = 1j * np.cross(k3, b)
         delta_e = -np.cross(u, b0) - np.cross(u0, b)
-        delta_e = delta_e + (float(hall_scale) / rho0) * np.cross(delta_j, b0)
+        hall_force = (
+            np.cross(delta_j, b0)
+            + np.cross(j0, b)
+            - (rho / rho0) * np.cross(j0, b0)
+        )
+        delta_e = delta_e + (float(hall_scale) / rho0) * hall_force
         delta_e = delta_e + closure_jac @ q
         if resistivity:
             delta_e = delta_e + float(resistivity) * delta_j
 
         drho = -1j * (rho0 * np.dot(k3, u) + rho * np.dot(k3, u0))
-        du = -1j * np.dot(k3, u0) * u + np.cross(delta_j, b0) / rho0 - ion_force @ q
+        lorentz = (
+            np.cross(delta_j, b0)
+            + np.cross(j0, b)
+            - (rho / rho0) * np.cross(j0, b0)
+        ) / rho0
+        du = -1j * np.dot(k3, u0) * u + lorentz - ion_force @ q
         db = -1j * np.cross(k3, delta_e)
 
         operator[:, col] = np.concatenate(([drho], du, db))
@@ -1004,10 +1276,14 @@ def match_eigenbranches(
 
 
 __all__ = [
+    "DISPERSION_PRESSURE_COMPONENTS",
     "HallMHDBackground",
+    "MENURA_FEATURE_NAMES",
+    "MENURA_PRESSURE_COMPONENTS",
     "apply_closure_correction",
     "build_dispersion_matrix",
     "build_hall_mhd_operator",
+    "build_menura_closure_operator",
     "closure_tensor_fourier_symbol_at_equilibrium",
     "closure_tensor_jacobian_at_equilibrium",
     "electron_pressure_tensor_to_electric_jacobian",
@@ -1018,10 +1294,18 @@ __all__ = [
     "linearize_spatial_model",
     "linearize_spatial_model_2d",
     "match_eigenbranches",
+    "menura_binomial_filter_transfer",
+    "menura_electron_velocity_jacobian",
+    "menura_feature_jacobian",
+    "menura_fourth_order_derivative_wavenumber",
+    "menura_fourth_order_laplacian_symbol",
+    "menura_pressure_primitive_jacobian",
+    "menura_strain_feature_jacobian",
     "mode_indices_from_physical_wavenumber",
     "patch_domain_lengths_from_grid",
     "physical_wavenumber_from_mode_indices",
     "project_fourier_jacobian",
     "project_fourier_jacobian_2d",
     "scan_dispersion_relation",
+    "operator_amplification",
 ]

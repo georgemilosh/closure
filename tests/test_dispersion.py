@@ -11,6 +11,7 @@ from closure.dispersion import (
     apply_closure_correction,
     build_dispersion_matrix,
     build_hall_mhd_operator,
+    build_menura_closure_operator,
     closure_tensor_fourier_symbol_at_equilibrium,
     closure_tensor_jacobian_at_equilibrium,
     electron_pressure_tensor_to_electric_jacobian,
@@ -20,13 +21,122 @@ from closure.dispersion import (
     linearize_spatial_model,
     linearize_spatial_model_2d,
     match_eigenbranches,
+    menura_binomial_filter_transfer,
+    menura_electron_velocity_jacobian,
+    menura_feature_jacobian,
+    menura_fourth_order_derivative_wavenumber,
+    menura_fourth_order_laplacian_symbol,
+    menura_pressure_primitive_jacobian,
+    menura_strain_feature_jacobian,
     mode_indices_from_physical_wavenumber,
     patch_domain_lengths_from_grid,
     physical_wavenumber_from_mode_indices,
     project_fourier_jacobian,
     project_fourier_jacobian_2d,
     scan_dispersion_relation,
+    operator_amplification,
 )
+
+
+class TestMenuraDiscreteClosureComposition:
+    def test_fourth_order_derivative_matches_stencil_on_a_mode(self):
+        n_grid = 32
+        dx = 0.2
+        mode_index = 5
+        phase = 2.0 * np.pi * mode_index / n_grid
+        k = phase / dx
+        values = fourier_mode_vector(n_grid, mode_index)
+        stencil = (
+            8.0 * (np.roll(values, -1) - np.roll(values, 1))
+            - (np.roll(values, -2) - np.roll(values, 2))
+        ) / (12.0 * dx)
+        k_eff = menura_fourth_order_derivative_wavenumber((k, 0.0), dx)[0]
+        np.testing.assert_allclose(stencil, 1j * k_eff * values, atol=1e-12)
+
+    def test_fourth_order_laplacian_matches_stencil_on_a_mode(self):
+        n_grid = 32
+        dx = 0.2
+        mode_index = 7
+        phase = 2.0 * np.pi * mode_index / n_grid
+        k = phase / dx
+        values = fourier_mode_vector(n_grid, mode_index)
+        stencil = (
+            -np.roll(values, -2)
+            + 16.0 * np.roll(values, -1)
+            - 30.0 * values
+            + 16.0 * np.roll(values, 1)
+            - np.roll(values, 2)
+        ) / (12.0 * dx**2)
+        symbol = menura_fourth_order_laplacian_symbol((k, 0.0), dx)
+        np.testing.assert_allclose(stencil, symbol * values, atol=1e-12)
+        assert symbol < 0.0
+
+    def test_binomial_transfer_and_four_pass_nyquist_rejection(self):
+        dx = 0.1
+        kvec = (np.pi / (2.0 * dx), np.pi / (3.0 * dx))
+        one = menura_binomial_filter_transfer(kvec, dx, passes=1)
+        expected = np.cos(np.pi / 4.0) ** 2 * np.cos(np.pi / 6.0) ** 2
+        np.testing.assert_allclose(one, expected)
+        np.testing.assert_allclose(
+            menura_binomial_filter_transfer(kvec, dx, passes=4), expected**4
+        )
+        np.testing.assert_allclose(
+            menura_binomial_filter_transfer((np.pi / dx, 0.0), dx, passes=4), 0.0,
+            atol=1e-60,
+        )
+
+    def test_velocity_and_strain_channels_share_the_same_current_response(self):
+        bg = HallMHDBackground(rho0=2.0)
+        dx = 0.25
+        kvec = (1.3, -0.7)
+        ue = menura_electron_velocity_jacobian(kvec, bg, cell_size=dx)
+        strain = menura_strain_feature_jacobian(
+            kvec, bg, cell_size=dx, filter_passes=0
+        )
+        kx, ky, _ = menura_fourth_order_derivative_wavenumber(kvec, dx)
+        np.testing.assert_allclose(strain[0], 1j * kx * ue[0])
+        np.testing.assert_allclose(strain[1], 1j * ky * ue[1])
+        np.testing.assert_allclose(strain[3], 0.5j * (kx * ue[1] + ky * ue[0]))
+
+    def test_nonzero_background_current_enters_velocity_density_column(self):
+        bg = HallMHDBackground(rho0=2.0, J0=(1.0, -2.0, 0.5))
+        ue = menura_electron_velocity_jacobian((1.3, -0.7), bg, cell_size=0.25)
+        np.testing.assert_allclose(ue[:, 0], np.array([1.0, -2.0, 0.5]) / 4.0)
+
+    def test_feature_and_pressure_channel_orders(self):
+        bg = HallMHDBackground(rho0=1.5)
+        features = menura_feature_jacobian(
+            (0.4, 0.2), bg, cell_size=0.1, strain_filter_passes=4
+        )
+        np.testing.assert_allclose(features[0, 0], -1.0 / (4.0 * np.pi))
+        np.testing.assert_allclose(features[1:4, 4:7], np.eye(3))
+        pressure_feature = np.zeros((6, 16))
+        pressure_feature[:, :6] = np.eye(6)
+        composed = menura_pressure_primitive_jacobian(pressure_feature, features)
+        np.testing.assert_allclose(composed, (pressure_feature @ features)[[0, 3, 4, 1, 5, 2]])
+
+    def test_output_smoothing_only_changes_closure_feedback(self):
+        bg = HallMHDBackground(rho0=1.0, B0=(1.0, 0.0, 0.4))
+        pressure_feature = np.zeros((6, 16))
+        pressure_feature[0, 10] = 0.5
+        kvec = (8.0, 4.0)
+        raw = build_menura_closure_operator(
+            bg, kvec, pressure_feature, cell_size=0.1, eamb_filter_passes=0
+        )
+        smoothed = build_menura_closure_operator(
+            bg, kvec, pressure_feature, cell_size=0.1, eamb_filter_passes=3
+        )
+        base = build_menura_closure_operator(
+            bg, kvec, np.zeros_like(pressure_feature), cell_size=0.1
+        )
+        transfer = menura_binomial_filter_transfer(kvec, 0.1, passes=3)
+        np.testing.assert_allclose(smoothed - base, transfer * (raw - base), atol=1e-11)
+
+    def test_operator_amplification_reports_growth(self):
+        result = operator_amplification(np.diag([2.0, -1.0]), timestep=0.1)
+        np.testing.assert_allclose(result["spectral_radius"], np.exp(0.2))
+        np.testing.assert_allclose(result["largest_singular_value"], np.exp(0.2))
+        np.testing.assert_allclose(result["max_growth_rate"], 2.0)
 
 
 class TestFourierModeVector:
@@ -211,6 +321,20 @@ class TestHallMHDOperator:
         np.testing.assert_allclose(operator[2, 5], 6.0j)
         np.testing.assert_allclose(operator[5, 2], 12.0j)
         np.testing.assert_allclose(operator[5, 6], -12.0)
+
+    def test_nonzero_current_adds_density_and_magnetic_lorentz_terms(self):
+        background = HallMHDBackground(
+            rho0=2.0,
+            B0=(1.0, 0.0, 0.0),
+            J0=(0.0, 0.0, 3.0),
+        )
+        operator = build_hall_mhd_operator(background, (0.0, 0.0))
+
+        # At k=0, delta J vanishes.  Momentum still contains
+        # (J0 x delta B)/rho0 - delta rho (J0 x B0)/rho0**2.
+        np.testing.assert_allclose(operator[2, 0], -3.0 / 4.0)
+        np.testing.assert_allclose(operator[1, 5], -3.0 / 2.0)
+        np.testing.assert_allclose(operator[2, 4], 3.0 / 2.0)
 
     def test_isothermal_closure_is_curl_free_at_uniform_density(self):
         background = HallMHDBackground(rho0=5.0, B0=(1.0, -0.5, 0.0))

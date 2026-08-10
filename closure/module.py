@@ -74,8 +74,28 @@ class ClosureLitModule(L.LightningModule):
         physics_relative_loss: bool = True,
         physics_warmup_epochs: int = 0,
         physics_ramp_epochs: int = 0,
+        lambda_jacobian: float = 0.0,
+        jacobian_feature_indices: list[int] | None = None,
+        jacobian_feature_scales: list[float] | None = None,
+        jacobian_pressure_scale: float = 1.0,
+        jacobian_samples: int = 256,
     ):
         super().__init__()
+        if lambda_jacobian < 0.0:
+            raise ValueError("lambda_jacobian must be non-negative")
+        jacobian_feature_indices = list(jacobian_feature_indices or [])
+        if lambda_jacobian > 0.0 and not jacobian_feature_indices:
+            raise ValueError("lambda_jacobian > 0 requires jacobian_feature_indices")
+        if jacobian_feature_scales is None:
+            jacobian_feature_scales = [1.0] * len(jacobian_feature_indices)
+        if len(jacobian_feature_scales) != len(jacobian_feature_indices):
+            raise ValueError("jacobian_feature_scales must match jacobian_feature_indices")
+        if any(scale <= 0.0 for scale in jacobian_feature_scales):
+            raise ValueError("jacobian_feature_scales must be positive")
+        if jacobian_pressure_scale <= 0.0:
+            raise ValueError("jacobian_pressure_scale must be positive")
+        if jacobian_samples <= 0:
+            raise ValueError("jacobian_samples must be positive")
         self.save_hyperparameters(ignore=["network"])
         self.network = network
 
@@ -112,16 +132,19 @@ class ClosureLitModule(L.LightningModule):
         prediction = self(features)
         base_loss, gradp_loss, eamb_loss = self._compute_loss_terms(features, prediction, targets)
         physics_scale = self._physics_loss_scale()
+        jacobian_loss = self._normalized_jvp_penalty(features, create_graph=True)
         loss = (
             base_loss
             + physics_scale * float(self.hparams.lambda_gradP) * gradp_loss
             + physics_scale * float(self.hparams.lambda_eamb) * eamb_loss
+            + float(self.hparams.lambda_jacobian) * jacobian_loss
         )
         self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("train_loss_base", base_loss, on_step=False, on_epoch=True)
         self.log("train_loss_gradp", gradp_loss, on_step=False, on_epoch=True)
         self.log("train_loss_eamb", eamb_loss, on_step=False, on_epoch=True)
         self.log("train_loss_physics_scale", physics_scale, on_step=False, on_epoch=True)
+        self.log("train_loss_jacobian", jacobian_loss, on_step=False, on_epoch=True)
         self._log_metrics(prediction, targets, prefix="train")
         self._train_batches_this_epoch = batch_idx + 1
         return loss
@@ -131,16 +154,19 @@ class ClosureLitModule(L.LightningModule):
         prediction = self(features)
         base_loss, gradp_loss, eamb_loss = self._compute_loss_terms(features, prediction, targets)
         physics_scale = self._physics_loss_scale()
+        jacobian_loss = self._normalized_jvp_penalty(features, create_graph=False)
         loss = (
             base_loss
             + physics_scale * float(self.hparams.lambda_gradP) * gradp_loss
             + physics_scale * float(self.hparams.lambda_eamb) * eamb_loss
+            + float(self.hparams.lambda_jacobian) * jacobian_loss
         )
         self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val_loss_base", base_loss, on_step=False, on_epoch=True)
         self.log("val_loss_gradp", gradp_loss, on_step=False, on_epoch=True)
         self.log("val_loss_eamb", eamb_loss, on_step=False, on_epoch=True)
         self.log("val_loss_physics_scale", physics_scale, on_step=False, on_epoch=True)
+        self.log("val_loss_jacobian", jacobian_loss, on_step=False, on_epoch=True)
         self._log_metrics(prediction, targets, prefix="val")
         return loss
 
@@ -474,6 +500,62 @@ class ClosureLitModule(L.LightningModule):
         if callable(network_loss):
             return network_loss(features, prediction, targets, self.criterion)
         return self.criterion(prediction, targets)
+
+    def _normalized_jvp_penalty(
+        self, features: torch.Tensor, *, create_graph: bool
+    ) -> torch.Tensor:
+        r"""Hutchinson/JVP estimate of the normalized pressure Jacobian norm.
+
+        Only configured feature channels receive a Rademacher direction.  The
+        directions are scaled in physical feature units and the pressure
+        tangent is divided by ``jacobian_pressure_scale``.  This makes weights
+        comparable across feature conventions and prevents the six strain
+        channels from dominating merely because there are six of them.
+        """
+        if float(self.hparams.lambda_jacobian) <= 0.0:
+            return features.new_zeros(())
+        if features.ndim == 4:
+            pixels = features.permute(0, 2, 3, 1).reshape(-1, features.shape[1])
+        elif features.ndim == 2:
+            pixels = features
+        else:
+            raise ValueError("Jacobian penalty expects [N,C] or [B,C,H,W] features")
+        sample_count = min(int(self.hparams.jacobian_samples), pixels.shape[0])
+        if sample_count < pixels.shape[0]:
+            sample_index = torch.linspace(
+                0, pixels.shape[0] - 1, sample_count, device=pixels.device
+            ).long()
+            sample = pixels.index_select(0, sample_index)
+        else:
+            sample = pixels
+        sample = sample.detach().clone().requires_grad_(True)
+        indices = torch.as_tensor(
+            self.hparams.jacobian_feature_indices, dtype=torch.long, device=sample.device
+        )
+        if torch.any(indices < 0) or torch.any(indices >= sample.shape[1]):
+            raise ValueError("jacobian_feature_indices contain an out-of-range channel")
+        scales = torch.as_tensor(
+            self.hparams.jacobian_feature_scales, dtype=sample.dtype, device=sample.device
+        )
+        direction = torch.zeros_like(sample)
+        if self.training:
+            signs = torch.randint(
+                0, 2, (sample.shape[0], indices.numel()), device=sample.device
+            ).to(sample.dtype) * 2.0 - 1.0
+        else:
+            row = torch.arange(sample.shape[0], device=sample.device).unsqueeze(1)
+            col = torch.arange(indices.numel(), device=sample.device).unsqueeze(0)
+            signs = ((row + col) % 2).to(sample.dtype) * 2.0 - 1.0
+        direction[:, indices] = signs * scales / float(indices.numel()) ** 0.5
+        _, tangent = torch.autograd.functional.jvp(
+            self.network,
+            (sample,),
+            (direction,),
+            create_graph=create_graph,
+            strict=False,
+        )
+        normalized = tangent / float(self.hparams.jacobian_pressure_scale)
+        return normalized.square().mean()
 
     def _physics_loss_scale(self) -> float:
         """Epoch-wise multiplier for optional physics loss warmup/ramp."""

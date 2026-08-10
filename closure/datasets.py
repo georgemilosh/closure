@@ -119,6 +119,7 @@ def _dbg_mem(tag: str, extra: str = "") -> None:
 __all__ = [
     "DataFrameDataset",
     "LazyNPZDataFrameDataset",
+    "periodic_binomial_channels",
     "OnePatchPerFileBatchSampler",
     "FileChunkedSampler",
     "PreprocessedChunkDataset",
@@ -171,6 +172,61 @@ class _RandomCrop:
 
 _LOCAL_TRANSFORMS = {
     "RandomCrop": _RandomCrop,
+}
+
+
+def periodic_binomial_channels(
+    data: np.ndarray,
+    *,
+    channel_indices: list[int],
+    passes: int = 1,
+    axes: tuple[int, int] = (1, 2),
+) -> np.ndarray:
+    """Filter selected channels with MENURA's periodic 2-D binomial pass.
+
+    ``data`` must use the dataset's pre-flatten NHWC layout.  One pass is the
+    separable ``[1, 2, 1] x [1, 2, 1] / 16`` stencil used immediately before
+    MENURA inference.  Returning a copy prevents a channel-selective training
+    transform from mutating a caller-owned sample in place.
+    """
+    if data.ndim != 4:
+        raise ValueError(
+            f"periodic_binomial_channels expects NHWC data, got shape {data.shape}"
+        )
+    if not np.issubdtype(data.dtype, np.floating):
+        raise ValueError(
+            f"periodic_binomial_channels requires floating data, got {data.dtype}"
+        )
+    axes = tuple(axes)
+    if axes != (1, 2):
+        raise ValueError(
+            f"periodic_binomial_channels requires spatial axes (1, 2), got {axes}"
+        )
+    if isinstance(passes, bool) or int(passes) != passes or passes < 0:
+        raise ValueError(f"passes must be a non-negative integer, got {passes!r}")
+    indices = [int(index) for index in channel_indices]
+    if len(indices) != len(set(indices)):
+        raise ValueError(f"channel_indices contains duplicates: {indices}")
+    if any(index < 0 or index >= data.shape[-1] for index in indices):
+        raise ValueError(
+            f"channel index outside [0, {data.shape[-1]}): {indices}"
+        )
+
+    result = np.array(data, copy=True)
+    kernel = np.array(
+        [[[1.0, 2.0, 1.0], [2.0, 4.0, 2.0], [1.0, 2.0, 1.0]]],
+        dtype=result.dtype,
+    ) / np.array(16.0, dtype=result.dtype)
+    for _ in range(int(passes)):
+        for index in indices:
+            result[..., index] = nd.convolve(
+                result[..., index], kernel, mode="wrap"
+            )
+    return result
+
+
+_LOCAL_FILTERS = {
+    "periodic_binomial_channels": periodic_binomial_channels,
 }
 
 class DataFrameDataset(torch.utils.data.Dataset):
@@ -595,7 +651,61 @@ class DataFrameDataset(torch.utils.data.Dataset):
         
         if isinstance(filter_config, dict):
             filter_name = filter_config.pop("name", None)
-            filter_func = getattr(nd, filter_name)
+            if filter_name in _LOCAL_FILTERS:
+                filter_func = _LOCAL_FILTERS[filter_name]
+                channel_names = filter_config.pop("channels", None)
+                requested_names = (
+                    self.request_features if data_type == "features" else self.request_targets
+                )
+                if not channel_names:
+                    raise ValueError(
+                        f"{filter_name} for {data_type} requires a non-empty 'channels' list"
+                    )
+                if not requested_names:
+                    raise ValueError(
+                        f"{filter_name} cannot resolve channels without requested {data_type}"
+                    )
+                duplicates = sorted(
+                    {name for name in channel_names if channel_names.count(name) > 1}
+                )
+                unknown = [name for name in channel_names if name not in requested_names]
+                if duplicates or unknown:
+                    raise ValueError(
+                        f"Invalid {data_type} filter channels: duplicates={duplicates}, "
+                        f"unknown={unknown}; requested={requested_names}"
+                    )
+                filter_config["channel_indices"] = [
+                    requested_names.index(name) for name in channel_names
+                ]
+                sliced_axes = [
+                    key for key in ("choose_x", "choose_y", "choose_z")
+                    if self.read_features_targets_kwargs.get(key) is not None
+                ]
+                if sliced_axes:
+                    raise ValueError(
+                        f"{filter_name} requires a complete periodic domain; "
+                        f"spatial slicing is active via {sliced_axes}"
+                    )
+                prescalers = (
+                    self.prescaler_features if data_type == "features"
+                    else self.prescaler_targets
+                )
+                if prescalers is not None:
+                    nonlinear = [
+                        name for name, index in zip(
+                            channel_names, filter_config["channel_indices"]
+                        )
+                        if index < len(prescalers) and prescalers[index] is not None
+                    ]
+                    if nonlinear:
+                        raise ValueError(
+                            f"{filter_name} must precede only affine normalization; "
+                            f"selected channels have nonlinear prescalers: {nonlinear}"
+                        )
+            else:
+                if filter_name is None or not hasattr(nd, filter_name):
+                    raise ValueError(f"Unknown spatial filter {filter_name!r}")
+                filter_func = getattr(nd, filter_name)
             filter_kwargs = filter_config
             
             # Ensure axes parameter is a tuple
@@ -1337,6 +1447,15 @@ def _preprocessing_fingerprint(
     prescaler_features,
     prescaler_targets,
     alfven_units: bool,
+    *,
+    filter_features=None,
+    filter_targets=None,
+    read_features_targets_kwargs=None,
+    scaler_features: bool = False,
+    scaler_targets: bool = False,
+    norm_folder: str | None = None,
+    features_dtype_numpy=None,
+    targets_dtype_numpy=None,
 ) -> str:
     """Short hash of the preprocessing config for cache-directory naming."""
 
@@ -1345,6 +1464,17 @@ def _preprocessing_fingerprint(
             return 'none'
         return f.__name__ if callable(f) else str(f)
 
+    def _jsonable(value):
+        if isinstance(value, dict):
+            return {str(key): _jsonable(item) for key, item in sorted(value.items())}
+        if isinstance(value, (list, tuple)):
+            return [_jsonable(item) for item in value]
+        if callable(value):
+            return _fname(value)
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        return str(value)
+
     data = {
         "sf": str(samples_file),
         "rf": [str(x) for x in (request_features or [])],
@@ -1352,6 +1482,14 @@ def _preprocessing_fingerprint(
         "pf": [_fname(f) for f in (prescaler_features or [])],
         "pt": [_fname(f) for f in (prescaler_targets or [])],
         "au": bool(alfven_units),
+        "ff": _jsonable(filter_features),
+        "ft": _jsonable(filter_targets),
+        "rft": _jsonable(read_features_targets_kwargs),
+        "sf_enabled": bool(scaler_features),
+        "st_enabled": bool(scaler_targets),
+        "norm": str(norm_folder) if (scaler_features or scaler_targets) else None,
+        "df": str(features_dtype_numpy),
+        "dt": str(targets_dtype_numpy),
     }
     return _hashlib.md5(_json.dumps(data, sort_keys=True).encode()).hexdigest()[:10]
 
@@ -1503,6 +1641,14 @@ class PreprocessedChunkDataset(torch.utils.data.Dataset):
         fp = _preprocessing_fingerprint(
             samples_file, self.request_features, self.request_targets,
             self.prescaler_features, self.prescaler_targets, alfven_units,
+            filter_features=filter_features,
+            filter_targets=filter_targets,
+            read_features_targets_kwargs=self.read_features_targets_kwargs,
+            scaler_features=bool(scaler_features),
+            scaler_targets=bool(scaler_targets),
+            norm_folder=norm_folder,
+            features_dtype_numpy=self.features_dtype_numpy,
+            targets_dtype_numpy=self.targets_dtype_numpy,
         )
         self._chunk_dir = os.path.join(ssd_cache_dir, f"{datalabel}_{fp}")
         self._meta_path = os.path.join(self._chunk_dir, "metadata.json")

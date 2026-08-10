@@ -19,7 +19,7 @@ from typing import Optional
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import ConcatDataset, DataLoader, Dataset, Subset
 
 import lightning as L
 
@@ -41,6 +41,100 @@ from closure.resources import (
     process_tree_ram_gb,
     process_tree_unique_ram_gb,
 )
+
+
+class _AnalyticResidualAnchorDataset(Dataset):
+    """Deterministic Harris and near-zero-strain anchors with target ``P0``."""
+
+    _FEATURE_ORDER = [
+        "rho_e", "Bx", "By", "Bz", "Vx_e", "Vy_e", "Vz_e", "Ex", "Ey", "Ez",
+        "Wxx_e", "Wyy_e", "Wzz_e", "Wxy_e", "Wxz_e", "Wyz_e",
+    ]
+    _TARGET_ORDER = ["Pxx_e", "Pyy_e", "Pzz_e", "Pxy_e", "Pxz_e", "Pyz_e"]
+
+    def __init__(
+        self,
+        *,
+        count: int,
+        seed: int,
+        feature_names: list[str],
+        target_names: list[str],
+        density_menura: float,
+        beta_e: float,
+        guide_field: float,
+        near_zero_strain: float,
+    ):
+        if feature_names != self._FEATURE_ORDER or target_names != self._TARGET_ORDER:
+            raise ValueError("synthetic anchors require the production 16-feature/six-target order")
+        if density_menura <= 0.0 or beta_e <= 0.0 or near_zero_strain < 0.0:
+            raise ValueError("invalid synthetic anchor physical parameters")
+        generator = torch.Generator().manual_seed(seed)
+        coordinate = 6.0 * torch.rand(count, generator=generator) - 3.0
+        sheet = 1.0 / torch.cosh(coordinate) ** 2
+        density_ratio = 1.0 + 4.0 * sheet
+        density = density_menura * density_ratio
+        features = torch.zeros(count, 16, dtype=torch.float32)
+        features[:, 0] = -density / (4.0 * torch.pi)
+        features[:, 1] = torch.tanh(coordinate)
+        features[:, 2] = 0.01 * torch.randn(count, generator=generator)
+        features[:, 3] = guide_field
+        features[:, 4:7] = 0.02 * torch.randn(count, 3, generator=generator)
+        features[:, 7:10] = -torch.cross(features[:, 4:7], features[:, 1:4], dim=1)
+        # Half exact equilibrium, half near-zero W: both target the same P0.
+        near_zero = count // 2
+        features[near_zero:, 10:16] = near_zero_strain * torch.randn(
+            count - near_zero, 6, generator=generator
+        )
+        features[:, 12] = 0.0
+        pressure = (0.5 * beta_e * density_ratio / (4.0 * torch.pi)).to(torch.float32)
+        targets = torch.zeros(count, 6, dtype=torch.float32)
+        targets[:, :3] = pressure[:, None]
+        self.features = features
+        self.targets = targets
+
+    def __len__(self) -> int:
+        return self.features.shape[0]
+
+    def __getitem__(self, index: int):
+        return self.features[index], self.targets[index]
+
+
+class _ResidualAnchorFileDataset(Dataset):
+    """Exact MENURA startup features paired with analytic ``P0`` targets."""
+
+    def __init__(self, path: str, *, feature_names: list[str], target_names: list[str]):
+        source = Path(path).expanduser().resolve()
+        if not source.is_file():
+            raise FileNotFoundError(f"residual anchor file not found: {source}")
+        with np.load(source, allow_pickle=False) as payload:
+            required = {"features", "targets", "feature_names", "target_names"}
+            missing = required.difference(payload.files)
+            if missing:
+                raise ValueError(f"residual anchor file {source} is missing {sorted(missing)}")
+            stored_features = [str(value) for value in payload["feature_names"].tolist()]
+            stored_targets = [str(value) for value in payload["target_names"].tolist()]
+            if stored_features != feature_names or stored_targets != target_names:
+                raise ValueError(
+                    f"residual anchor channel order mismatch in {source}: "
+                    f"features={stored_features}, targets={stored_targets}"
+                )
+            features = np.asarray(payload["features"], dtype=np.float32)
+            targets = np.asarray(payload["targets"], dtype=np.float32)
+        if features.ndim != 2 or features.shape[1] != len(feature_names):
+            raise ValueError(f"invalid residual anchor feature shape {features.shape}")
+        if targets.shape != (features.shape[0], len(target_names)):
+            raise ValueError(f"invalid residual anchor target shape {targets.shape}")
+        if features.shape[0] == 0 or not np.isfinite(features).all() or not np.isfinite(targets).all():
+            raise ValueError(f"residual anchor file {source} is empty or nonfinite")
+        self.features = torch.from_numpy(np.ascontiguousarray(features))
+        self.targets = torch.from_numpy(np.ascontiguousarray(targets))
+        self.path = source
+
+    def __len__(self) -> int:
+        return self.features.shape[0]
+
+    def __getitem__(self, index: int):
+        return self.features[index], self.targets[index]
 
 
 class ClosureDataModule(L.LightningDataModule):
@@ -200,6 +294,13 @@ class ClosureDataModule(L.LightningDataModule):
         chunk_cache_size: int = 1,
         preprocess_chunk_size_gb: Optional[float] = None,
         preprocess_num_workers: int = 1,
+        synthetic_anchor_count: int = 0,
+        synthetic_anchor_seed: int = 42,
+        synthetic_anchor_density_menura: float = 0.23735810113,
+        synthetic_anchor_beta_e: float = 0.03,
+        synthetic_anchor_guide_field: float = 0.4,
+        synthetic_anchor_near_zero_strain: float = 0.02,
+        residual_anchor_file: Optional[str] = None,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -209,6 +310,10 @@ class ClosureDataModule(L.LightningDataModule):
                 f"loading_mode must be 'eager', 'lazy_npz', or 'preprocessed', "
                 f"got {loading_mode!r}"
             )
+        if synthetic_anchor_count < 0:
+            raise ValueError("synthetic_anchor_count must be non-negative")
+        if (synthetic_anchor_count > 0 or residual_anchor_file) and loading_mode != "eager":
+            raise ValueError("residual anchors currently require loading_mode='eager'")
         # ssd_cache_dir is resolved at setup() time (after Slurm sets $TMPDIR).
 
         # Will be populated in setup()
@@ -446,6 +551,35 @@ class ClosureDataModule(L.LightningDataModule):
             )
             # Resolve channel name → index mappings
             self._resolve_channel_indices(self.train_dataset)
+            if int(hp.synthetic_anchor_count) > 0 or hp.residual_anchor_file:
+                if bool(hp.scaler_features) or bool(hp.scaler_targets):
+                    raise ValueError("residual anchors require raw, unscaled data")
+                if hp.prescaler_features or hp.prescaler_targets:
+                    raise ValueError("residual anchors require null prescalers")
+                anchors: list[Dataset] = []
+                if int(hp.synthetic_anchor_count) > 0:
+                    anchors.append(_AnalyticResidualAnchorDataset(
+                        count=int(hp.synthetic_anchor_count),
+                        seed=int(hp.synthetic_anchor_seed),
+                        feature_names=list(self.train_dataset.request_features),
+                        target_names=list(self.train_dataset.request_targets),
+                        density_menura=float(hp.synthetic_anchor_density_menura),
+                        beta_e=float(hp.synthetic_anchor_beta_e),
+                        guide_field=float(hp.synthetic_anchor_guide_field),
+                        near_zero_strain=float(hp.synthetic_anchor_near_zero_strain),
+                    ))
+                if hp.residual_anchor_file:
+                    anchors.append(_ResidualAnchorFileDataset(
+                        str(hp.residual_anchor_file),
+                        feature_names=list(self.train_dataset.request_features),
+                        target_names=list(self.train_dataset.request_targets),
+                    ))
+                self.train_dataset = ConcatDataset([self.train_dataset, *anchors])
+                _logger.info(
+                    "Added %d residual anchors across %d anchor datasets",
+                    sum(len(dataset) for dataset in anchors),
+                    len(anchors),
+                )
 
         if stage in ("test", "predict", None):
             if test_samples_file is not None:

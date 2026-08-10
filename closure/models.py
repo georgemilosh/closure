@@ -2,8 +2,8 @@
 """
 models.py — Neural network architectures for closure.
 
-Pure ``torch.nn.Module`` implementations: CNet, ResNet, FCNN, MLP, and
-InvariantFieldAlignedPressureMLP.
+Pure ``torch.nn.Module`` implementations: CNet, ResNet, FCNN, MLP,
+InvariantFieldAlignedPressureMLP, and EquilibriumAnchoredResidualPressureMLP.
 
 Repo:       closure
 Projects:   STRIDE, HELIOSKILL
@@ -12,7 +12,14 @@ Date:       2025
 License:    MIT License
 """
 
-__all__ = ["CNet", "FCNN", "ResNet", "MLP", "InvariantFieldAlignedPressureMLP"]
+__all__ = [
+    "CNet",
+    "FCNN",
+    "ResNet",
+    "MLP",
+    "InvariantFieldAlignedPressureMLP",
+    "EquilibriumAnchoredResidualPressureMLP",
+]
 
 import torch
 import torch.nn as nn
@@ -704,6 +711,34 @@ class InvariantFieldAlignedPressureMLP(torch.nn.Module):
         return self._restore_pixels(packed, batch, height, width)
 
     @torch.jit.ignore
+    def _equilibrium_anchor_mask(
+        self,
+        feature_pixels: torch.Tensor,
+        target_pixels: torch.Tensor,
+        rotation: torch.Tensor,
+    ) -> torch.Tensor:
+        """Identify synthetic P0 anchors without mixed-precision ambiguity."""
+        device_type = feature_pixels.device.type
+        with torch.autocast(device_type=device_type, enabled=False):
+            features32 = feature_pixels.float()
+            rotation32 = rotation.float()
+            target_tensor32 = self._packed_to_tensor(target_pixels.float())
+            target_field32 = torch.bmm(
+                rotation32,
+                torch.bmm(target_tensor32, rotation32.transpose(1, 2)),
+            )
+            analytic_base32 = self._analytic_base_field(features32)
+            target_matches_base = torch.amax(
+                torch.abs(target_field32 - analytic_base32), dim=(1, 2)
+            ) <= (1.0e-5 * self.pressure_scale)
+        # The target identity is the unambiguous anchor marker.  Synthetic
+        # near-zero-W anchors and exact live Harris-startup anchors (whose
+        # particle noise gives finite W) both target P0.  Ordinary kinetic
+        # quiet cells are excluded unless their six-component target matches
+        # P0 to float32 construction roundoff.
+        return target_matches_base
+
+    @torch.jit.ignore
     def compute_training_loss(
         self,
         features: torch.Tensor,
@@ -754,3 +789,239 @@ class InvariantFieldAlignedPressureMLP(torch.nn.Module):
             prediction_packed = prediction_packed * weights
             target_packed = target_packed * weights
         return criterion(prediction_packed, target_packed)
+
+
+class EquilibriumAnchoredResidualPressureMLP(InvariantFieldAlignedPressureMLP):
+    r"""Bounded SPD residual about MENURA's analytic electron equilibrium.
+
+    The inherited invariant/field-frame frontend supplies the same filtered
+    ``nBWT`` representation as :class:`InvariantFieldAlignedPressureMLP`.  The
+    trunk predicts six unconstrained values ``z`` which are bounded before
+    constructing a lower-triangular correction
+
+    ``diag(A) = exp(alpha*tanh(z_diag))`` and
+    ``A_lower = alpha*tanh(z_lower)``.
+
+    In the local ``(perp1, perp2, parallel)`` frame the returned pressure is
+    ``A P0 A^T``.  ``P0`` is the analytic gyrotropic/polytropic MENURA electron
+    closure expressed in the closure repository's pressure units.  Thus the
+    result is SPD for every finite input and is exactly ``P0`` when the
+    residual is zero.  The last residual layer is zero-initialised by default,
+    making that identity true before the first optimiser step as well.
+
+    The public interface remains raw Cartesian packed pressure in the order
+    ``[Pxx,Pyy,Pzz,Pxy,Pxz,Pyz]``; no deployment-time residual decoder is
+    required.
+    """
+
+    def __init__(
+        self,
+        feature_dims: list[int],
+        activations: list[str | None] | None = None,
+        dropouts: list[float | None] | None = None,
+        weights: list[dict | None] | None = None,
+        biases: list[dict | None] | None = None,
+        density_index: int = 0,
+        magnetic_indices: list[int] | None = None,
+        velocity_indices: list[int] | None = None,
+        electric_indices: list[int] | None = None,
+        guide_direction: list[float] | None = None,
+        density_scale: float = 0.1,
+        magnetic_scale: float = 1.0,
+        electric_scale: float = 0.1,
+        pressure_scale: float = 3.0e-3,
+        frame_epsilon: float = 1.0e-8,
+        strain_tensor_indices: list[int] | None = None,
+        strain_frame_scale: float = 1.0,
+        strain_frame_products: bool = False,
+        block_loss_lambda: float = 0.5,
+        block_loss_sigmas: list[float] | None = None,
+        residual_alpha: float = 0.25,
+        base_density_menura: float = 0.23735810113,
+        base_beta_e: float = 0.03,
+        base_b0x: float = 1.0,
+        base_b0_magnitude_sq: float = 1.16,
+        base_parallel_index: float = 1.0,
+        base_perpendicular_index: float = 1.0,
+        zero_initialize_residual: bool = True,
+        anchor_loss_weight: float = 10.0,
+        anchor_strain_threshold: float = 0.05,
+    ):
+        if residual_alpha <= 0.0:
+            raise ValueError("residual_alpha must be positive")
+        if anchor_loss_weight < 1.0:
+            raise ValueError("anchor_loss_weight must be at least one")
+        if anchor_strain_threshold < 0.0:
+            raise ValueError("anchor_strain_threshold must be non-negative")
+        for name, value in (
+            ("base_density_menura", base_density_menura),
+            ("base_beta_e", base_beta_e),
+            ("base_b0x", base_b0x),
+            ("base_b0_magnitude_sq", base_b0_magnitude_sq),
+        ):
+            if value <= 0.0:
+                raise ValueError(f"{name} must be positive")
+        super().__init__(
+            feature_dims=feature_dims,
+            activations=activations,
+            dropouts=dropouts,
+            weights=weights,
+            biases=biases,
+            density_index=density_index,
+            magnetic_indices=magnetic_indices,
+            velocity_indices=velocity_indices,
+            electric_indices=electric_indices,
+            guide_direction=guide_direction,
+            density_scale=density_scale,
+            magnetic_scale=magnetic_scale,
+            electric_scale=electric_scale,
+            pressure_scale=pressure_scale,
+            frame_epsilon=frame_epsilon,
+            cholesky_epsilon=1.0e-8,
+            enforce_spd=False,
+            frobenius_loss=True,
+            use_electron_frame_invariants=False,
+            strain_tensor_indices=strain_tensor_indices,
+            strain_frame_scale=strain_frame_scale,
+            strain_frame_products=strain_frame_products,
+            block_loss_lambda=block_loss_lambda,
+            block_loss_sigmas=block_loss_sigmas,
+        )
+        self.residual_alpha = float(residual_alpha)
+        self.base_density_menura = float(base_density_menura)
+        self.base_beta_e = float(base_beta_e)
+        self.base_b0x = float(base_b0x)
+        self.base_b0_magnitude_sq = float(base_b0_magnitude_sq)
+        self.base_parallel_index = float(base_parallel_index)
+        self.base_perpendicular_index = float(base_perpendicular_index)
+        self.zero_initialize_residual = bool(zero_initialize_residual)
+        self.anchor_loss_weight = float(anchor_loss_weight)
+        self.anchor_strain_threshold = float(anchor_strain_threshold)
+        if zero_initialize_residual:
+            final_linear = None
+            for layer in self.trunk.linear_relu_stack:
+                if isinstance(layer, torch.nn.Linear):
+                    final_linear = layer
+            if final_linear is None or final_linear.out_features != 6:
+                raise RuntimeError("residual trunk must end in a six-output Linear layer")
+            torch.nn.init.zeros_(final_linear.weight)
+            if final_linear.bias is not None:
+                torch.nn.init.zeros_(final_linear.bias)
+
+    def _analytic_base_field(self, pixels: torch.Tensor) -> torch.Tensor:
+        """Return diagonal ``P0`` in training pressure units and field frame."""
+        magnetic, _, _ = self._vectors(pixels)
+        rho_abs = torch.abs(pixels[:, self.density_index])
+        # MENURA feeds rho_e=-density/(4*pi).  Convert to its positive density,
+        # evaluate pressure there, then divide by 4*pi back to training units.
+        density_menura = (4.0 * torch.pi) * rho_abs
+        density_ratio = (density_menura / self.base_density_menura).clamp_min(
+            self.frame_epsilon
+        )
+        b2_ratio = (
+            torch.sum(magnetic * magnetic, dim=1) / self.base_b0_magnitude_sq
+        ).clamp_min(self.frame_epsilon)
+        pressure_prefactor = (
+            0.5 * self.base_b0x * self.base_b0x * self.base_beta_e / (4.0 * torch.pi)
+        )
+        p_perp = pressure_prefactor * density_ratio * torch.pow(
+            b2_ratio, 0.5 * (self.base_perpendicular_index - 1.0)
+        )
+        p_parallel = pressure_prefactor * torch.pow(
+            density_ratio, self.base_parallel_index
+        ) / torch.pow(b2_ratio, 0.5 * (self.base_parallel_index - 1.0))
+        zero = torch.zeros_like(p_perp)
+        return torch.stack(
+            (
+                torch.stack((p_perp, zero, zero), dim=1),
+                torch.stack((zero, p_perp, zero), dim=1),
+                torch.stack((zero, zero, p_parallel), dim=1),
+            ),
+            dim=1,
+        )
+
+    def _correction_matrix(self, raw: torch.Tensor) -> torch.Tensor:
+        bounded = torch.tanh(raw)
+        diagonal = torch.exp(self.residual_alpha * bounded[:, :3])
+        lower_values = self.residual_alpha * bounded[:, 3:]
+        zero = torch.zeros_like(diagonal[:, 0])
+        return torch.stack(
+            (
+                torch.stack((diagonal[:, 0], zero, zero), dim=1),
+                torch.stack((lower_values[:, 0], diagonal[:, 1], zero), dim=1),
+                torch.stack((lower_values[:, 1], lower_values[:, 2], diagonal[:, 2]), dim=1),
+            ),
+            dim=1,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        pixels, batch, height, width = self._as_pixels(x)
+        rotation, invariants = self._basis_and_invariants(pixels)
+        correction = self._correction_matrix(self.trunk(invariants))
+        base_field = self._analytic_base_field(pixels)
+        field_pressure = torch.bmm(
+            correction, torch.bmm(base_field, correction.transpose(1, 2))
+        )
+        cartesian_pressure = torch.bmm(
+            rotation.transpose(1, 2), torch.bmm(field_pressure, rotation)
+        )
+        return self._restore_pixels(
+            self._tensor_to_packed(cartesian_pressure), batch, height, width
+        )
+
+    @torch.jit.ignore
+    def compute_training_loss(
+        self,
+        features: torch.Tensor,
+        prediction: torch.Tensor,
+        target: torch.Tensor,
+        criterion: torch.nn.Module,
+    ) -> torch.Tensor:
+        """Field-frame block loss with extra weight on equilibrium anchors."""
+        feature_pixels, _, _, _ = self._as_pixels(features)
+        prediction_pixels, _, _, _ = self._as_pixels(prediction)
+        target_pixels, _, _, _ = self._as_pixels(target)
+        rotation, _ = self._basis_and_invariants(feature_pixels)
+        prediction_field = torch.bmm(
+            rotation,
+            torch.bmm(self._packed_to_tensor(prediction_pixels), rotation.transpose(1, 2)),
+        )
+        target_field = torch.bmm(
+            rotation,
+            torch.bmm(self._packed_to_tensor(target_pixels), rotation.transpose(1, 2)),
+        )
+        prediction_packed = self._tensor_to_packed(prediction_field) / self.pressure_scale
+        target_packed = self._tensor_to_packed(target_field) / self.pressure_scale
+        if self.block_loss_lambda > 0.0:
+            block_weight = self.block_loss_weight.to(prediction_packed.dtype)
+            per_sample = prediction_packed.new_zeros(prediction_packed.shape[0])
+            for block_index, (block_prediction, block_target) in enumerate(
+                zip(
+                    self._irreducible_blocks(prediction_packed),
+                    self._irreducible_blocks(target_packed),
+                )
+            ):
+                per_sample = per_sample + block_weight[block_index] * (
+                    (block_prediction - block_target) ** 2
+                ).sum(dim=1)
+            per_sample = per_sample / 6.0
+        else:
+            component_weight = prediction_packed.new_tensor(
+                [1.0, 1.0, 1.0, 2.0**0.5, 2.0**0.5, 2.0**0.5]
+            )
+            per_sample = (
+                ((prediction_packed - target_packed) * component_weight) ** 2
+            ).mean(dim=1)
+        # Input magnitude does not identify an anchor: the kinetic training set
+        # contains both quiet cells and finite-W states whose target need not be
+        # P0.  The target identity selects synthetic near-zero-W and exact live
+        # Harris-startup P0 anchors without biasing ordinary kinetic samples.
+        anchor = self._equilibrium_anchor_mask(
+            feature_pixels, target_pixels, rotation
+        )
+        sample_weight = torch.where(
+            anchor,
+            per_sample.new_full((), self.anchor_loss_weight),
+            per_sample.new_ones(()),
+        )
+        return torch.sum(sample_weight * per_sample) / torch.sum(sample_weight)

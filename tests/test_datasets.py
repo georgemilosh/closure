@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 import torch
 
-from closure.datasets import DataFrameDataset
+from closure.datasets import DataFrameDataset, periodic_binomial_channels
 
 
 def _build_dataset_with_mock_data(
@@ -88,6 +88,59 @@ class TestDataFrameDatasetBasic:
         f, t = ds[0]
         assert f.shape == (3, 8, 8)
         assert t.shape == (1, 8, 8)
+
+
+class TestPeriodicBinomialChannels:
+    def test_matches_four_explicit_periodic_passes_and_only_selected_channel(self):
+        rng = np.random.default_rng(7)
+        data = rng.normal(size=(2, 9, 11, 3)).astype(np.float32)
+        original = data.copy()
+        expected = data.copy()
+        for _ in range(4):
+            selected = expected[..., 1]
+            expected[..., 1] = (
+                4.0 * selected
+                + 2.0 * (
+                    np.roll(selected, 1, axis=1)
+                    + np.roll(selected, -1, axis=1)
+                    + np.roll(selected, 1, axis=2)
+                    + np.roll(selected, -1, axis=2)
+                )
+                + np.roll(np.roll(selected, 1, axis=1), 1, axis=2)
+                + np.roll(np.roll(selected, 1, axis=1), -1, axis=2)
+                + np.roll(np.roll(selected, -1, axis=1), 1, axis=2)
+                + np.roll(np.roll(selected, -1, axis=1), -1, axis=2)
+            ) / 16.0
+
+        actual = periodic_binomial_channels(
+            data, channel_indices=[1], passes=4
+        )
+        np.testing.assert_allclose(actual, expected, rtol=2e-6, atol=2e-7)
+        np.testing.assert_array_equal(actual[..., 0], data[..., 0])
+        np.testing.assert_array_equal(actual[..., 2], data[..., 2])
+        np.testing.assert_array_equal(data, original)
+
+    def test_named_dataset_filter_rejects_unknown_channel(self, tmp_path):
+        csv_path = tmp_path / "train.csv"
+        pd.DataFrame({"filenames": ["sample.h5"]}).to_csv(csv_path, index=False)
+        with patch("closure.datasets.rp") as mock_rp:
+            mock_rp.read_features_targets.return_value = (
+                np.zeros((1, 4, 4, 2)), np.zeros((1, 4, 4, 1))
+            )
+            with pytest.raises(ValueError, match="unknown=.*Wxx_e"):
+                DataFrameDataset(
+                    data_folder=str(tmp_path), norm_folder=str(tmp_path),
+                    samples_file=str(csv_path), scaler_features=False,
+                    scaler_targets=False,
+                    read_features_targets_kwargs={
+                        "request_features": ["rho_e", "Bx"],
+                        "request_targets": ["Pxx_e"],
+                    },
+                    filter_features={
+                        "name": "periodic_binomial_channels",
+                        "channels": ["Wxx_e"], "passes": 4,
+                    },
+                )
 
 
 class TestNormalization:
