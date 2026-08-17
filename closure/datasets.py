@@ -324,7 +324,9 @@ class DataFrameDataset(torch.utils.data.Dataset):
                      read_features_targets_kwargs: dict = None,
                      filter_features: dict = None, filter_targets: dict = None,
                      transform: dict = None,
-                     alfven_units: bool = False):
+                     alfven_units: bool = False,
+                     prescaler_features_floor: float = None,
+                     prescaler_targets_floor: float = None):
             """
             Args:
                 data_folder (str): The folder where the images are stored.
@@ -389,6 +391,11 @@ class DataFrameDataset(torch.utils.data.Dataset):
             # Configure data types
             self._setup_data_types(features_dtype, targets_dtype, features_dtype_numpy, targets_dtype_numpy)
             
+            # Positivity floors applied before a log prescaler (default None = no change).
+            # See _apply_prescaling for why this is a data floor and not a prescaler name.
+            self.prescaler_features_floor = prescaler_features_floor
+            self.prescaler_targets_floor = prescaler_targets_floor
+
             # Configure preprocessing options
             self._setup_preprocessing(prescaler_features, prescaler_targets, scaler_features, scaler_targets)
             
@@ -526,13 +533,50 @@ class DataFrameDataset(torch.utils.data.Dataset):
             targets = self.transform(targets)
         return features, targets
     
+    def _prescaler_floor_for(self, data_type):
+        """Positivity floor to apply before a log prescaler, or None. See _apply_prescaling."""
+        return getattr(self, f"prescaler_{data_type}_floor", None)
+
     def _apply_prescaling(self, data, prescaler_functions, data_type):
-        """Apply pre-scaling functions (e.g., log transform) to each channel."""
+        """Apply pre-scaling functions (e.g., log transform) to each channel.
+
+        ``prescaler_{features,targets}_floor`` (default ``None`` -> no change) clamps a
+        channel from below *before* a ``log`` prescaler, and is ignored for every other
+        prescaler. It exists because a physically positive-definite quantity can still
+        carry small negative PIC shot-noise excursions in a low-signal region: on ECsim
+        RunID_16 (the weakest guide field in the family) 0.01-0.02 % of cells have
+        Ppar_e / Pperp_e / Pxx_e / Pyy_e / Pzz_e <= 0, in every single frame. ``np.log``
+        turns those into NaN, the NaN propagates into the StandardScaler mean/std, and
+        every target in the study silently becomes NaN.
+
+        The floor is deliberately NOT a new prescaler name: menura's
+        ``check_prescaler_targets`` compares ``data.prescaler_targets`` against a
+        hard-coded list and exits on anything but ``[log, log]`` /
+        ``[log, log, log, arcsinh, arcsinh, arcsinh]``, so the recorded name must stay
+        ``log`` for the checkpoint to be deployable. The decode ``4*pi*exp(y*std+mean)``
+        remains the exact inverse of what is trained.
+
+        Pick the value with the *loss* in mind, not just positivity: the objective is MSE
+        on log P, so a floor far below the data turns every clamped cell into a large
+        outlier. A floor near the low percentile of the genuine positive distribution
+        keeps them inside the tail they belong to.
+        """
         if prescaler_functions is None:
             return
-        
+
+        floor = self._prescaler_floor_for(data_type)
         for channel in range(data.shape[1]):
             if prescaler_functions[channel] is not None:
+                if floor is not None and prescaler_functions[channel] is numpy.log:
+                    below = int((data[:, channel, ...] < floor).sum())
+                    if below:
+                        total = data[:, channel, ...].size
+                        logger.warning(
+                            f"Clamped {below} of {total} ({100.0 * below / total:.3e} %) "
+                            f"{data_type} values in channel {channel} up to the positivity "
+                            f"floor {floor:g} before the log prescaler"
+                        )
+                    numpy.maximum(data[:, channel, ...], floor, out=data[:, channel, ...])
                 data[:, channel, ...] = prescaler_functions[channel](data[:, channel, ...])
                 logger.info(f"Applied {prescaler_functions[channel].__name__} to {data_type} channel {channel}")
     

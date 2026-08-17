@@ -164,6 +164,12 @@ class ClosureDataModule(L.LightningDataModule):
         Enable mean/std normalisation for targets.
     prescaler_features : list[str | None] or None
         Per-channel prescaler function names (e.g. ``"log"``).
+    prescaler_features_floor, prescaler_targets_floor : float or None
+        Clamp a channel from below to this value *before* a ``log`` prescaler; ignored for
+        any other prescaler and a no-op when None (the default). Guards against NaN from
+        small negative shot-noise excursions in a positive-definite quantity -- see
+        ``closure.datasets.DataFrameDataset._apply_prescaling``. Only the eager
+        ``DataFrameDataset`` path honours it; ``setup()`` refuses the other loading modes.
     prescaler_targets : list[str | None] or None
         Per-channel prescaler function names for targets.
     features_dtype : str
@@ -270,6 +276,8 @@ class ClosureDataModule(L.LightningDataModule):
         scaler_targets: Optional[bool] = None,
         prescaler_features: Optional[list[str | None]] = None,
         prescaler_targets: Optional[list[str | None]] = None,
+        prescaler_features_floor: Optional[float] = None,
+        prescaler_targets_floor: Optional[float] = None,
         features_dtype: str = "float32",
         targets_dtype: str = "float32",
         features_dtype_numpy: str = "float64",
@@ -460,11 +468,25 @@ class ClosureDataModule(L.LightningDataModule):
             scaler_targets=hp.scaler_targets,
             prescaler_features=hp.prescaler_features,
             prescaler_targets=hp.prescaler_targets,
+            prescaler_features_floor=hp.prescaler_features_floor,
+            prescaler_targets_floor=hp.prescaler_targets_floor,
             read_features_targets_kwargs=hp.read_features_targets_kwargs,
             filter_features=hp.filter_features,
             filter_targets=hp.filter_targets,
             alfven_units=hp.alfven_units,
         )
+
+        # The positivity floors are implemented in the eager DataFrameDataset prescaling
+        # path only. Fail here rather than deep inside a dataset constructor, and never
+        # silently drop the floor: without it the log prescaler emits NaN and poisons the
+        # scaler, which is exactly the failure this option exists to prevent.
+        if (hp.prescaler_features_floor is not None or hp.prescaler_targets_floor is not None) \
+                and hp.loading_mode != "eager":
+            raise ValueError(
+                f"prescaler_*_floor is only supported with loading_mode='eager', "
+                f"got loading_mode={hp.loading_mode!r}. Either switch to eager loading or "
+                f"remove the floor (and check your targets are strictly positive)."
+            )
 
         # Select dataset class based on loading mode
         if hp.loading_mode == "lazy_npz":
